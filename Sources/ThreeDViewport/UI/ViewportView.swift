@@ -1,14 +1,13 @@
 import AppKit
 import MetalKit
 
-// The main Metal viewport. Subclasses MTKView (which is NSView on macOS)
-// so we get a managed drawable, display-link loop, and depth buffer for free.
 final class ViewportView: MTKView {
 
-    // Owned objects
+    // Owned scene objects
     let sceneManager: SceneManager
     let camera: CameraController
     let lightManager: LightManager
+    let timeline: Timeline
     var renderer: Renderer?
 
     // Input state
@@ -21,30 +20,29 @@ final class ViewportView: MTKView {
         sceneManager = SceneManager()
         camera       = CameraController()
         lightManager = LightManager()
+        timeline     = Timeline()
 
         guard let metalDevice = MTLCreateSystemDefaultDevice() else {
-            // Hard stop — no Metal means nothing works
-            fatalError("[DEBUG] ViewportView: MTLCreateSystemDefaultDevice returned nil — Metal not supported on this machine")
+            fatalError("[DEBUG] ViewportView: MTLCreateSystemDefaultDevice returned nil — Metal not supported")
         }
 
         super.init(frame: frame, device: metalDevice)
 
-        print("[DEBUG] ViewportView: using Metal device '" + metalDevice.name + "'")
+        print("[DEBUG] ViewportView: Metal device '" + metalDevice.name + "'")
 
-        // Configure MTKView
-        colorPixelFormat        = .bgra8Unorm
-        depthStencilPixelFormat = .depth32Float
-        clearColor              = MTLClearColor(red: 0.13, green: 0.13, blue: 0.15, alpha: 1.0)
+        colorPixelFormat         = .bgra8Unorm
+        depthStencilPixelFormat  = .depth32Float
+        clearColor               = MTLClearColor(red: 0.13, green: 0.13, blue: 0.15, alpha: 1.0)
         preferredFramesPerSecond = 30
-        isPaused                = false
-        enableSetNeedsDisplay   = false
+        isPaused                 = false
+        enableSetNeedsDisplay    = false
 
-        // Build renderer
         renderer = Renderer(
-            device: metalDevice,
+            device:       metalDevice,
             sceneManager: sceneManager,
-            camera: camera,
-            lightManager: lightManager
+            camera:       camera,
+            lightManager: lightManager,
+            timeline:     timeline
         )
 
         if renderer == nil {
@@ -72,8 +70,16 @@ final class ViewportView: MTKView {
 
         if let obj = loader.load(url: url) {
             autoNormalize(obj)
+
+            // Save the final world transform as the animation base
+            obj.baseTransform = obj.transform
+
             sceneManager.objects = [obj]
             camera.fitToScene(boundingRadius: obj.boundingRadius, center: obj.boundingCenter)
+
+            // Phase 2: create a demo rotation animation so the timeline is immediately useful
+            createDemoAnimation(for: obj)
+
             print("[DEBUG] ViewportView: model loaded, objects count = " + String(sceneManager.objects.count))
         } else {
             print("[DEBUG] ViewportView: GLTFLoader returned nil for " + url.lastPathComponent)
@@ -82,38 +88,29 @@ final class ViewportView: MTKView {
 
     // MARK: - Auto-normalization
 
-    // Scales the object uniformly so its world-space bounding radius equals targetRadius.
-    // IMPORTANT: obj.boundingRadius and obj.boundingCenter are in LOCAL (mesh) space.
-    // The node transform (obj.transform) may already contain a scale — e.g. a model
-    // exported in centimetres will have scale=0.01 baked into its matrix.
-    // We must convert to WORLD space first, otherwise we double-apply the existing scale.
     private func autoNormalize(_ obj: SceneObject) {
         let targetRadius: Float = 1.0
         let t = obj.transform
         let localCenter = obj.boundingCenter
         let localRadius = obj.boundingRadius
 
-        // ── Step 1: world-space bounding center ──────────────────────────────
-        // Multiply local center through the full node transform (column-major M * v).
+        // World-space bounding center
         let lc4 = SIMD4<Float>(localCenter.x, localCenter.y, localCenter.z, 1.0)
         let wc4 = t * lc4
-        let worldCenter = SIMD3<Float>(wc4.x, wc4.y, wc4.z)   // w is always 1 for affine
+        let worldCenter = SIMD3<Float>(wc4.x, wc4.y, wc4.z)
 
-        // ── Step 2: world-space bounding radius ──────────────────────────────
-        // Approximate by multiplying localRadius by the largest column-scale in the
-        // upper-left 3x3. This correctly handles uniform and near-uniform scales.
+        // World-space bounding radius (largest column scale in upper-left 3x3)
         let sx = simd_length(SIMD3<Float>(t.columns.0.x, t.columns.0.y, t.columns.0.z))
         let sy = simd_length(SIMD3<Float>(t.columns.1.x, t.columns.1.y, t.columns.1.z))
         let sz = simd_length(SIMD3<Float>(t.columns.2.x, t.columns.2.y, t.columns.2.z))
         let transformScale = max(sx, max(sy, sz))
 
         if transformScale < 0.0001 {
-            print("[DEBUG] ViewportView: autoNormalize — transform scale is near zero, skipping")
+            print("[DEBUG] ViewportView: autoNormalize — transform scale near zero, skipping")
             return
         }
 
         let worldRadius = localRadius * transformScale
-
         print("[DEBUG] ViewportView: autoNormalize localRadius=" + String(localRadius)
             + " transformScale=" + String(transformScale)
             + " worldRadius=" + String(worldRadius))
@@ -123,19 +120,16 @@ final class ViewportView: MTKView {
             return
         }
 
-        // Always promote bounding sphere to world space so fitToScene is correct,
-        // even when no additional scaling is needed.
+        // Always promote bounding sphere to world space so fitToScene is correct
         obj.boundingCenter = worldCenter
         obj.boundingRadius = worldRadius
 
-        // Only apply an extra scale if the model is more than 2 % off target size
         let scale = targetRadius / worldRadius
         guard abs(scale - 1.0) > 0.02 else {
-            print("[DEBUG] ViewportView: autoNormalize — worldRadius " + String(worldRadius) + " already near 1.0, bounding sphere updated to world space")
+            print("[DEBUG] ViewportView: autoNormalize — worldRadius " + String(worldRadius) + " already near 1.0")
             return
         }
 
-        // ── Step 3: prepend a uniform scale to the node transform ─────────────
         var S = matrix_identity_float4x4
         S.columns.0.x = scale
         S.columns.1.y = scale
@@ -146,10 +140,95 @@ final class ViewportView: MTKView {
         obj.boundingRadius = targetRadius
 
         print("[DEBUG] ViewportView: autoNormalize scale=" + String(scale)
-            + " worldRadius=" + String(worldRadius) + " -> " + String(targetRadius)
-            + " newCenter=(" + String(obj.boundingCenter.x)
-            + "," + String(obj.boundingCenter.y)
-            + "," + String(obj.boundingCenter.z) + ")")
+            + " worldRadius=" + String(worldRadius) + " -> " + String(targetRadius))
+    }
+
+    // MARK: - Phase 2: Demo animation
+
+    // Creates a Y-axis rotation animation (0° → 180° → 0°) over the timeline duration.
+    // The animation is a DELTA applied on top of baseTransform, so position/scale are preserved.
+    // Replace or augment this in Phase 3 when interactive keyframe editing is added.
+    private func createDemoAnimation(for obj: SceneObject) {
+        let animDuration = timeline.duration
+
+        let track = KeyframeTrack()
+        let identity = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+        let half     = simd_quatf(angle: Float.pi, axis: SIMD3<Float>(0, 1, 0))
+
+        // t=0          identity (0°)
+        // t=duration/2 half-turn (180°)
+        // t=duration   back to identity (360° = same as 0°, approached from 180°)
+        track.addKeyframe(TransformKeyframe(time: 0,              rotation: identity))
+        track.addKeyframe(TransformKeyframe(time: animDuration * 0.5, rotation: half))
+        track.addKeyframe(TransformKeyframe(time: animDuration,   rotation: identity))
+
+        obj.keyframeTrack = track
+
+        print("[DEBUG] ViewportView: demo rotation animation created, duration="
+            + String(animDuration) + "s keyframes=" + String(track.keyframes.count))
+    }
+
+    // MARK: - Add Keyframe (Phase 2)
+
+    // Captures the current object transform at the current timeline time.
+    // Phase 3 will make the transform editable interactively; for now this
+    // records the existing transform (useful after demo edits or scripted moves).
+    func addKeyframeAtCurrentTime() {
+        guard let obj = sceneManager.primaryObject else {
+            print("[DEBUG] ViewportView: addKeyframeAtCurrentTime — no primary object")
+            return
+        }
+
+        if obj.keyframeTrack == nil {
+            obj.keyframeTrack = KeyframeTrack()
+            print("[DEBUG] ViewportView: created new KeyframeTrack for '" + obj.name + "'")
+        }
+
+        // The renderer applies:  obj.transform = baseTransform * animDelta
+        // So keyframes must store the DELTA, not the absolute world transform.
+        // Recover: animDelta = inverse(baseTransform) * currentTransform
+        // This matches how the demo rotation keyframes work (pure-rotation deltas).
+        let invBase = simd_inverse(obj.baseTransform)
+        let m = invBase * obj.transform
+
+        let translation = SIMD3<Float>(m.columns.3.x, m.columns.3.y, m.columns.3.z)
+
+        let sx = simd_length(SIMD3<Float>(m.columns.0.x, m.columns.0.y, m.columns.0.z))
+        let sy = simd_length(SIMD3<Float>(m.columns.1.x, m.columns.1.y, m.columns.1.z))
+        let sz = simd_length(SIMD3<Float>(m.columns.2.x, m.columns.2.y, m.columns.2.z))
+        let scale = SIMD3<Float>(sx, sy, sz)
+
+        // Extract rotation by normalising the upper-left 3x3 columns of the delta
+        let rotation: simd_quatf
+        if sx > 0.0001 && sy > 0.0001 && sz > 0.0001 {
+            let rotMat = matrix_float3x3(columns: (
+                SIMD3<Float>(m.columns.0.x / sx, m.columns.0.y / sx, m.columns.0.z / sx),
+                SIMD3<Float>(m.columns.1.x / sy, m.columns.1.y / sy, m.columns.1.z / sy),
+                SIMD3<Float>(m.columns.2.x / sz, m.columns.2.y / sz, m.columns.2.z / sz)
+            ))
+            rotation = simd_quatf(rotMat)
+        } else {
+            rotation = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+            print("[DEBUG] ViewportView: addKeyframe — near-zero delta scale column, using identity rotation")
+        }
+
+        let kf = TransformKeyframe(
+            time:        timeline.currentTime,
+            translation: translation,
+            rotation:    rotation,
+            scale:       scale
+        )
+        obj.keyframeTrack?.addKeyframe(kf)
+
+        print("[DEBUG] ViewportView: keyframe delta added at t="
+            + String(format: "%.3f", timeline.currentTime)
+            + " translation=(" + String(format: "%.4f", translation.x)
+            + "," + String(format: "%.4f", translation.y)
+            + "," + String(format: "%.4f", translation.z) + ")"
+            + " scale=(" + String(format: "%.4f", scale.x)
+            + "," + String(format: "%.4f", scale.y)
+            + "," + String(format: "%.4f", scale.z) + ")"
+            + " for '" + obj.name + "'")
     }
 
     // MARK: - First Responder
@@ -190,16 +269,13 @@ final class ViewportView: MTKView {
         guard !event.isARepeat else { return }
 
         switch event.keyCode {
-        case 49:   // Space — held for pan mode
+        case 49:  // Space — pan mode
             isSpaceDown = true
-            print("[DEBUG] ViewportView: space key down — pan mode active")
 
-        case 5:    // G — wireframe toggle
+        case 5:   // G — wireframe toggle
             if let r = renderer {
                 r.isWireframe.toggle()
                 print("[DEBUG] ViewportView: wireframe = " + String(r.isWireframe))
-            } else {
-                print("[DEBUG] ViewportView: G pressed but renderer is nil")
             }
 
         default:
@@ -209,13 +285,8 @@ final class ViewportView: MTKView {
 
     override func keyUp(with event: NSEvent) {
         switch event.keyCode {
-        case 49:   // Space
-            isSpaceDown = false
-        default:
-            super.keyUp(with: event)
+        case 49: isSpaceDown = false
+        default: super.keyUp(with: event)
         }
     }
-
-    // MARK: - Multi-select (Phase 3 placeholder)
-    // Shift + click selection will be wired up in Phase 3.
 }

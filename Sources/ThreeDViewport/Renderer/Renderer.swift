@@ -3,7 +3,7 @@ import MetalKit
 import simd
 
 // MTKViewDelegate that owns the Metal pipeline and issues draw calls.
-// Phase 1: lit triangles + wireframe toggle.
+// Phase 2: also ticks the Timeline and applies keyframe evaluation each frame.
 final class Renderer: NSObject, MTKViewDelegate {
 
     // MARK: - Metal state
@@ -18,22 +18,30 @@ final class Renderer: NSObject, MTKViewDelegate {
     let sceneManager: SceneManager
     let camera: CameraController
     let lightManager: LightManager
+    let timeline: Timeline
 
     // MARK: - Render mode
 
     var isWireframe: Bool = false
+
+    // Tracks the last timeline time at which keyframes were evaluated.
+    // applyAnimation() is only called when time changes (playing or scrubbed),
+    // so a paused object keeps whatever transform the user set manually.
+    private var lastAnimatedTime: Double = -1.0
 
     // MARK: - Init
 
     init?(device: MTLDevice,
           sceneManager: SceneManager,
           camera: CameraController,
-          lightManager: LightManager) {
+          lightManager: LightManager,
+          timeline: Timeline) {
 
         self.device       = device
         self.sceneManager = sceneManager
         self.camera       = camera
         self.lightManager = lightManager
+        self.timeline     = timeline
 
         guard let queue = device.makeCommandQueue() else {
             print("[DEBUG] Renderer: MTLDevice.makeCommandQueue returned nil")
@@ -48,7 +56,6 @@ final class Renderer: NSObject, MTKViewDelegate {
     // MARK: - Pipeline setup
 
     private func buildPipeline() {
-        // Load the Metal library compiled from Shaders.metal in this SPM bundle
         guard let library = try? device.makeDefaultLibrary(bundle: Bundle.module) else {
             print("[DEBUG] Renderer: makeDefaultLibrary(bundle:) failed — Shaders.metal may not be compiled into Bundle.module")
             return
@@ -67,10 +74,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         let pipelineDesc = MTLRenderPipelineDescriptor()
         pipelineDesc.vertexFunction   = vertexFn
         pipelineDesc.fragmentFunction = fragmentFn
-        // Pixel formats must match what ViewportView sets on the MTKView
         pipelineDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
         pipelineDesc.depthAttachmentPixelFormat      = .depth32Float
-        // No vertex descriptor — positions/normals are bound via explicit buffer indices
 
         do {
             pipelineState = try device.makeRenderPipelineState(descriptor: pipelineDesc)
@@ -79,7 +84,6 @@ final class Renderer: NSObject, MTKViewDelegate {
             print("[DEBUG] Renderer: makeRenderPipelineState failed — " + error.localizedDescription)
         }
 
-        // Depth stencil — standard less-than depth test
         let depthDesc = MTLDepthStencilDescriptor()
         depthDesc.depthCompareFunction = .less
         depthDesc.isDepthWriteEnabled  = true
@@ -94,19 +98,23 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
         camera.aspectRatio = Float(size.width / size.height)
-        print("[DEBUG] Renderer: drawable size changed to " + String(Int(size.width)) + "x" + String(Int(size.height)))
+        print("[DEBUG] Renderer: drawable size changed to "
+            + String(Int(size.width)) + "x" + String(Int(size.height)))
     }
 
     func draw(in view: MTKView) {
-        guard let pipeline = pipelineState else {
-            // Pipeline not ready — silently skip (already logged at build time)
-            return
-        }
 
-        guard let drawable          = view.currentDrawable,
-              let passDescriptor    = view.currentRenderPassDescriptor,
-              let commandBuffer     = commandQueue.makeCommandBuffer() else {
-            print("[DEBUG] Renderer: draw — failed to acquire drawable, passDescriptor, or commandBuffer")
+        // ── Phase 2: advance timeline and evaluate keyframes ─────────────────
+        timeline.tick()
+        applyAnimation()
+
+        // ── Metal rendering ───────────────────────────────────────────────────
+        guard let pipeline = pipelineState else { return }
+
+        guard let drawable       = view.currentDrawable,
+              let passDescriptor = view.currentRenderPassDescriptor,
+              let commandBuffer  = commandQueue.makeCommandBuffer() else {
+            print("[DEBUG] Renderer: draw — failed to acquire drawable/passDescriptor/commandBuffer")
             return
         }
 
@@ -120,19 +128,16 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         if let ds = depthStencilState {
             encoder.setDepthStencilState(ds)
-        } else {
-            print("[DEBUG] Renderer: depthStencilState is nil — depth testing disabled this frame")
         }
 
-        let vp = camera.viewProjectionMatrix
-
         if sceneManager.objects.isEmpty {
-            // Nothing loaded yet — just clear and present
             encoder.endEncoding()
             commandBuffer.present(drawable)
             commandBuffer.commit()
             return
         }
+
+        let vp = camera.viewProjectionMatrix
 
         for object in sceneManager.objects {
             guard object.isVisible else { continue }
@@ -146,33 +151,30 @@ final class Renderer: NSObject, MTKViewDelegate {
                 continue
             }
             if object.indexCount == 0 {
-                print("[DEBUG] Renderer: indexCount is zero for '" + object.name + "' — skipping")
+                print("[DEBUG] Renderer: indexCount zero for '" + object.name + "' — skipping")
                 continue
             }
 
-            // Build per-draw uniforms
             var uniforms = Uniforms(
                 modelMatrix:          object.transform,
                 viewProjectionMatrix: vp,
-                normalMatrix:         object.transform,   // valid for uniform scale
+                normalMatrix:         object.transform,
                 lightDirection:       lightManager.primaryLight.directionVec4,
                 lightColor:           lightManager.primaryLight.colorVec4,
                 ambientColor:         lightManager.ambientColorVec4
             )
 
-            // Bind vertex buffers (positions at 0, normals at 1, uniforms at 2)
             encoder.setVertexBuffer(posBuffer, offset: 0, index: 0)
 
             if let normBuffer = object.normalBuffer {
                 encoder.setVertexBuffer(normBuffer, offset: 0, index: 1)
             } else {
-                print("[DEBUG] Renderer: normalBuffer nil for '" + object.name + "' — normals unbound")
+                print("[DEBUG] Renderer: normalBuffer nil for '" + object.name + "'")
             }
 
             encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 2)
             encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 2)
 
-            // Wireframe is a fill-mode switch, not a separate pipeline
             encoder.setTriangleFillMode(isWireframe ? .lines : .fill)
 
             encoder.drawIndexedPrimitives(
@@ -187,5 +189,24 @@ final class Renderer: NSObject, MTKViewDelegate {
         encoder.endEncoding()
         commandBuffer.present(drawable)
         commandBuffer.commit()
+    }
+
+    // MARK: - Animation evaluation
+
+    private func applyAnimation() {
+        for object in sceneManager.objects {
+            guard let track = object.keyframeTrack else { continue }
+
+            if track.keyframes.isEmpty {
+                print("[DEBUG] Renderer: keyframeTrack for '" + object.name + "' has no keyframes")
+                continue
+            }
+
+            if let animDelta = track.evaluate(at: timeline.currentTime) {
+                // animDelta is a local T*R*S animation matrix (typically a rotation delta).
+                // Composing with baseTransform applies position/scale first, then animation.
+                object.transform = object.baseTransform * animDelta
+            }
+        }
     }
 }

@@ -1,29 +1,71 @@
 import Foundation
+import Combine
 
-// Phase 2 placeholder — drives playback time and notifies subscribers each tick.
-final class Timeline {
+// Drives playback time for the animation system.
+// ObservableObject so SwiftUI panels can bind directly to currentTime and isPlaying.
+// tick() is called once per render frame (main thread, via MTKView display link).
+final class Timeline: ObservableObject {
 
-    var duration: Double = 10.0     // seconds
-    var currentTime: Double = 0.0
-    var isPlaying: Bool = false
-    var frameRate: Double = 30.0
+    @Published var currentTime: Double = 0.0
+    @Published var isPlaying: Bool = false
+    @Published var duration: Double = 10.0
+
+    let frameRate: Double = 30.0
 
     init() {
-        print("[DEBUG] Timeline: initialized, duration=" + String(duration) + "s")
+        print("[DEBUG] Timeline: initialized, duration=" + String(duration) + "s frameRate=30")
     }
 
+    // MARK: - Transport
+
     func play() {
+        guard !isPlaying else { return }
+        if currentTime >= duration {
+            currentTime = 0.0
+            print("[DEBUG] Timeline: rewound to 0 before play")
+        }
         isPlaying = true
-        print("[DEBUG] Timeline: play")
+        print("[DEBUG] Timeline: playing from t=" + String(format: "%.3f", currentTime))
     }
 
     func pause() {
+        guard isPlaying else { return }
         isPlaying = false
-        print("[DEBUG] Timeline: pause at t=" + String(currentTime))
+        print("[DEBUG] Timeline: paused at t=" + String(format: "%.3f", currentTime))
+    }
+
+    func stop() {
+        isPlaying = false
+        currentTime = 0.0
+        print("[DEBUG] Timeline: stopped")
     }
 
     func seek(to time: Double) {
         currentTime = max(0, min(duration, time))
-        print("[DEBUG] Timeline: seek to t=" + String(currentTime))
+    }
+
+    func togglePlayPause() {
+        if isPlaying { pause() } else { play() }
+    }
+
+    // MARK: - Frame tick
+
+    // Called once per rendered frame from Renderer.draw(in:).
+    // Advances currentTime by one frame interval; stops at duration.
+    // Returns true when time actually advanced (caller should re-evaluate keyframes).
+    @discardableResult
+    func tick() -> Bool {
+        guard isPlaying else { return false }
+
+        let dt = 1.0 / frameRate
+        currentTime += dt
+
+        if currentTime >= duration {
+            currentTime = duration
+            isPlaying = false
+            print("[DEBUG] Timeline: reached end at t=" + String(format: "%.3f", currentTime))
+        }
+
+        return true
     }
 }
