@@ -27,9 +27,14 @@ final class SceneObject {
 
     // GPU buffers — positions and normals are tightly-packed float3 arrays
     var positionBuffer: MTLBuffer?
-    var normalBuffer: MTLBuffer?
-    var indexBuffer: MTLBuffer?   // UInt32 indices
+    var normalBuffer:   MTLBuffer?
+    var uvBuffer:       MTLBuffer?   // packed float2 — TEXCOORD_0 (may be zeroed if absent)
+    var tangentBuffer:  MTLBuffer?   // packed float4 — xyz=tangent, w=handedness (may be zeroed)
+    var indexBuffer:    MTLBuffer?   // UInt32 indices
     var indexCount: Int
+
+    // Phase 8: PBR material (textures + factor values)
+    var material: PBRMaterial = PBRMaterial()
 
     var isVisible: Bool
 

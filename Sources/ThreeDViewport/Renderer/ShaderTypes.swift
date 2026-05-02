@@ -1,18 +1,20 @@
 import simd
 
 // ── Per-object transform uniforms (buffer index 2) ──────────────────────────
-// Light data is now in LightUniforms (buffer index 3).
+// Phase 8: cameraPosition added for PBR view-direction calculation.
 // Layout:
 //   modelMatrix          64
 //   viewProjectionMatrix 64
 //   normalMatrix         64
+//   cameraPosition       16   (xyz = world pos, w = unused)
 //   ─────────────────────────
-//   Total               192
+//   Total               208
 
 struct Uniforms {
     var modelMatrix:          matrix_float4x4
     var viewProjectionMatrix: matrix_float4x4
     var normalMatrix:         matrix_float4x4
+    var cameraPosition:       SIMD4<Float>
 }
 
 // ── Per-light data ───────────────────────────────────────────────────────────
@@ -68,6 +70,47 @@ struct LightUniforms {
         case 3: light3 = light
         default: break
         }
+    }
+}
+
+// ── Material uniforms (buffer index 4 — fragment only) ──────────────────────
+// Phase 8: PBR material factors + texture-presence flags + color mode.
+// Layout:
+//   baseColorFactor     float4  16
+//   emissiveFactor      float4  16   (w = unused)
+//   metallicFactor      float    4
+//   roughnessFactor     float    4
+//   hasBaseColorTex     uint     4
+//   hasNormalTex        uint     4
+//   hasMetallicRoughTex uint     4
+//   hasEmissiveTex      uint     4
+//   colorMode           uint     4   (0 = greyscale, 1 = color)
+//   pad                 uint     4
+//   ───────────────────────────────
+//   Total                       64
+struct MaterialUniforms {
+    var baseColorFactor:     SIMD4<Float>
+    var emissiveFactor:      SIMD4<Float>   // w unused
+    var metallicFactor:      Float
+    var roughnessFactor:     Float
+    var hasBaseColorTex:     UInt32
+    var hasNormalTex:        UInt32
+    var hasMetallicRoughTex: UInt32
+    var hasEmissiveTex:      UInt32
+    var colorMode:           UInt32         // 0 = greyscale, 1 = color
+    var pad:                 UInt32
+
+    init() {
+        baseColorFactor     = SIMD4<Float>(1, 1, 1, 1)
+        emissiveFactor      = SIMD4<Float>(0, 0, 0, 0)
+        metallicFactor      = 0.0
+        roughnessFactor     = 0.5
+        hasBaseColorTex     = 0
+        hasNormalTex        = 0
+        hasMetallicRoughTex = 0
+        hasEmissiveTex      = 0
+        colorMode           = 0
+        pad                 = 0
     }
 }
 
