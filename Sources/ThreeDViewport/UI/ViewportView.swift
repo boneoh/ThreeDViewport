@@ -131,6 +131,25 @@ final class ViewportView: MTKView {
         fatalError("ViewportView does not support NSCoder initialisation")
     }
 
+    // MARK: - New Project
+
+    /// Resets the viewport to a clean blank state: no models, default camera,
+    /// timeline rewound, feedback cleared.  Lights and background are left
+    /// as-is so the user keeps their preferred setup.
+    func newProject() {
+        sceneManager.clear()
+        timeline.stop()
+        timeline.duration = 10.0
+        camera.yaw      = 0.0
+        camera.pitch    = 0.4
+        camera.distance = 5.0
+        camera.target   = SIMD3<Float>(0, 0, 0)
+        camera.keyframeTrack = nil
+        feedbackProcessor.reset()
+        syncOverlayState()
+        print("[DEBUG] ViewportView: new project — scene cleared")
+    }
+
     // MARK: - Model Loading
 
     // Replaces the entire scene with a single model (Open Model... menu item).
@@ -153,7 +172,6 @@ final class ViewportView: MTKView {
             sceneManager.objects = [obj]
             sceneManager.selectedIndex = 0
             camera.fitToScene(boundingRadius: obj.boundingRadius, center: obj.boundingCenter)
-            createDemoAnimation(for: obj)
             syncOverlayState()
 
             print("[DEBUG] ViewportView: loadModel complete — objects=" + String(sceneManager.objects.count))
@@ -260,24 +278,6 @@ final class ViewportView: MTKView {
 
         print("[DEBUG] ViewportView: autoNormalize scale=" + String(scale)
             + " worldRadius=" + String(worldRadius) + " -> " + String(targetRadius))
-    }
-
-    // MARK: - Demo animation
-
-    private func createDemoAnimation(for obj: SceneObject) {
-        let animDuration = timeline.duration
-        let track    = KeyframeTrack()
-        let identity = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
-        let half     = simd_quatf(angle: Float.pi, axis: SIMD3<Float>(0, 1, 0))
-
-        track.addKeyframe(TransformKeyframe(time: 0,                 rotation: identity))
-        track.addKeyframe(TransformKeyframe(time: animDuration * 0.5, rotation: half))
-        track.addKeyframe(TransformKeyframe(time: animDuration,       rotation: identity))
-
-        obj.keyframeTrack = track
-
-        print("[DEBUG] ViewportView: demo rotation created, duration=" + String(animDuration)
-            + "s keyframes=" + String(track.keyframes.count))
     }
 
     // MARK: - Add Object Keyframe
@@ -441,8 +441,6 @@ final class ViewportView: MTKView {
             let pitch = simd_quatf(angle: -dy * sensitivity, axis: SIMD3<Float>(1, 0, 0))
             let delta = simd_normalize(pitch * yaw)
             obj.transform = rotationMatrix4x4(delta) * obj.transform
-            // Keep baseTransform in sync so the pose is saved without needing a keyframe.
-            obj.baseTransform = obj.transform
 
         } else {
             camera.orbit(deltaX: dx, deltaY: dy)
@@ -565,7 +563,6 @@ final class ViewportView: MTKView {
             case .object:
                 if let obj = sceneManager.selectedObject {
                     obj.transform.columns.3.x -= translateStep
-                    obj.baseTransform = obj.transform
                 }
             }
 
@@ -579,7 +576,6 @@ final class ViewportView: MTKView {
             case .object:
                 if let obj = sceneManager.selectedObject {
                     obj.transform.columns.3.x += translateStep
-                    obj.baseTransform = obj.transform
                 }
             }
 
@@ -593,7 +589,6 @@ final class ViewportView: MTKView {
             case .object:
                 if let obj = sceneManager.selectedObject {
                     obj.transform.columns.3.y += translateStep
-                    obj.baseTransform = obj.transform
                 }
             }
 
@@ -607,7 +602,6 @@ final class ViewportView: MTKView {
             case .object:
                 if let obj = sceneManager.selectedObject {
                     obj.transform.columns.3.y -= translateStep
-                    obj.baseTransform = obj.transform
                 }
             }
 
@@ -622,7 +616,6 @@ final class ViewportView: MTKView {
             case .object:
                 if let obj = sceneManager.selectedObject {
                     obj.transform.columns.3.z += translateStep
-                    obj.baseTransform = obj.transform
                 }
             }
 
@@ -636,7 +629,6 @@ final class ViewportView: MTKView {
             case .object:
                 if let obj = sceneManager.selectedObject {
                     obj.transform.columns.3.z -= translateStep
-                    obj.baseTransform = obj.transform
                 }
             }
 

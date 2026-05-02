@@ -202,8 +202,13 @@ final class FeedbackProcessor {
         let isTick = (frameCounter % max(1, settings.interval) == 0)
 
         guard isTick else {
-            // Non-feedback frame: show scene as-is
-            blitToTexture(commandBuffer: commandBuffer, source: scene, dest: dest)
+            // Non-tick frame: persist the last blended output so there is no
+            // flash between ticks.  Fall back to the raw scene while priming.
+            if isFull, let output = outputTexture {
+                blitToTexture(commandBuffer: commandBuffer, source: output, dest: dest)
+            } else {
+                blitToTexture(commandBuffer: commandBuffer, source: scene, dest: dest)
+            }
             return
         }
 
@@ -234,6 +239,21 @@ final class FeedbackProcessor {
         if !isFull && writeIndex == 0 {
             isFull = true
             print("[DEBUG] FeedbackProcessor: queue primed — feedback active")
+        }
+    }
+
+    // MARK: - Passthrough (paused / stopped)
+
+    /// Blits the most recent visible frame to `dest` without touching the queue.
+    /// Call this when the timeline is paused or has reached the end so the last
+    /// feedback output (or raw scene while priming) stays on screen.
+    func blitLastOutput(commandBuffer: MTLCommandBuffer, dest: MTLTexture) {
+        if isFull, let output = outputTexture {
+            // Feedback active: keep the last blended result visible.
+            blitToTexture(commandBuffer: commandBuffer, source: output, dest: dest)
+        } else if let scene = sceneTexture {
+            // Still priming: show the raw scene.
+            blitToTexture(commandBuffer: commandBuffer, source: scene, dest: dest)
         }
     }
 

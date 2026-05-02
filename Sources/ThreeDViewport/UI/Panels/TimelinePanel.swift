@@ -12,6 +12,9 @@ struct TimelinePanel: View {
     var onAddCameraKeyframe: () -> Void
     var onExport:            () -> Void
 
+    @State private var showDurationPopover: Bool   = false
+    @State private var durationInput:       String = ""
+
     var body: some View {
         ZStack {
             Color(NSColor(calibratedWhite: 0.22, alpha: 1.0))
@@ -50,11 +53,22 @@ struct TimelinePanel: View {
                 .accentColor(Color(NSColor.controlAccentColor))
                 .disabled(exportState.isExporting)
 
-                // ── Duration display ──────────────────────────────────────────
-                Text(timeString(timeline.duration))
-                    .font(.system(size: 12, weight: .regular, design: .monospaced))
-                    .foregroundColor(Color(NSColor.secondaryLabelColor))
-                    .frame(width: 70, alignment: .trailing)
+                // ── Duration (tappable — opens edit popover) ──────────────────
+                Button {
+                    durationInput = String(format: "%.1f", timeline.duration)
+                    showDurationPopover = true
+                } label: {
+                    Text(timeString(timeline.duration))
+                        .font(.system(size: 12, weight: .regular, design: .monospaced))
+                        .foregroundColor(Color(NSColor.secondaryLabelColor))
+                        .frame(width: 70, alignment: .trailing)
+                        .help("Click to set timeline duration")
+                }
+                .buttonStyle(.plain)
+                .disabled(exportState.isExporting)
+                .popover(isPresented: $showDurationPopover, arrowEdge: .top) {
+                    durationPopover
+                }
 
                 Divider()
                     .frame(height: 20)
@@ -121,6 +135,69 @@ struct TimelinePanel: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
         }
+    }
+
+    // MARK: - Duration popover
+
+    private var durationPopover: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Timeline Duration")
+                .font(.headline)
+
+            HStack(spacing: 6) {
+                TextField("seconds", text: $durationInput)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 80)
+                    .onSubmit { applyDuration() }
+                Text("sec")
+                    .foregroundColor(.secondary)
+                    .font(.callout)
+            }
+
+            // Common presets
+            HStack(spacing: 6) {
+                ForEach([5, 10, 15, 30, 60, 120], id: \.self) { secs in
+                    Button("\(secs)s") {
+                        durationInput = String(secs)
+                        applyDuration()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    showDurationPopover = false
+                }
+                .keyboardShortcut(.cancelAction)
+
+                Button("Set") {
+                    applyDuration()
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(14)
+        .frame(width: 320)
+    }
+
+    private func applyDuration() {
+        // Accept plain seconds ("30") or decimal ("12.5").
+        // Clamp to a sensible range: 1 s – 3600 s (1 hour).
+        if let secs = Double(durationInput.trimmingCharacters(in: .whitespaces)) {
+            let clamped = max(1.0, min(3600.0, secs))
+            timeline.duration = clamped
+            // If the playhead is past the new end, pull it back.
+            if timeline.currentTime > clamped {
+                timeline.seek(to: clamped)
+            }
+            print("[DEBUG] TimelinePanel: duration set to "
+                + String(format: "%.1f", clamped) + "s")
+        }
+        showDurationPopover = false
     }
 
     // MARK: - Helpers

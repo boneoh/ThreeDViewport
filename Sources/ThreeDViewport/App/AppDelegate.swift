@@ -133,6 +133,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let fileMenu = NSMenu(title: "File")
         fileItem.submenu = fileMenu
 
+        // New Project (⌘N)
+        let newProjectItem = NSMenuItem(
+            title: "New Project",
+            action: #selector(newProject(_:)),
+            keyEquivalent: "n"
+        )
+        newProjectItem.target = self
+        fileMenu.addItem(newProjectItem)
+
+        fileMenu.addItem(.separator())
+
         // Open Model — replaces entire scene (⌘O)
         let openModelItem = NSMenuItem(
             title: "Open Model...",
@@ -221,6 +232,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         NSApplication.shared.mainMenu = mainMenu
         print("[DEBUG] AppDelegate: menu setup complete")
+    }
+
+    // MARK: - New Project
+
+    @objc private func newProject(_ sender: Any) {
+        guard let window = window else { return }
+
+        // Confirm if there's an unsaved scene with models in it
+        if viewportView?.sceneManager.objects.isEmpty == false {
+            let alert = NSAlert()
+            alert.messageText     = "New Project"
+            alert.informativeText = "This will clear the current scene. Any unsaved changes will be lost."
+            alert.alertStyle      = .warning
+            alert.addButton(withTitle: "New Project")
+            alert.addButton(withTitle: "Cancel")
+            alert.beginSheetModal(for: window) { [weak self] response in
+                if response == .alertFirstButtonReturn {
+                    self?.performNewProject()
+                }
+            }
+        } else {
+            performNewProject()
+        }
+    }
+
+    private func performNewProject() {
+        viewportView?.newProject()
+        currentProjectURL = nil
+        window?.title = "ThreeDViewport"
+        print("[DEBUG] AppDelegate: new project")
     }
 
     // MARK: - Open Model (replaces scene)

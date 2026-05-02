@@ -110,9 +110,15 @@ final class ProjectFile {
                     sx: kf.scale.x, sy: kf.scale.y, sz: kf.scale.z
                 )
             }
+            // Objects with keyframes: save baseTransform so delta computation
+            // (invBase * transform) stays valid after reload.
+            // Objects without keyframes: save transform so any manual
+            // repositioning / rotation survives the save-load round-trip.
+            let hasKeyframes = !kfData.isEmpty
+            let matrixToSave = hasKeyframes ? obj.baseTransform : obj.transform
             return ObjectData(name: obj.name,
                               keyframes: kfData,
-                              baseTransformMatrix: encodeMatrix(obj.baseTransform))
+                              baseTransformMatrix: encodeMatrix(matrixToSave))
         }
 
         // ── Camera keyframes (Phase 5) ────────────────────────────────────────
@@ -128,15 +134,25 @@ final class ProjectFile {
             )
         }
 
+        // ── Feedback settings (v5) ────────────────────────────────────────────
+        let fs = vp.feedbackSettings
+        let feedbackData = FeedbackData(
+            isEnabled: fs.isEnabled,
+            interval:  fs.interval,
+            decay:     fs.decay,
+            length:    fs.length
+        )
+
         return ProjectData(
-            version:         4,
+            version:         5,
             modelPath:       nil,           // v3+ uses modelPaths instead
             modelPaths:      modelPaths,
             timeline:        timelineData,
             camera:          cameraData,
             objects:         objectsData,
             cameraKeyframes: cameraKfData,
-            isColorMode:     vp.renderSettings.isColorMode
+            isColorMode:     vp.renderSettings.isColorMode,
+            feedback:        feedbackData
         )
     }
 
@@ -202,6 +218,15 @@ final class ProjectFile {
         // ── Color mode ────────────────────────────────────────────────────────
         vp.renderSettings.isColorMode = data.isColorMode
         print("[DEBUG] ProjectFile: colorMode=" + (data.isColorMode ? "color" : "greyscale"))
+
+        // ── Feedback settings (v5) ────────────────────────────────────────────
+        let fb = data.feedback
+        vp.feedbackSettings.isEnabled = fb.isEnabled
+        vp.feedbackSettings.interval  = fb.interval
+        vp.feedbackSettings.decay     = fb.decay
+        vp.feedbackSettings.length    = fb.length
+        print("[DEBUG] ProjectFile: feedback enabled=\(fb.isEnabled)"
+            + " interval=\(fb.interval) decay=\(fb.decay) length=\(fb.length)")
 
         // Replace demo animations with saved keyframes; restore base transforms.
         applyKeyframes(data.objects, to: vp)

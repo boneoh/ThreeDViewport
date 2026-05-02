@@ -1,6 +1,6 @@
 import Foundation
 
-// Phase 4/5/6/8: Codable structs that define the .3dvp project file format (JSON).
+// Phase 4/5/6/8/9: Codable structs that define the .3dvp project file format (JSON).
 // Version history:
 //   1 — initial: model path, camera, timeline, per-object keyframe tracks.
 //   2 — Phase 5: added cameraKeyframes array.
@@ -8,6 +8,7 @@ import Foundation
 //               modelPath kept as optional for v1/v2 backward compatibility.
 //   4 — Phase 8: added isColorMode; added baseTransformMatrix per object so manually
 //               repositioned objects are restored correctly without requiring a keyframe.
+//   5 — Phase 9: added feedback settings (isEnabled, interval, decay, length).
 //
 // Design rules:
 //   • No binary data inline — .glb files are referenced by absolute path.
@@ -16,10 +17,10 @@ import Foundation
 //   • Camera keyframes are ABSOLUTE — evaluated state is written directly to
 //     CameraController (yaw / pitch / distance / target).
 //   • Forward compatibility: unknown keys are silently ignored by JSONDecoder.
-//     All new v4 fields have defaults so v1–v3 files load without error.
+//     All new fields have defaults so older files load without error.
 
 struct ProjectData: Codable {
-    var version:         Int     = 4
+    var version:         Int     = 5
     var modelPath:       String? = nil  // v1/v2 compat — single model path; ignored when modelPaths non-empty.
     var modelPaths:      [String] = []  // v3 — ordered list of absolute .glb paths.
     var timeline:        TimelineData
@@ -28,6 +29,17 @@ struct ProjectData: Codable {
     var cameraKeyframes: [CameraKeyframeData] = []  // Phase 5; empty = no camera animation.
     // v4 additions (default values make old files load cleanly):
     var isColorMode:     Bool = true                // Phase 8 color / greyscale toggle.
+    // v5 additions:
+    var feedback:        FeedbackData = FeedbackData()  // feedback delay-line settings.
+}
+
+// v5: Feedback delay-line settings.  Defaults match FeedbackSettings initial values
+// so v1–v4 project files load with feedback disabled.
+struct FeedbackData: Codable {
+    var isEnabled: Bool  = false
+    var interval:  Int   = 10
+    var decay:     Float = 0.5
+    var length:    Int   = 10
 }
 
 struct TimelineData: Codable {

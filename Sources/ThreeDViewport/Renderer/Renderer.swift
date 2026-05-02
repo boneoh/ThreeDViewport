@@ -169,6 +169,16 @@ final class Renderer: NSObject, MTKViewDelegate {
         guard let drawable      = view.currentDrawable,
               let commandBuffer = commandQueue.makeCommandBuffer() else { return }
 
+        // Lazy-init: resize feedback textures on the first draw (or after the
+        // feedbackProcessor is wired in) if they haven't been created yet.
+        // mtkView(_:drawableSizeWillChange:) may fire before feedbackProcessor
+        // is assigned, leaving sceneTexture nil — this covers that race.
+        if let fp = feedbackProcessor, fp.sceneTexture == nil {
+            let fw = min(Int(view.drawableSize.width),  1920)
+            let fh = min(Int(view.drawableSize.height), 1080)
+            fp.resize(width: fw, height: fh, length: feedbackSettings?.length ?? 10)
+        }
+
         // When feedback is active render the scene to an intermediate texture;
         // FeedbackProcessor composites and blits to the drawable.
         let feedbackActive = (feedbackSettings?.isEnabled == true)
@@ -213,78 +223,84 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
 
         // ── Scene geometry ────────────────────────────────────────────────────
+        // Do NOT early-return here: even an empty scene must go through the
+        // feedback path so fp.process ticks every frame and the drawable gets
+        // content when feedback is rendering to sceneTexture.
         let visibleObjects = sceneManager.objects.filter { $0.isVisible }
-        guard !visibleObjects.isEmpty else {
-            encoder.endEncoding()
-            commandBuffer.present(drawable)
-            commandBuffer.commit()
-            return
-        }
 
-        encoder.setRenderPipelineState(pipeline)
-        if let ds = depthStencilState { encoder.setDepthStencilState(ds) }
+        if !visibleObjects.isEmpty {
+            encoder.setRenderPipelineState(pipeline)
+            if let ds = depthStencilState { encoder.setDepthStencilState(ds) }
 
-        // LightUniforms — constant across all objects this frame
-        var lightUniforms = lightManager.buildLightUniforms()
-        encoder.setFragmentBytes(&lightUniforms,
-                                 length: MemoryLayout<LightUniforms>.stride,
-                                 index: 3)
+            // LightUniforms — constant across all objects this frame
+            var lightUniforms = lightManager.buildLightUniforms()
+            encoder.setFragmentBytes(&lightUniforms,
+                                     length: MemoryLayout<LightUniforms>.stride,
+                                     index: 3)
 
-        let vp  = camera.viewProjectionMatrix
-        let eye = camera.eyePosition
+            let vp  = camera.viewProjectionMatrix
+            let eye = camera.eyePosition
 
-        for object in visibleObjects {
-            guard let posBuffer = object.positionBuffer,
-                  let idxBuffer = object.indexBuffer,
-                  object.indexCount > 0 else { continue }
+            for object in visibleObjects {
+                guard let posBuffer = object.positionBuffer,
+                      let idxBuffer = object.indexBuffer,
+                      object.indexCount > 0 else { continue }
 
-            // Correct normal matrix: inverse-transpose of model matrix
-            let normalMatrix = simd_transpose(simd_inverse(object.transform))
+                // Correct normal matrix: inverse-transpose of model matrix
+                let normalMatrix = simd_transpose(simd_inverse(object.transform))
 
-            var uniforms = Uniforms(
-                modelMatrix:          object.transform,
-                viewProjectionMatrix: vp,
-                normalMatrix:         normalMatrix,
-                cameraPosition:       SIMD4<Float>(eye.x, eye.y, eye.z, 0)
-            )
+                var uniforms = Uniforms(
+                    modelMatrix:          object.transform,
+                    viewProjectionMatrix: vp,
+                    normalMatrix:         normalMatrix,
+                    cameraPosition:       SIMD4<Float>(eye.x, eye.y, eye.z, 0)
+                )
 
-            encoder.setVertexBuffer(posBuffer, offset: 0, index: 0)
-            if let n = object.normalBuffer   { encoder.setVertexBuffer(n, offset: 0, index: 1) }
-            encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 2)
+                encoder.setVertexBuffer(posBuffer, offset: 0, index: 0)
+                if let n = object.normalBuffer   { encoder.setVertexBuffer(n, offset: 0, index: 1) }
+                encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 2)
 
-            // UV buffer — use dummy if not present (keeps buffer(4) always valid)
-            let uvBuf  = object.uvBuffer      ?? dummyUVBuffer
-            let tanBuf = object.tangentBuffer ?? dummyTangentBuffer
-            encoder.setVertexBuffer(uvBuf,  offset: 0, index: 4)
-            encoder.setVertexBuffer(tanBuf, offset: 0, index: 5)
+                // UV buffer — use dummy if not present (keeps buffer(4) always valid)
+                let uvBuf  = object.uvBuffer      ?? dummyUVBuffer
+                let tanBuf = object.tangentBuffer ?? dummyTangentBuffer
+                encoder.setVertexBuffer(uvBuf,  offset: 0, index: 4)
+                encoder.setVertexBuffer(tanBuf, offset: 0, index: 5)
 
-            // Fragment: Uniforms + LightUniforms already bound; add MaterialUniforms
-            encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 2)
-            var matUniforms = buildMaterialUniforms(for: object)
-            encoder.setFragmentBytes(&matUniforms,
-                                     length: MemoryLayout<MaterialUniforms>.stride,
-                                     index: 4)
+                // Fragment: Uniforms + LightUniforms already bound; add MaterialUniforms
+                encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 2)
+                var matUniforms = buildMaterialUniforms(for: object)
+                encoder.setFragmentBytes(&matUniforms,
+                                         length: MemoryLayout<MaterialUniforms>.stride,
+                                         index: 4)
 
-            // Bind textures (always bind all slots; shader checks flags before sampling)
-            bindTextures(encoder: encoder, material: object.material)
+                // Bind textures (always bind all slots; shader checks flags before sampling)
+                bindTextures(encoder: encoder, material: object.material)
 
-            encoder.setTriangleFillMode(isWireframe ? .lines : .fill)
-            encoder.drawIndexedPrimitives(
-                type:              .triangle,
-                indexCount:        object.indexCount,
-                indexType:         .uint32,
-                indexBuffer:       idxBuffer,
-                indexBufferOffset: 0
-            )
+                encoder.setTriangleFillMode(isWireframe ? .lines : .fill)
+                encoder.drawIndexedPrimitives(
+                    type:              .triangle,
+                    indexCount:        object.indexCount,
+                    indexType:         .uint32,
+                    indexBuffer:       idxBuffer,
+                    indexBufferOffset: 0
+                )
+            }
         }
 
         encoder.endEncoding()
 
-        // Feedback composite + blit to drawable (or straight blit when just enabled)
+        // Feedback composite + blit to drawable.
+        // Only run the queue/blend logic while the timeline is playing so the
+        // feedback freezes (and the raw scene stays visible) when paused or
+        // when the end of the animation is reached.
         if feedbackActive, let fp = feedbackProcessor, let fs = feedbackSettings {
-            fp.process(commandBuffer: commandBuffer,
-                       dest:          drawable.texture,
-                       settings:      fs)
+            if timeline.isPlaying {
+                fp.process(commandBuffer: commandBuffer,
+                           dest:          drawable.texture,
+                           settings:      fs)
+            } else {
+                fp.blitLastOutput(commandBuffer: commandBuffer, dest: drawable.texture)
+            }
         }
 
         commandBuffer.present(drawable)
