@@ -3,10 +3,14 @@ import simd
 
 // Represents one loaded GLTF mesh node with its GPU buffers.
 // Phase 2 adds keyframe animation via keyframeTrack.
-// Phase 3 will add multi-object selection state.
+// Phase 6 adds sourceURL and per-object visibility toggle.
 final class SceneObject {
 
     let name: String
+
+    // The .glb file this object was loaded from.
+    // Stored so multi-model project files can reload each object independently.
+    var sourceURL: URL?
 
     // The world transform used for rendering each frame.
     // Updated by the Renderer when animation is active.
