@@ -18,6 +18,10 @@ let package = Package(
             path: "Sources/ThreeDViewport",
             resources: [
                 .process("Renderer/Shaders.metal")
+            ],
+            linkerSettings: [
+                .linkedFramework("AVFoundation"),
+                .linkedFramework("CoreVideo")
             ]
         )
     ]

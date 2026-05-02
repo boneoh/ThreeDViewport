@@ -106,7 +106,14 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         // ── Phase 2: advance timeline and evaluate keyframes ─────────────────
         timeline.tick()
-        applyAnimation()
+
+        // Only re-evaluate keyframes when time actually changed (playing or scrubbed).
+        // When paused and time is unchanged, objects keep whatever transform the user
+        // set manually — this preserves pose edits between "rotate object" and "Add Keyframe".
+        if timeline.currentTime != lastAnimatedTime {
+            applyAnimation()
+            lastAnimatedTime = timeline.currentTime
+        }
 
         // ── Metal rendering ───────────────────────────────────────────────────
         guard let pipeline = pipelineState else { return }

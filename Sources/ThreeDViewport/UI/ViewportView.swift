@@ -14,6 +14,10 @@ final class ViewportView: MTKView {
     private var lastMouseLocation: NSPoint = .zero
     private var isSpaceDown: Bool = false
 
+    // Holds the VideoExporter alive for the duration of an export.
+    // Nil when no export is in progress.
+    private var activeExporter: VideoExporter?
+
     // MARK: - Init
 
     init(frame: NSRect) {
@@ -32,7 +36,7 @@ final class ViewportView: MTKView {
 
         colorPixelFormat         = .bgra8Unorm
         depthStencilPixelFormat  = .depth32Float
-        clearColor               = MTLClearColor(red: 0.13, green: 0.13, blue: 0.15, alpha: 1.0)
+        clearColor               = MTLClearColor(red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0)
         preferredFramesPerSecond = 30
         isPaused                 = false
         enableSetNeedsDisplay    = false
@@ -231,6 +235,68 @@ final class ViewportView: MTKView {
             + " for '" + obj.name + "'")
     }
 
+    // MARK: - Phase 3: Video Export
+
+    // Pauses the render loop, renders every animation frame offscreen via
+    // VideoExporter, and writes ProRes 4444 to the given URL.
+    // exportState is written on the main thread so TimelinePanel stays in sync.
+    func startExport(to url: URL, codec: ExportCodec, exportState: ExportState) {
+        guard let dev = device else {
+            print("[DEBUG] ViewportView: startExport — Metal device is nil")
+            return
+        }
+        guard let r = renderer,
+              let pipeline = r.pipelineState,
+              let depth    = r.depthStencilState else {
+            print("[DEBUG] ViewportView: startExport — renderer pipeline not ready")
+            exportState.lastMessage = "Export failed: renderer not ready"
+            return
+        }
+        guard let exporter = VideoExporter(
+            device:            dev,
+            commandQueue:      r.commandQueue,
+            sceneManager:      sceneManager,
+            camera:            camera,
+            lightManager:      lightManager,
+            timeline:          timeline,
+            pipelineState:     pipeline,
+            depthStencilState: depth
+        ) else {
+            print("[DEBUG] ViewportView: startExport — VideoExporter init returned nil")
+            return
+        }
+
+        // Stop playback and freeze the render loop to prevent racing with the export queue
+        timeline.pause()
+        isPaused = true
+
+        // Ensure camera aspect ratio matches the export resolution
+        camera.aspectRatio = Float(exporter.width) / Float(exporter.height)
+
+        exportState.isExporting = true
+        exportState.progress    = 0.0
+        exportState.lastMessage = ""
+
+        // Retain the exporter for the full duration of the export.
+        // The completion block clears it, allowing deallocation.
+        activeExporter = exporter
+
+        exporter.export(to: url, codec: codec, progress: { [weak exportState] p in
+            exportState?.progress = p
+        }, completion: { [weak self, weak exportState] error in
+            // Release exporter and restore live render loop
+            self?.activeExporter = nil
+            self?.isPaused = false
+            exportState?.isExporting = false
+            if let error = error {
+                exportState?.lastMessage = "Export failed: " + error.localizedDescription
+                print("[DEBUG] ViewportView: export failed — " + error.localizedDescription)
+            } else {
+                exportState?.lastMessage = "Export complete!"
+            }
+        })
+    }
+
     // MARK: - First Responder
 
     override var acceptsFirstResponder: Bool { return true }
@@ -253,10 +319,36 @@ final class ViewportView: MTKView {
         lastMouseLocation = loc
 
         if isSpaceDown {
+            // Space + drag: pan the camera in any mode
             camera.pan(deltaX: dx, deltaY: dy)
+
+        } else if !timeline.isPlaying, let obj = sceneManager.primaryObject {
+            // Paused + drag: rotate the object in world space so the pose can be
+            // keyframed. Horizontal drag = Y-axis yaw; vertical drag = X-axis pitch.
+            let sensitivity: Float = 0.005
+            let yaw   = simd_quatf(angle:  dx * sensitivity, axis: SIMD3<Float>(0, 1, 0))
+            let pitch = simd_quatf(angle: -dy * sensitivity, axis: SIMD3<Float>(1, 0, 0))
+            let delta = simd_normalize(pitch * yaw)
+            // Pre-multiply so the rotation is applied in world space
+            obj.transform = rotationMatrix4x4(delta) * obj.transform
+
         } else {
+            // Playing + drag: orbit the camera so you can view the animation from any angle
             camera.orbit(deltaX: dx, deltaY: dy)
         }
+    }
+
+    // Converts a unit quaternion to a column-major 4x4 rotation matrix.
+    // Uses the explicit Shepperd formula — consistent with KeyframeTrack.rotationMatrix.
+    private func rotationMatrix4x4(_ q: simd_quatf) -> matrix_float4x4 {
+        let n = simd_normalize(q)
+        let x = n.imag.x, y = n.imag.y, z = n.imag.z, w = n.real
+        return matrix_float4x4(columns: (
+            SIMD4<Float>(1 - 2*(y*y + z*z),     2*(x*y + z*w),     2*(x*z - y*w), 0),
+            SIMD4<Float>(    2*(x*y - z*w), 1 - 2*(x*x + z*z),     2*(y*z + x*w), 0),
+            SIMD4<Float>(    2*(x*z + y*w),     2*(y*z - x*w), 1 - 2*(x*x + y*y), 0),
+            SIMD4<Float>(0, 0, 0, 1)
+        ))
     }
 
     override func scrollWheel(with event: NSEvent) {
