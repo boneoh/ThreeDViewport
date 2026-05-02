@@ -183,9 +183,19 @@ struct LightsInspectorPanel: View {
 
         VStack(alignment: .leading, spacing: 8) {
 
-            Text(light.type.displayName + " Light")
+            // Enabled toggle — prominent at the top so you can solo/mute lights quickly
+            HStack {
+                Text(light.type.displayName + " Light")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                Spacer()
+                Toggle("Enabled", isOn: Binding<Bool>(
+                    get: { lightManager.lights[i].isEnabled },
+                    set: { lightManager.lights[i].isEnabled = $0 }
+                ))
+                .toggleStyle(.checkbox)
                 .font(.subheadline)
-                .foregroundColor(.secondary)
+            }
 
             // Type picker
             Picker("Type", selection: Binding<LightType>(
@@ -212,7 +222,7 @@ struct LightsInspectorPanel: View {
                       value: Binding<Float>(
                           get: { lightManager.lights[i].intensity },
                           set: { lightManager.lights[i].intensity = $0 }),
-                      range: 0...20,
+                      range: 0...10,
                       format: "%.2f")
 
             // Position — point / spot / laser

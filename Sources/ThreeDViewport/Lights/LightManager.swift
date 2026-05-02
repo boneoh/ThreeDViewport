@@ -129,7 +129,7 @@ final class LightManager: ObservableObject {
     func adjustSelectedIntensity(delta: Float) {
         guard selectedIndex < lights.count else { return }
         lights[selectedIndex].intensity =
-            max(0.0, min(20.0, lights[selectedIndex].intensity + delta))
+            max(0.0, min(10.0, lights[selectedIndex].intensity + delta))
         print("[DEBUG] LightManager: intensity="
             + String(format: "%.2f", lights[selectedIndex].intensity))
     }

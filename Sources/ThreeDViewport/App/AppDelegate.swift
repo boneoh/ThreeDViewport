@@ -367,7 +367,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let viewport = viewportView else { return }
 
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 296, height: 540),
+            contentRect: NSRect(x: 0, y: 0, width: 296, height: 720),
             styleMask:   [.titled, .closable, .resizable, .utilityWindow, .nonactivatingPanel],
             backing:     .buffered,
             defer:       false
