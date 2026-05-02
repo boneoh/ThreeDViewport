@@ -110,7 +110,9 @@ final class ProjectFile {
                     sx: kf.scale.x, sy: kf.scale.y, sz: kf.scale.z
                 )
             }
-            return ObjectData(name: obj.name, keyframes: kfData)
+            return ObjectData(name: obj.name,
+                              keyframes: kfData,
+                              baseTransformMatrix: encodeMatrix(obj.baseTransform))
         }
 
         // ── Camera keyframes (Phase 5) ────────────────────────────────────────
@@ -127,13 +129,14 @@ final class ProjectFile {
         }
 
         return ProjectData(
-            version:         3,
-            modelPath:       nil,           // v3 uses modelPaths instead
+            version:         4,
+            modelPath:       nil,           // v3+ uses modelPaths instead
             modelPaths:      modelPaths,
             timeline:        timelineData,
             camera:          cameraData,
             objects:         objectsData,
-            cameraKeyframes: cameraKfData
+            cameraKeyframes: cameraKfData,
+            isColorMode:     vp.renderSettings.isColorMode
         )
     }
 
@@ -196,7 +199,11 @@ final class ProjectFile {
             print("[DEBUG] ProjectFile: no model paths stored in project")
         }
 
-        // Replace demo animations with saved keyframes.
+        // ── Color mode ────────────────────────────────────────────────────────
+        vp.renderSettings.isColorMode = data.isColorMode
+        print("[DEBUG] ProjectFile: colorMode=" + (data.isColorMode ? "color" : "greyscale"))
+
+        // Replace demo animations with saved keyframes; restore base transforms.
         applyKeyframes(data.objects, to: vp)
 
         // ── Camera static state — applied LAST so it overrides any fitToScene ─
@@ -213,18 +220,28 @@ final class ProjectFile {
         vp.syncOverlayState()
     }
 
-    // MARK: - Apply keyframes
+    // MARK: - Apply keyframes + base transforms
 
-    // Replaces each object's keyframeTrack with the saved keyframes.
-    // Matches objects by name; logs a warning for any unmatched names.
+    // Restores each object's baseTransform (v4) and keyframeTrack.
+    // Matches objects by name.  Both are handled in one pass so baseTransform
+    // is always set before the renderer evaluates the first animation delta.
     private static func applyKeyframes(_ objectsData: [ObjectData], to vp: ViewportView) {
         for obj in vp.sceneManager.objects {
             guard let saved = objectsData.first(where: { $0.name == obj.name }) else {
-                print("[DEBUG] ProjectFile: no saved keyframes for object '" + obj.name + "'")
+                print("[DEBUG] ProjectFile: no saved data for object '" + obj.name + "'")
                 continue
             }
+
+            // ── v4: restore baseTransform so manual repositioning survives reload ──
+            if let m = decodeMatrix(saved.baseTransformMatrix) {
+                obj.baseTransform = m
+                obj.transform     = m   // start at rest pose; animation will override next tick
+                print("[DEBUG] ProjectFile: baseTransform restored for '" + obj.name + "'")
+            }
+
+            // ── Keyframe track ────────────────────────────────────────────────────
             guard !saved.keyframes.isEmpty else {
-                print("[DEBUG] ProjectFile: saved keyframe array empty for '" + obj.name + "'")
+                print("[DEBUG] ProjectFile: no keyframes for '" + obj.name + "'")
                 continue
             }
 
@@ -242,5 +259,29 @@ final class ProjectFile {
             print("[DEBUG] ProjectFile: restored " + String(saved.keyframes.count)
                 + " keyframes for '" + obj.name + "'")
         }
+    }
+
+    // MARK: - Matrix helpers
+
+    /// Encodes a column-major 4×4 matrix as 16 floats.
+    private static func encodeMatrix(_ m: matrix_float4x4) -> [Float] {
+        return [
+            m.columns.0.x, m.columns.0.y, m.columns.0.z, m.columns.0.w,
+            m.columns.1.x, m.columns.1.y, m.columns.1.z, m.columns.1.w,
+            m.columns.2.x, m.columns.2.y, m.columns.2.z, m.columns.2.w,
+            m.columns.3.x, m.columns.3.y, m.columns.3.z, m.columns.3.w,
+        ]
+    }
+
+    /// Decodes 16 floats back to a column-major 4×4 matrix.  Returns nil if the
+    /// array is empty (v1–v3 files) or malformed, so callers can skip gracefully.
+    private static func decodeMatrix(_ a: [Float]) -> matrix_float4x4? {
+        guard a.count == 16 else { return nil }
+        return matrix_float4x4(columns: (
+            SIMD4<Float>(a[0],  a[1],  a[2],  a[3]),
+            SIMD4<Float>(a[4],  a[5],  a[6],  a[7]),
+            SIMD4<Float>(a[8],  a[9],  a[10], a[11]),
+            SIMD4<Float>(a[12], a[13], a[14], a[15])
+        ))
     }
 }

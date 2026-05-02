@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import MetalKit
 import simd
 
@@ -30,6 +31,15 @@ final class ViewportView: MTKView {
     let backgroundConfig: BackgroundConfig
     let timeline:         Timeline
     var renderer: Renderer?
+
+    // Phase 8: observable rendering settings (color / greyscale toggle)
+    let renderSettings = RenderSettings()
+    private var colorModeCancellable: AnyCancellable?
+
+    // Feedback delay-line system
+    let feedbackSettings  = FeedbackSettings()
+    let feedbackProcessor: FeedbackProcessor   // created after Metal device is ready
+    private var playbackCancellable: AnyCancellable?
 
     // Phase 6: HUD observable state — AppDelegate embeds the SwiftUI overlay using this.
     let overlayState = SceneOverlayState()
@@ -63,6 +73,8 @@ final class ViewportView: MTKView {
             fatalError("[DEBUG] ViewportView: MTLCreateSystemDefaultDevice returned nil — Metal not supported")
         }
 
+        feedbackProcessor = FeedbackProcessor(device: metalDevice)
+
         super.init(frame: frame, device: metalDevice)
 
         print("[DEBUG] ViewportView: Metal device '" + metalDevice.name + "'")
@@ -88,6 +100,23 @@ final class ViewportView: MTKView {
         }
 
         delegate = renderer
+
+        // Wire feedback processor + settings into renderer
+        renderer?.feedbackProcessor = feedbackProcessor
+        renderer?.feedbackSettings  = feedbackSettings
+
+        // Sync renderSettings → renderer whenever the toggle changes
+        colorModeCancellable = renderSettings.$isColorMode.sink { [weak self] value in
+            self?.renderer?.isColorMode = value
+            print("[DEBUG] ViewportView: colorMode = " + (value ? "color" : "greyscale"))
+        }
+
+        // Reset feedback queue whenever playback starts so old frames don't contaminate new runs
+        playbackCancellable = timeline.$isPlaying
+            .filter { $0 }
+            .sink { [weak self] _ in
+                self?.feedbackProcessor.reset()
+            }
 
         // Wire visibility toggle callback
         overlayState.onToggleVisibility = { [weak self] index in
@@ -119,6 +148,7 @@ final class ViewportView: MTKView {
             autoNormalize(obj)
             obj.baseTransform = obj.transform
             obj.sourceURL     = url
+            obj.name          = url.deletingPathExtension().lastPathComponent
 
             sceneManager.objects = [obj]
             sceneManager.selectedIndex = 0
@@ -148,6 +178,7 @@ final class ViewportView: MTKView {
             autoNormalize(obj)
             obj.baseTransform = obj.transform
             obj.sourceURL     = url
+            obj.name          = url.deletingPathExtension().lastPathComponent
 
             let isFirst = sceneManager.objects.isEmpty
             sceneManager.objects.append(obj)
@@ -350,6 +381,9 @@ final class ViewportView: MTKView {
             return
         }
 
+        exporter.isColorMode      = renderSettings.isColorMode
+        exporter.feedbackSettings = feedbackSettings
+        feedbackProcessor.reset()   // clear live queue; exporter has its own processor
         timeline.pause()
         isPaused = true
         camera.aspectRatio = Float(exporter.width) / Float(exporter.height)
@@ -407,6 +441,8 @@ final class ViewportView: MTKView {
             let pitch = simd_quatf(angle: -dy * sensitivity, axis: SIMD3<Float>(1, 0, 0))
             let delta = simd_normalize(pitch * yaw)
             obj.transform = rotationMatrix4x4(delta) * obj.transform
+            // Keep baseTransform in sync so the pose is saved without needing a keyframe.
+            obj.baseTransform = obj.transform
 
         } else {
             camera.orbit(deltaX: dx, deltaY: dy)
@@ -434,6 +470,7 @@ final class ViewportView: MTKView {
     private enum KC {
         static let space:    UInt16 = 49
         static let g:        UInt16 = 5    // wireframe
+        static let t:        UInt16 = 17   // color / greyscale toggle
         static let c:        UInt16 = 8    // camera mode
         static let l:        UInt16 = 37   // light mode
         static let o:        UInt16 = 31   // object mode / cycle
@@ -476,6 +513,10 @@ final class ViewportView: MTKView {
             case KC.g:
                 renderer?.isWireframe.toggle()
                 print("[DEBUG] ViewportView: wireframe = " + String(renderer?.isWireframe ?? false))
+                return
+
+            case KC.t:
+                renderSettings.isColorMode.toggle()
                 return
 
             case KC.c:
@@ -524,6 +565,7 @@ final class ViewportView: MTKView {
             case .object:
                 if let obj = sceneManager.selectedObject {
                     obj.transform.columns.3.x -= translateStep
+                    obj.baseTransform = obj.transform
                 }
             }
 
@@ -537,6 +579,7 @@ final class ViewportView: MTKView {
             case .object:
                 if let obj = sceneManager.selectedObject {
                     obj.transform.columns.3.x += translateStep
+                    obj.baseTransform = obj.transform
                 }
             }
 
@@ -550,6 +593,7 @@ final class ViewportView: MTKView {
             case .object:
                 if let obj = sceneManager.selectedObject {
                     obj.transform.columns.3.y += translateStep
+                    obj.baseTransform = obj.transform
                 }
             }
 
@@ -563,6 +607,7 @@ final class ViewportView: MTKView {
             case .object:
                 if let obj = sceneManager.selectedObject {
                     obj.transform.columns.3.y -= translateStep
+                    obj.baseTransform = obj.transform
                 }
             }
 
@@ -577,6 +622,7 @@ final class ViewportView: MTKView {
             case .object:
                 if let obj = sceneManager.selectedObject {
                     obj.transform.columns.3.z += translateStep
+                    obj.baseTransform = obj.transform
                 }
             }
 
@@ -590,6 +636,7 @@ final class ViewportView: MTKView {
             case .object:
                 if let obj = sceneManager.selectedObject {
                     obj.transform.columns.3.z -= translateStep
+                    obj.baseTransform = obj.transform
                 }
             }
 

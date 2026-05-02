@@ -1,8 +1,7 @@
 import Foundation
+import CoreGraphics
 import Metal
 import MetalKit
-import CoreGraphics
-import ImageIO
 import simd
 import GLTFKit2
 
@@ -196,7 +195,7 @@ final class GLTFLoader {
             return mat
         }
 
-        // PBR metallic-roughness
+        // ── PBR metallic-roughness (preferred) ───────────────────────────────
         if let pbr = gm.metallicRoughness {
             mat.baseColorFactor = SIMD4<Float>(pbr.baseColorFactor.x,
                                                pbr.baseColorFactor.y,
@@ -205,28 +204,54 @@ final class GLTFLoader {
             mat.metallicFactor  = pbr.metallicFactor
             mat.roughnessFactor = pbr.roughnessFactor
 
-            if let texParams = pbr.baseColorTexture,
-               let img       = texParams.texture.source {
+            print("[DEBUG] GLTFLoader: pbr baseColorFactor=("
+                + String(format: "%.2f", pbr.baseColorFactor.x) + ","
+                + String(format: "%.2f", pbr.baseColorFactor.y) + ","
+                + String(format: "%.2f", pbr.baseColorFactor.z) + ","
+                + String(format: "%.2f", pbr.baseColorFactor.w) + ")"
+                + " metallic=" + String(format: "%.3f", pbr.metallicFactor)
+                + " roughness=" + String(format: "%.3f", pbr.roughnessFactor))
+
+            if let tp = pbr.baseColorTexture, let img = tp.texture.source {
                 mat.baseColorTexture = loadTexture(from: img, sRGB: true)
                 print("[DEBUG] GLTFLoader: baseColorTexture " + (mat.baseColorTexture != nil ? "OK" : "FAILED"))
             }
-
-            if let texParams = pbr.metallicRoughnessTexture,
-               let img       = texParams.texture.source {
+            if let tp = pbr.metallicRoughnessTexture, let img = tp.texture.source {
                 mat.metallicRoughnessTexture = loadTexture(from: img, sRGB: false)
                 print("[DEBUG] GLTFLoader: mrTexture " + (mat.metallicRoughnessTexture != nil ? "OK" : "FAILED"))
             }
+
+        // ── KHR_materials_pbrSpecularGlossiness fallback ─────────────────────
+        // Many older models (e.g. Khronos Duck) use this extension.
+        // Approximate conversion: diffuse → albedo, roughness = 1 − glossiness,
+        // metallic = 0 (specular-glossiness has no direct metallic equivalent).
+        } else if let sg = gm.specularGlossiness {
+            mat.baseColorFactor = SIMD4<Float>(sg.diffuseFactor.x,
+                                               sg.diffuseFactor.y,
+                                               sg.diffuseFactor.z,
+                                               sg.diffuseFactor.w)
+            mat.metallicFactor  = 0.0
+            mat.roughnessFactor = max(0.04, 1.0 - sg.glossinessFactor)
+
+            // diffuseTexture is the colour map for specular-glossiness materials
+            if let tp = sg.diffuseTexture, let img = tp.texture.source {
+                mat.baseColorTexture = loadTexture(from: img, sRGB: true)
+                print("[DEBUG] GLTFLoader: sg.diffuseTexture " + (mat.baseColorTexture != nil ? "OK" : "FAILED"))
+            }
+            print("[DEBUG] GLTFLoader: specularGlossiness fallback — roughness="
+                + String(format: "%.3f", mat.roughnessFactor))
+        } else {
+            print("[DEBUG] GLTFLoader: no metallicRoughness or specularGlossiness found")
         }
 
-        // Normal map (only useful when we have tangents)
+        // ── Normal map ────────────────────────────────────────────────────────
         if hasTangents,
-           let texParams = gm.normalTexture,
-           let img       = texParams.texture.source {
+           let tp = gm.normalTexture, let img = tp.texture.source {
             mat.normalTexture = loadTexture(from: img, sRGB: false)
             print("[DEBUG] GLTFLoader: normalTexture " + (mat.normalTexture != nil ? "OK" : "FAILED"))
         }
 
-        // Emissive
+        // ── Emissive ──────────────────────────────────────────────────────────
         if let em = gm.emissive {
             mat.emissiveFactor = SIMD3<Float>(em.emissiveFactor.x,
                                               em.emissiveFactor.y,
@@ -234,8 +259,7 @@ final class GLTFLoader {
             let strength = em.emissiveStrength > 0 ? em.emissiveStrength : 1.0
             mat.emissiveFactor *= strength
 
-            if let texParams = em.emissiveTexture,
-               let img       = texParams.texture.source {
+            if let tp = em.emissiveTexture, let img = tp.texture.source {
                 mat.emissiveTexture = loadTexture(from: img, sRGB: true)
                 print("[DEBUG] GLTFLoader: emissiveTexture " + (mat.emissiveTexture != nil ? "OK" : "FAILED"))
             }
@@ -248,47 +272,127 @@ final class GLTFLoader {
 
     private func loadTexture(from image: GLTFImage, sRGB: Bool) -> MTLTexture? {
         // Embedded image (GLB) — read raw bytes from the buffer view
-        if let bv = image.bufferView, let data = bv.buffer.data {
+        if let bv = image.bufferView {
+            print("[DEBUG] GLTFLoader: image bv.offset=" + String(bv.offset)
+                + " bv.length=" + String(bv.length)
+                + " mimeType=" + (image.mimeType ?? "nil"))
+
+            guard let data = bv.buffer.data else {
+                print("[DEBUG] GLTFLoader: bv.buffer.data is nil")
+                return nil
+            }
+            print("[DEBUG] GLTFLoader: buffer total bytes=" + String(data.count))
+
             let start  = bv.offset
             let length = bv.length
             guard length > 0 else {
-                print("[DEBUG] GLTFLoader: texture bufferView.length is zero")
+                print("[DEBUG] GLTFLoader: bv.length is zero")
                 return nil
             }
+            guard start >= 0, start + length <= data.count else {
+                print("[DEBUG] GLTFLoader: bv range out of bounds — start="
+                    + String(start) + " end=" + String(start + length)
+                    + " dataCount=" + String(data.count))
+                return nil
+            }
+
             let imageData = data.subdata(in: start..<(start + length))
+
+            // Log first 4 bytes to verify image magic (JPEG: FF D8 FF; PNG: 89 50 4E 47)
+            let header = imageData.prefix(4).map { String(format: "%02X", $0) }.joined(separator: " ")
+            print("[DEBUG] GLTFLoader: imageData bytes=" + String(imageData.count)
+                + " header=" + header)
+
             return decodeTexture(from: imageData, sRGB: sRGB)
         }
 
         // External URI image
-        if let uri = image.uri, uri.isFileURL {
+        if let uri = image.uri {
+            print("[DEBUG] GLTFLoader: image uri=" + uri.absoluteString
+                + " isFileURL=" + String(uri.isFileURL))
             if let imageData = try? Data(contentsOf: uri) {
+                print("[DEBUG] GLTFLoader: uri image bytes=" + String(imageData.count))
                 return decodeTexture(from: imageData, sRGB: sRGB)
+            } else {
+                print("[DEBUG] GLTFLoader: failed to read uri image data")
             }
         }
 
-        print("[DEBUG] GLTFLoader: no usable image source")
+        print("[DEBUG] GLTFLoader: no bufferView or uri — image has no usable source")
         return nil
     }
 
     private func decodeTexture(from data: Data, sRGB: Bool) -> MTLTexture? {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-              let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
-            print("[DEBUG] GLTFLoader: CGImageSource decode failed")
-            return nil
-        }
-
         let loader = MTKTextureLoader(device: device)
-        let options: [MTKTextureLoader.Option: Any] = [
-            .generateMipmaps: NSNumber(value: true),
+
+        // Pass 1 — MTKTextureLoader direct, no mipmaps.
+        let opts1: [MTKTextureLoader.Option: Any] = [
+            .generateMipmaps: NSNumber(value: false),
             .SRGB:            NSNumber(value: sRGB)
         ]
+        if let tex = try? loader.newTexture(data: data, options: opts1) {
+            print("[DEBUG] GLTFLoader: decodeTexture pass1 OK")
+            return tex
+        }
 
-        do {
-            return try loader.newTexture(cgImage: cgImage, options: options)
-        } catch {
-            print("[DEBUG] GLTFLoader: MTKTextureLoader failed — " + error.localizedDescription)
+        // Pass 2 — MTKTextureLoader, sRGB off (loader sometimes chokes on sRGB+PNG).
+        let opts2: [MTKTextureLoader.Option: Any] = [
+            .generateMipmaps: NSNumber(value: false),
+            .SRGB:            NSNumber(value: false)
+        ]
+        if let tex = try? loader.newTexture(data: data, options: opts2) {
+            print("[DEBUG] GLTFLoader: decodeTexture pass2 OK (sRGB disabled in loader)")
+            return tex
+        }
+
+        // Pass 3 — CGImageSource → CGContext → raw pixels → MTLTexture.
+        // Handles grayscale, indexed-colour, 16-bit, ICC-embedded PNGs that
+        // MTKTextureLoader refuses, by normalising to plain RGBA8 first.
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let cgImg  = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            print("[DEBUG] GLTFLoader: decodeTexture — CGImageSource failed")
             return nil
         }
+
+        let w = cgImg.width
+        let h = cgImg.height
+        guard w > 0, h > 0 else {
+            print("[DEBUG] GLTFLoader: decodeTexture — zero-size image")
+            return nil
+        }
+
+        // Draw into a plain RGBA8 context regardless of the source's colour space.
+        let cs         = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
+        guard let ctx = CGContext(data: nil,
+                                   width: w, height: h,
+                                   bitsPerComponent: 8,
+                                   bytesPerRow: w * 4,
+                                   space: cs,
+                                   bitmapInfo: bitmapInfo.rawValue),
+              let pixels = ctx.data else {
+            print("[DEBUG] GLTFLoader: decodeTexture — CGContext alloc failed")
+            return nil
+        }
+        ctx.draw(cgImg, in: CGRect(x: 0, y: 0, width: w, height: h))
+
+        let pixelFormat: MTLPixelFormat = sRGB ? .rgba8Unorm_srgb : .rgba8Unorm
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: pixelFormat,
+            width:  w,
+            height: h,
+            mipmapped: false)
+        desc.usage = .shaderRead
+        guard let tex = device.makeTexture(descriptor: desc) else {
+            print("[DEBUG] GLTFLoader: decodeTexture — makeTexture failed")
+            return nil
+        }
+        tex.replace(region:      MTLRegionMake2D(0, 0, w, h),
+                    mipmapLevel: 0,
+                    withBytes:   pixels,
+                    bytesPerRow: w * 4)
+        print("[DEBUG] GLTFLoader: decodeTexture pass3 (CGContext \(w)×\(h)) OK")
+        return tex
     }
 
     // MARK: - Data Extraction Helpers

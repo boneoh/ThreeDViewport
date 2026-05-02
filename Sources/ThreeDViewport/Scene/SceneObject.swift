@@ -6,7 +6,7 @@ import simd
 // Phase 6 adds sourceURL and per-object visibility toggle.
 final class SceneObject {
 
-    let name: String
+    var name: String
 
     // The .glb file this object was loaded from.
     // Stored so multi-model project files can reload each object independently.

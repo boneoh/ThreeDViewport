@@ -68,6 +68,9 @@ final class VideoExporter {
     // Phase 8: color/greyscale mode matching the live display
     var isColorMode: Bool = false
 
+    // Feedback settings — nil means no feedback during export
+    var feedbackSettings: FeedbackSettings?
+
     // Fallback buffers for objects without UVs / tangents
     private var dummyUVBuffer:      MTLBuffer?
     private var dummyTangentBuffer: MTLBuffer?
@@ -136,6 +139,18 @@ final class VideoExporter {
               let depthTex   = makeDepthTexture() else {
             DispatchQueue.main.async { completion(ExportError.textureCreationFailed) }
             return
+        }
+
+        // ── Feedback processor (independent of the live viewport) ─────────────
+        // Created here so export feedback is isolated; always resets from scratch.
+        var exportFeedback: FeedbackProcessor? = nil
+        if let fs = feedbackSettings, fs.isEnabled {
+            let fp = FeedbackProcessor(device: device)
+            fp.resize(width: width, height: height, length: fs.length)
+            fp.reset()
+            exportFeedback = fp
+            print("[DEBUG] VideoExporter: feedback enabled — interval=\(fs.interval)"
+                + " decay=\(String(format:"%.2f",fs.decay)) length=\(fs.length)")
         }
 
         // ── Set up AVAssetWriter ──────────────────────────────────────────────
@@ -231,8 +246,12 @@ final class VideoExporter {
                 // Evaluate animation at this exact time — does NOT touch Timeline.currentTime
                 self.applyAnimation(at: t)
 
-                // Render to offscreen texture and blit to CPU-visible staging texture
-                self.renderFrame(colorTex: colorTex, stagingTex: stagingTex, depthTex: depthTex)
+                // Render to offscreen texture (via feedback if enabled) and blit to staging
+                self.renderFrame(colorTex:        colorTex,
+                                 stagingTex:       stagingTex,
+                                 depthTex:         depthTex,
+                                 feedbackProc:     exportFeedback,
+                                 feedbackSettings: self.feedbackSettings)
 
                 // Copy staging texture → CVPixelBuffer (luma-alpha applied for 4444)
                 guard let pb = self.pixelBufferFrom(stagingTex,
@@ -319,20 +338,31 @@ final class VideoExporter {
 
     // MARK: - Offscreen render
 
-    private func renderFrame(colorTex: MTLTexture, stagingTex: MTLTexture, depthTex: MTLTexture) {
+    private func renderFrame(colorTex:        MTLTexture,
+                             stagingTex:       MTLTexture,
+                             depthTex:         MTLTexture,
+                             feedbackProc:     FeedbackProcessor? = nil,
+                             feedbackSettings: FeedbackSettings?  = nil) {
         guard let commandBuffer = commandQueue.makeCommandBuffer() else {
             print("[DEBUG] VideoExporter: renderFrame — makeCommandBuffer nil")
             return
         }
 
+        // When feedback is active, render the scene into the processor's intermediate
+        // texture; it composites the result into colorTex after the scene pass.
+        let feedbackActive = (feedbackSettings?.isEnabled == true)
+                           && (feedbackProc?.sceneTexture != nil)
+        let renderTarget = feedbackActive ? (feedbackProc!.sceneTexture ?? colorTex) : colorTex
+        let renderDepth  = feedbackActive ? (feedbackProc!.depthTexture ?? depthTex)  : depthTex
+
         // ── Draw pass ─────────────────────────────────────────────────────────
         let passDesc = MTLRenderPassDescriptor()
-        passDesc.colorAttachments[0].texture     = colorTex
+        passDesc.colorAttachments[0].texture     = renderTarget
         passDesc.colorAttachments[0].loadAction  = .clear
         passDesc.colorAttachments[0].storeAction = .store
         passDesc.colorAttachments[0].clearColor  = MTLClearColor(
             red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0)   // pure black for keying/compositing
-        passDesc.depthAttachment.texture          = depthTex
+        passDesc.depthAttachment.texture          = renderDepth
         passDesc.depthAttachment.loadAction       = .clear
         passDesc.depthAttachment.storeAction      = .dontCare
         passDesc.depthAttachment.clearDepth       = 1.0
@@ -401,6 +431,11 @@ final class VideoExporter {
                     indexType: .uint32, indexBuffer: idxBuffer, indexBufferOffset: 0)
             }
             encoder.endEncoding()
+        }
+
+        // ── Feedback composite → colorTex ─────────────────────────────────────
+        if feedbackActive, let fp = feedbackProc, let fs = feedbackSettings {
+            fp.process(commandBuffer: commandBuffer, dest: colorTex, settings: fs)
         }
 
         // ── Blit color → staging; synchronize if needed for CPU readback ──────

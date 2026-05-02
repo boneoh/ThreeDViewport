@@ -33,10 +33,13 @@ struct LightsInspectorPanel: View {
 
     @ObservedObject var lightManager:     LightManager
     @ObservedObject var backgroundConfig: BackgroundConfig
+    @ObservedObject var renderSettings:   RenderSettings
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
+                renderingSection
+                Divider().padding(.vertical, 8)
                 backgroundSection
                 Divider().padding(.vertical, 8)
                 lightsSection
@@ -45,6 +48,25 @@ struct LightsInspectorPanel: View {
         }
         .frame(width: 280)
         .background(Color(NSColor.windowBackgroundColor))
+    }
+
+    // MARK: - Rendering section
+
+    private var renderingSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Rendering")
+                .font(.headline)
+                .padding(.bottom, 2)
+
+            Toggle(isOn: $renderSettings.isColorMode) {
+                HStack(spacing: 6) {
+                    Image(systemName: renderSettings.isColorMode
+                          ? "paintpalette.fill" : "circle.lefthalf.filled")
+                    Text(renderSettings.isColorMode ? "Color (PBR)" : "Greyscale")
+                }
+            }
+            .toggleStyle(.switch)
+        }
     }
 
     // MARK: - Background section

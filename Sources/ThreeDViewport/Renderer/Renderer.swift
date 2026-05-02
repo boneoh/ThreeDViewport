@@ -38,7 +38,15 @@ final class Renderer: NSObject, MTKViewDelegate {
     var isWireframe: Bool = false
     var isColorMode: Bool = false   // false = greyscale (default)
 
+    // MARK: - Feedback (optional — set by ViewportView after init)
+
+    var feedbackProcessor: FeedbackProcessor?
+    var feedbackSettings:  FeedbackSettings?
+
     private var lastAnimatedTime: Double = -1.0
+
+    // One-shot material diagnostics — prints once per object on the first draw
+    private var materialDebugPrinted: Set<String> = []
 
     // MARK: - Init
 
@@ -141,6 +149,11 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
         camera.aspectRatio = Float(size.width / size.height)
+        // Cap feedback textures at 1920×1080 to avoid excess GPU memory on Retina displays.
+        let fw = min(Int(size.width),  1920)
+        let fh = min(Int(size.height), 1080)
+        feedbackProcessor?.resize(width: fw, height: fh,
+                                  length: feedbackSettings?.length ?? 10)
     }
 
     func draw(in view: MTKView) {
@@ -152,10 +165,35 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         view.clearColor = backgroundConfig.clearColor
 
-        guard let pipeline       = pipelineState else { return }
-        guard let drawable       = view.currentDrawable,
-              let passDescriptor = view.currentRenderPassDescriptor,
-              let commandBuffer  = commandQueue.makeCommandBuffer() else { return }
+        guard let pipeline      = pipelineState else { return }
+        guard let drawable      = view.currentDrawable,
+              let commandBuffer = commandQueue.makeCommandBuffer() else { return }
+
+        // When feedback is active render the scene to an intermediate texture;
+        // FeedbackProcessor composites and blits to the drawable.
+        let feedbackActive = (feedbackSettings?.isEnabled == true)
+                           && (feedbackProcessor?.sceneTexture != nil)
+
+        let passDescriptor: MTLRenderPassDescriptor
+        if feedbackActive, let fp = feedbackProcessor,
+           let sceneTex = fp.sceneTexture, let depthTex = fp.depthTexture {
+            let desc = MTLRenderPassDescriptor()
+            desc.colorAttachments[0].texture     = sceneTex
+            desc.colorAttachments[0].loadAction  = .clear
+            desc.colorAttachments[0].storeAction = .store
+            desc.colorAttachments[0].clearColor  = backgroundConfig.clearColor
+            desc.depthAttachment.texture         = depthTex
+            desc.depthAttachment.loadAction      = .clear
+            desc.depthAttachment.storeAction     = .dontCare
+            desc.depthAttachment.clearDepth      = 1.0
+            passDescriptor = desc
+        } else {
+            guard let pd = view.currentRenderPassDescriptor else {
+                commandBuffer.commit(); return
+            }
+            passDescriptor = pd
+        }
+
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: passDescriptor) else {
             commandBuffer.commit(); return
         }
@@ -241,6 +279,14 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
 
         encoder.endEncoding()
+
+        // Feedback composite + blit to drawable (or straight blit when just enabled)
+        if feedbackActive, let fp = feedbackProcessor, let fs = feedbackSettings {
+            fp.process(commandBuffer: commandBuffer,
+                       dest:          drawable.texture,
+                       settings:      fs)
+        }
+
         commandBuffer.present(drawable)
         commandBuffer.commit()
     }
@@ -261,6 +307,20 @@ final class Renderer: NSObject, MTKViewDelegate {
         mu.hasMetallicRoughTex = mat.metallicRoughnessTexture != nil ? 1 : 0
         mu.hasEmissiveTex      = mat.emissiveTexture      != nil ? 1 : 0
         mu.colorMode           = isColorMode ? 1 : 0
+
+        if !materialDebugPrinted.contains(object.name) {
+            materialDebugPrinted.insert(object.name)
+            print("[DEBUG] Renderer materialUniforms '\(object.name)'"
+                + " hasBaseColorTex=\(mu.hasBaseColorTex)"
+                + " hasNormalTex=\(mu.hasNormalTex)"
+                + " hasMetallicRoughTex=\(mu.hasMetallicRoughTex)"
+                + " hasEmissiveTex=\(mu.hasEmissiveTex)"
+                + " colorMode=\(mu.colorMode)"
+                + " metallic=\(String(format: "%.3f", mu.metallicFactor))"
+                + " roughness=\(String(format: "%.3f", mu.roughnessFactor))"
+                + " texNonNil=\(mat.baseColorTexture != nil)")
+        }
+
         return mu
     }
 

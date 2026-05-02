@@ -6,11 +6,11 @@ import Combine
 // so the renderer picks up the change on the next draw call.
 final class RenderSettings: ObservableObject {
 
-    // false = greyscale (default — matches the video-synth workflow)
-    // true  = full PBR color
-    @Published var isColorMode: Bool = false
+    // true  = full PBR color (default — most users expect colour)
+    // false = greyscale (toggle with T or View > Color Rendering)
+    @Published var isColorMode: Bool = true
 
     init() {
-        print("[DEBUG] RenderSettings: initialized — greyscale mode")
+        print("[DEBUG] RenderSettings: initialized — color mode")
     }
 }

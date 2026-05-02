@@ -11,6 +11,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // Phase 7: Floating lights & background inspector panel.
     private var lightsPanel: NSPanel?
 
+    // Feedback delay-line panel.
+    private var feedbackPanel: NSPanel?
+
     // Tracks the last saved/opened project URL for ⌘S "save in place".
     private var currentProjectURL: URL?
 
@@ -198,6 +201,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         lightsItem.target = self
         viewMenu.addItem(lightsItem)
 
+        let feedbackItem = NSMenuItem(
+            title: "Feedback...",
+            action: #selector(showFeedbackPanel(_:)),
+            keyEquivalent: "f"
+        )
+        feedbackItem.target = self
+        viewMenu.addItem(feedbackItem)
+
+        viewMenu.addItem(.separator())
+
+        let colorModeItem = NSMenuItem(
+            title: "Color Rendering",
+            action: #selector(toggleColorMode(_:)),
+            keyEquivalent: "t"
+        )
+        colorModeItem.target = self
+        viewMenu.addItem(colorModeItem)
+
         NSApplication.shared.mainMenu = mainMenu
         print("[DEBUG] AppDelegate: menu setup complete")
     }
@@ -351,6 +372,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         print("[DEBUG] AppDelegate: alert — " + message + " — " + detail)
     }
 
+    // MARK: - Color Mode Toggle (Phase 8)
+
+    @objc private func toggleColorMode(_ sender: Any) {
+        viewportView?.renderSettings.isColorMode.toggle()
+        print("[DEBUG] AppDelegate: colorMode toggled to "
+            + String(viewportView?.renderSettings.isColorMode ?? false))
+    }
+
+    // Keep menu item title and checkmark in sync with current state.
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(toggleColorMode(_:)) {
+            let isColor = viewportView?.renderSettings.isColorMode ?? false
+            menuItem.title = isColor ? "Color Rendering  ✓" : "Color Rendering"
+        }
+        return true
+    }
+
     // MARK: - Lights & Background Inspector (Phase 7)
 
     @objc private func showLightsInspector(_ sender: Any) {
@@ -379,7 +417,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let inspectorView = LightsInspectorPanel(
             lightManager:     viewport.lightManager,
-            backgroundConfig: viewport.backgroundConfig
+            backgroundConfig: viewport.backgroundConfig,
+            renderSettings:   viewport.renderSettings
         )
 
         let hostingView = NSHostingView(rootView: inspectorView)
@@ -399,6 +438,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         lightsPanel = panel
         panel.makeKeyAndOrderFront(nil)
         print("[DEBUG] AppDelegate: lights inspector panel opened")
+    }
+
+    // MARK: - Feedback Panel
+
+    @objc private func showFeedbackPanel(_ sender: Any) {
+        if let panel = feedbackPanel {
+            panel.isVisible ? panel.orderOut(nil) : panel.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        guard let viewport = viewportView else { return }
+
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 296, height: 280),
+            styleMask:   [.titled, .closable, .resizable, .utilityWindow, .nonactivatingPanel],
+            backing:     .buffered,
+            defer:       false
+        )
+        panel.title              = "Feedback"
+        panel.isFloatingPanel    = true
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.hidesOnDeactivate  = false
+
+        let feedbackView = FeedbackPanelWrapper(
+            settings:  viewport.feedbackSettings,
+            processor: viewport.feedbackProcessor
+        )
+        panel.contentView = NSHostingView(rootView: feedbackView)
+
+        if let win = window {
+            let winFrame  = win.frame
+            let panelSize = panel.frame.size
+            let originX   = winFrame.maxX - panelSize.width - 20
+            let originY   = winFrame.maxY - panelSize.height - 40 - 740  // below lights panel
+            panel.setFrameOrigin(NSPoint(x: originX, y: max(originY, 40)))
+        } else {
+            panel.center()
+        }
+
+        feedbackPanel = panel
+        panel.makeKeyAndOrderFront(nil)
+        print("[DEBUG] AppDelegate: feedback panel opened")
     }
 
     // MARK: - Export Video
