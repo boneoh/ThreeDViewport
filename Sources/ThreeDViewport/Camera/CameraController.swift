@@ -15,6 +15,11 @@ final class CameraController {
     // Updated by the renderer when the drawable size changes
     var aspectRatio: Float = 16.0 / 9.0
 
+    // Phase 5: optional camera animation track.
+    // When set, the renderer evaluates it each frame and writes directly to
+    // yaw / pitch / distance / target.  Manual orbit is preserved when paused.
+    var keyframeTrack: CameraKeyframeTrack?
+
     let fovYRadians: Float = Float.pi / 3.0   // 60°
     let nearPlane: Float   = 0.01
     let farPlane: Float    = 2000.0

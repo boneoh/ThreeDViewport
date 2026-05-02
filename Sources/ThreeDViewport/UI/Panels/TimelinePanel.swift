@@ -1,15 +1,16 @@
 import SwiftUI
 import AppKit
 
-// Phase 2/3: Timeline transport bar rendered as a SwiftUI view embedded via NSHostingView.
+// Phase 2/3/5: Timeline transport bar rendered as a SwiftUI view embedded via NSHostingView.
 // Binds to Timeline and ExportState ObservableObjects.
 struct TimelinePanel: View {
 
     @ObservedObject var timeline:     Timeline
     @ObservedObject var exportState:  ExportState
 
-    var onAddKeyframe: () -> Void
-    var onExport:      () -> Void
+    var onAddKeyframe:       () -> Void
+    var onAddCameraKeyframe: () -> Void
+    var onExport:            () -> Void
 
     var body: some View {
         ZStack {
@@ -59,14 +60,24 @@ struct TimelinePanel: View {
                     .frame(height: 20)
                     .background(Color(NSColor.separatorColor))
 
-                // ── Add Keyframe ──────────────────────────────────────────────
+                // ── Add Object Keyframe ───────────────────────────────────────
                 Button(action: onAddKeyframe) {
                     Label("Add Key", systemImage: "diamond.fill")
                         .font(.system(size: 11, weight: .medium))
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-                .help("Add a keyframe at the current playhead position")
+                .help("Add an object keyframe at the current playhead position")
+                .disabled(exportState.isExporting)
+
+                // ── Add Camera Keyframe (Phase 5) ─────────────────────────────
+                Button(action: onAddCameraKeyframe) {
+                    Label("Add Cam Key", systemImage: "camera.fill")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Add a camera keyframe at the current playhead position")
                 .disabled(exportState.isExporting)
 
                 Divider()

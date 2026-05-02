@@ -10,6 +10,9 @@ final class ViewportView: MTKView {
     let timeline: Timeline
     var renderer: Renderer?
 
+    // Last successfully loaded model URL — persisted in project files.
+    var currentModelURL: URL?
+
     // Input state
     private var lastMouseLocation: NSPoint = .zero
     private var isSpaceDown: Bool = false
@@ -68,6 +71,7 @@ final class ViewportView: MTKView {
             return
         }
 
+        currentModelURL = url
         print("[DEBUG] ViewportView: loadModel start — " + url.lastPathComponent)
 
         let loader = GLTFLoader(device: dev)
@@ -233,6 +237,36 @@ final class ViewportView: MTKView {
             + "," + String(format: "%.4f", scale.y)
             + "," + String(format: "%.4f", scale.z) + ")"
             + " for '" + obj.name + "'")
+    }
+
+    // MARK: - Phase 5: Add Camera Keyframe
+
+    // Captures the current camera state (yaw, pitch, distance, target) at the
+    // current timeline time.  Camera keyframes are ABSOLUTE — no base-transform
+    // composition needed.  Creates a new CameraKeyframeTrack if one doesn't exist.
+    func addCameraKeyframeAtCurrentTime() {
+        if camera.keyframeTrack == nil {
+            camera.keyframeTrack = CameraKeyframeTrack()
+            print("[DEBUG] ViewportView: created new CameraKeyframeTrack")
+        }
+
+        let kf = CameraKeyframe(
+            time:     timeline.currentTime,
+            yaw:      camera.yaw,
+            pitch:    camera.pitch,
+            distance: camera.distance,
+            target:   camera.target
+        )
+        camera.keyframeTrack?.addKeyframe(kf)
+
+        print("[DEBUG] ViewportView: camera keyframe added at t="
+            + String(format: "%.3f", timeline.currentTime)
+            + " yaw=" + String(format: "%.4f", camera.yaw)
+            + " pitch=" + String(format: "%.4f", camera.pitch)
+            + " distance=" + String(format: "%.4f", camera.distance)
+            + " target=(" + String(format: "%.4f", camera.target.x)
+            + "," + String(format: "%.4f", camera.target.y)
+            + "," + String(format: "%.4f", camera.target.z) + ")")
     }
 
     // MARK: - Phase 3: Video Export

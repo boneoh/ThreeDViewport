@@ -201,6 +201,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     // MARK: - Animation evaluation
 
     private func applyAnimation() {
+        // ── Object keyframes ──────────────────────────────────────────────────
         for object in sceneManager.objects {
             guard let track = object.keyframeTrack else { continue }
 
@@ -213,6 +214,20 @@ final class Renderer: NSObject, MTKViewDelegate {
                 // animDelta is a local T*R*S animation matrix (typically a rotation delta).
                 // Composing with baseTransform applies position/scale first, then animation.
                 object.transform = object.baseTransform * animDelta
+            }
+        }
+
+        // ── Camera keyframes (Phase 5) ────────────────────────────────────────
+        // Camera keyframes are ABSOLUTE — evaluated state is written directly to
+        // the camera properties rather than composed with a base transform.
+        if let camTrack = camera.keyframeTrack {
+            if camTrack.keyframes.isEmpty {
+                print("[DEBUG] Renderer: cameraKeyframeTrack has no keyframes")
+            } else if let state = camTrack.evaluate(at: timeline.currentTime) {
+                camera.yaw      = state.yaw
+                camera.pitch    = state.pitch
+                camera.distance = state.distance
+                camera.target   = state.target
             }
         }
     }

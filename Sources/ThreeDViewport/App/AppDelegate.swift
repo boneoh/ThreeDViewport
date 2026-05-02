@@ -8,6 +8,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var viewportView: ViewportView?
     let exportState = ExportState()
 
+    // Tracks the last saved/opened project URL for ⌘S "save in place".
+    private var currentProjectURL: URL?
+
     private let timelinePanelHeight: CGFloat = 80
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -55,6 +58,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onAddKeyframe: { [weak viewport] in
                 viewport?.addKeyframeAtCurrentTime()
             },
+            onAddCameraKeyframe: { [weak viewport] in
+                viewport?.addCameraKeyframeAtCurrentTime()
+            },
             onExport: { [weak self] in
                 self?.showExportPanel()
             }
@@ -101,13 +107,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let fileMenu = NSMenu(title: "File")
         fileItem.submenu = fileMenu
 
-        let openItem = NSMenuItem(
+        let openModelItem = NSMenuItem(
             title: "Open Model...",
             action: #selector(openModel(_:)),
             keyEquivalent: "o"
         )
-        openItem.target = self
-        fileMenu.addItem(openItem)
+        openModelItem.target = self
+        fileMenu.addItem(openModelItem)
+
+        fileMenu.addItem(.separator())
+
+        let openProjectItem = NSMenuItem(
+            title: "Open Project...",
+            action: #selector(openProject(_:)),
+            keyEquivalent: ""
+        )
+        openProjectItem.target = self
+        fileMenu.addItem(openProjectItem)
+
+        let saveProjectItem = NSMenuItem(
+            title: "Save Project",
+            action: #selector(saveProject(_:)),
+            keyEquivalent: "s"
+        )
+        saveProjectItem.target = self
+        fileMenu.addItem(saveProjectItem)
+
+        let saveProjectAsItem = NSMenuItem(
+            title: "Save Project As...",
+            action: #selector(saveProjectAs(_:)),
+            keyEquivalent: "S"     // ⌘⇧S
+        )
+        saveProjectAsItem.target = self
+        fileMenu.addItem(saveProjectAsItem)
 
         fileMenu.addItem(.separator())
 
@@ -151,6 +183,102 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             print("[DEBUG] AppDelegate: user selected " + url.lastPathComponent)
             self?.viewportView?.loadModel(url: url)
         }
+    }
+
+    // MARK: - Open Project
+
+    @objc private func openProject(_ sender: Any) {
+        guard let window = window else { return }
+
+        let panel = NSOpenPanel()
+        panel.title                  = "Open Project"
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories   = false
+        panel.canChooseFiles         = true
+
+        // .3dvp is a custom extension; UTType may not be registered system-wide,
+        // but UTType(filenameExtension:) still creates a dynamic type we can pass.
+        if let projType = UTType(filenameExtension: "3dvp") {
+            panel.allowedContentTypes = [projType]
+        }
+
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            self?.loadProject(from: url)
+        }
+    }
+
+    private func loadProject(from url: URL) {
+        guard let viewport = viewportView else { return }
+        do {
+            try ProjectFile.load(from: url, into: viewport)
+            currentProjectURL = url
+            window?.title = "ThreeDViewport — " + url.deletingPathExtension().lastPathComponent
+            print("[DEBUG] AppDelegate: project loaded from " + url.lastPathComponent)
+        } catch {
+            showErrorAlert(message: "Could not open project", detail: error.localizedDescription)
+        }
+    }
+
+    // MARK: - Save Project
+
+    @objc private func saveProject(_ sender: Any) {
+        if let url = currentProjectURL {
+            // Save in place
+            guard let viewport = viewportView else { return }
+            do {
+                try ProjectFile.save(to: url, viewport: viewport)
+                print("[DEBUG] AppDelegate: project saved to " + url.lastPathComponent)
+            } catch {
+                showErrorAlert(message: "Could not save project", detail: error.localizedDescription)
+            }
+        } else {
+            // No current URL — show the save-as panel
+            saveProjectAs(sender)
+        }
+    }
+
+    @objc private func saveProjectAs(_ sender: Any) {
+        guard let window = window else { return }
+        guard let viewport = viewportView else { return }
+
+        let panel = NSSavePanel()
+        panel.title                = "Save Project"
+        panel.nameFieldStringValue = "project.3dvp"
+        panel.canCreateDirectories = true
+
+        // Suggest the model filename as the project name if one is loaded
+        if let modelURL = viewport.currentModelURL {
+            let stem = modelURL.deletingPathExtension().lastPathComponent
+            panel.nameFieldStringValue = stem + ".3dvp"
+        }
+
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            guard let self = self else { return }
+            do {
+                try ProjectFile.save(to: url, viewport: viewport)
+                self.currentProjectURL = url
+                self.window?.title = "ThreeDViewport — "
+                    + url.deletingPathExtension().lastPathComponent
+                print("[DEBUG] AppDelegate: project saved as " + url.lastPathComponent)
+            } catch {
+                self.showErrorAlert(message: "Could not save project",
+                                    detail: error.localizedDescription)
+            }
+        }
+    }
+
+    // MARK: - Error helper
+
+    private func showErrorAlert(message: String, detail: String) {
+        guard let window = window else { return }
+        let alert = NSAlert()
+        alert.messageText     = message
+        alert.informativeText = detail
+        alert.alertStyle      = .warning
+        alert.beginSheetModal(for: window)
+        print("[DEBUG] AppDelegate: alert — " + message + " — " + detail)
     }
 
     // MARK: - Export Video
