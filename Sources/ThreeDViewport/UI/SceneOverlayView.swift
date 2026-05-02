@@ -75,15 +75,15 @@ struct SceneOverlayView: View {
             Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                 .foregroundColor(isSelected
                     ? Color(NSColor.systemGreen)
-                    : Color(NSColor.tertiaryLabelColor))
+                    : Color.white.opacity(0.35))
                 .font(.system(size: 9))
 
             // Visibility toggle
             Button(action: { state.onToggleVisibility?(i) }) {
                 Image(systemName: isVisible ? "eye.fill" : "eye.slash.fill")
                     .foregroundColor(isVisible
-                        ? Color(NSColor.secondaryLabelColor)
-                        : Color(NSColor.tertiaryLabelColor))
+                        ? Color.white.opacity(0.75)
+                        : Color.white.opacity(0.30))
                     .font(.system(size: 9))
             }
             .buttonStyle(.plain)
@@ -93,8 +93,8 @@ struct SceneOverlayView: View {
             Text(i < state.objectNames.count ? state.objectNames[i] : "")
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundColor(isSelected
-                    ? Color(NSColor.labelColor)
-                    : Color(NSColor.secondaryLabelColor))
+                    ? Color.white
+                    : Color.white.opacity(0.75))
                 .lineLimit(1)
                 .truncationMode(.middle)
         }

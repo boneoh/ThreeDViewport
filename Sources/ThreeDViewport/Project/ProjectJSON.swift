@@ -1,9 +1,11 @@
 import Foundation
 
-// Phase 4/5: Codable structs that define the .3dvp project file format (JSON).
+// Phase 4/5/6: Codable structs that define the .3dvp project file format (JSON).
 // Version history:
 //   1 — initial: model path, camera, timeline, per-object keyframe tracks.
-//   2 — Phase 5: added cameraKeyframes array to ProjectData.
+//   2 — Phase 5: added cameraKeyframes array.
+//   3 — Phase 6: replaced single modelPath with modelPaths array for multi-object scenes.
+//               modelPath kept as optional for v1/v2 backward compatibility.
 //
 // Design rules:
 //   • No binary data inline — .glb files are referenced by absolute path.
@@ -14,12 +16,13 @@ import Foundation
 //   • Forward compatibility: unknown keys are silently ignored by JSONDecoder.
 
 struct ProjectData: Codable {
-    var version:        Int     = 2
-    var modelPath:      String?          // Absolute path to the source .glb file; nil = no model.
-    var timeline:       TimelineData
-    var camera:         CameraData
-    var objects:        [ObjectData]
-    var cameraKeyframes: [CameraKeyframeData] = []   // Phase 5; empty = no camera animation.
+    var version:         Int     = 3
+    var modelPath:       String? = nil  // v1/v2 compat — single model path; ignored when modelPaths non-empty.
+    var modelPaths:      [String] = []  // v3 — ordered list of absolute .glb paths.
+    var timeline:        TimelineData
+    var camera:          CameraData
+    var objects:         [ObjectData]
+    var cameraKeyframes: [CameraKeyframeData] = []  // Phase 5; empty = no camera animation.
 }
 
 struct TimelineData: Codable {

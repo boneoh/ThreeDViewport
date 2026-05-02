@@ -325,6 +325,12 @@ final class VideoExporter {
             encoder.setDepthStencilState(depthStencilState)
             encoder.setTriangleFillMode(.fill)
 
+            // Bind LightUniforms once for all objects (fragment buffer index 3)
+            var lightUniforms = lightManager.buildLightUniforms()
+            encoder.setFragmentBytes(&lightUniforms,
+                                     length: MemoryLayout<LightUniforms>.stride,
+                                     index: 3)
+
             let vp = camera.viewProjectionMatrix
 
             for object in sceneManager.objects {
@@ -336,17 +342,14 @@ final class VideoExporter {
                 var uniforms = Uniforms(
                     modelMatrix:          object.transform,
                     viewProjectionMatrix: vp,
-                    normalMatrix:         object.transform,
-                    lightDirection:       lightManager.primaryLight.directionVec4,
-                    lightColor:           lightManager.primaryLight.colorVec4,
-                    ambientColor:         lightManager.ambientColorVec4
+                    normalMatrix:         object.transform
                 )
 
                 encoder.setVertexBuffer(posBuffer, offset: 0, index: 0)
                 if let normBuffer = object.normalBuffer {
                     encoder.setVertexBuffer(normBuffer, offset: 0, index: 1)
                 }
-                encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 2)
+                encoder.setVertexBytes(&uniforms,   length: MemoryLayout<Uniforms>.stride, index: 2)
                 encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 2)
 
                 encoder.drawIndexedPrimitives(

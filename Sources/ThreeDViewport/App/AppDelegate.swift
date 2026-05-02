@@ -8,17 +8,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var viewportView: ViewportView?
     let exportState = ExportState()
 
+    // Phase 7: Floating lights & background inspector panel.
+    private var lightsPanel: NSPanel?
+
     // Tracks the last saved/opened project URL for ⌘S "save in place".
     private var currentProjectURL: URL?
 
     private let timelinePanelHeight: CGFloat = 80
 
+    // Height reserved for the scene HUD overlay in the top-left of the viewport.
+    // Tall enough for ~8 objects in the list before it clips.
+    private let overlayHeight: CGFloat = 270
+    private let overlayWidth:  CGFloat = 230
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         print("[DEBUG] AppDelegate: applicationDidFinishLaunching")
 
-        let windowWidth:   CGFloat = 1920
-        let viewportHeight: CGFloat = 1080                          // recordable Metal area
-        let windowHeight:  CGFloat = viewportHeight + timelinePanelHeight
+        let windowWidth:    CGFloat = 1920
+        let viewportHeight: CGFloat = 1080
+        let windowHeight:   CGFloat = viewportHeight + timelinePanelHeight
 
         let rect = NSRect(x: 0, y: 0, width: windowWidth, height: windowHeight)
 
@@ -70,9 +78,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hostingView.frame = panelFrame
         hostingView.autoresizingMask = [.width, .maxYMargin]
 
+        // ── Scene HUD overlay (top-left of viewport, Phase 6) ─────────────────
+        // Positioned in container coordinates.  The overlay covers only a small
+        // corner so the rest of the Metal area remains fully interactive.
+        // autoresizingMask keeps it anchored to the top-left as the window resizes.
+        let overlayY = timelinePanelHeight + viewportHeight - overlayHeight
+        let overlayFrame = NSRect(x: 0, y: overlayY, width: overlayWidth, height: overlayHeight)
+
+        let overlayView = NSHostingView(
+            rootView: SceneOverlayView(state: viewport.overlayState)
+        )
+        overlayView.frame = overlayFrame
+        overlayView.autoresizingMask = [.maxXMargin, .minYMargin]
+        overlayView.layer?.isOpaque = false
+
         // ── Assemble ──────────────────────────────────────────────────────────
         container.addSubview(viewport)
         container.addSubview(hostingView)
+        container.addSubview(overlayView)   // on top of Metal view
         w.contentView = container
         w.makeKeyAndOrderFront(nil)
 
@@ -107,6 +130,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let fileMenu = NSMenu(title: "File")
         fileItem.submenu = fileMenu
 
+        // Open Model — replaces entire scene (⌘O)
         let openModelItem = NSMenuItem(
             title: "Open Model...",
             action: #selector(openModel(_:)),
@@ -114,6 +138,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         openModelItem.target = self
         fileMenu.addItem(openModelItem)
+
+        // Add Model to Scene — appends without clearing (⌘⇧O)  Phase 6
+        let addModelItem = NSMenuItem(
+            title: "Add Model to Scene...",
+            action: #selector(addModelToScene(_:)),
+            keyEquivalent: "O"   // uppercase letter → ⌘⇧O
+        )
+        addModelItem.target = self
+        fileMenu.addItem(addModelItem)
 
         fileMenu.addItem(.separator())
 
@@ -136,7 +169,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let saveProjectAsItem = NSMenuItem(
             title: "Save Project As...",
             action: #selector(saveProjectAs(_:)),
-            keyEquivalent: "S"     // ⌘⇧S
+            keyEquivalent: "S"   // ⌘⇧S
         )
         saveProjectAsItem.target = self
         fileMenu.addItem(saveProjectAsItem)
@@ -151,11 +184,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         exportItem.target = self
         fileMenu.addItem(exportItem)
 
+        // ── View menu ─────────────────────────────────────────────────────────
+        let viewItem = NSMenuItem()
+        mainMenu.addItem(viewItem)
+        let viewMenu = NSMenu(title: "View")
+        viewItem.submenu = viewMenu
+
+        let lightsItem = NSMenuItem(
+            title: "Lights & Background...",
+            action: #selector(showLightsInspector(_:)),
+            keyEquivalent: "l"
+        )
+        lightsItem.target = self
+        viewMenu.addItem(lightsItem)
+
         NSApplication.shared.mainMenu = mainMenu
         print("[DEBUG] AppDelegate: menu setup complete")
     }
 
-    // MARK: - Open Model
+    // MARK: - Open Model (replaces scene)
 
     @objc private func openModel(_ sender: Any) {
         guard let window = window else {
@@ -167,7 +214,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories    = false
         panel.canChooseFiles          = true
-        panel.title = "Select a .glb Model"
+        panel.title = "Open Model (replaces scene)"
 
         if let glbType = UTType(filenameExtension: "glb") {
             panel.allowedContentTypes = [glbType]
@@ -180,8 +227,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 print("[DEBUG] AppDelegate: open panel cancelled or url is nil")
                 return
             }
-            print("[DEBUG] AppDelegate: user selected " + url.lastPathComponent)
+            print("[DEBUG] AppDelegate: openModel — " + url.lastPathComponent)
             self?.viewportView?.loadModel(url: url)
+        }
+    }
+
+    // MARK: - Add Model to Scene (Phase 6)
+
+    @objc private func addModelToScene(_ sender: Any) {
+        guard let window = window else {
+            print("[DEBUG] AppDelegate: addModelToScene — window is nil")
+            return
+        }
+
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories    = false
+        panel.canChooseFiles          = true
+        panel.title = "Add Model to Scene"
+
+        if let glbType = UTType(filenameExtension: "glb") {
+            panel.allowedContentTypes = [glbType]
+        }
+
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK, let url = panel.url else {
+                print("[DEBUG] AppDelegate: add-model panel cancelled")
+                return
+            }
+            print("[DEBUG] AppDelegate: addModelToScene — " + url.lastPathComponent)
+            self?.viewportView?.addModelToScene(url: url)
         }
     }
 
@@ -191,13 +266,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let window = window else { return }
 
         let panel = NSOpenPanel()
-        panel.title                  = "Open Project"
+        panel.title                   = "Open Project"
         panel.allowsMultipleSelection = false
-        panel.canChooseDirectories   = false
-        panel.canChooseFiles         = true
+        panel.canChooseDirectories    = false
+        panel.canChooseFiles          = true
 
-        // .3dvp is a custom extension; UTType may not be registered system-wide,
-        // but UTType(filenameExtension:) still creates a dynamic type we can pass.
         if let projType = UTType(filenameExtension: "3dvp") {
             panel.allowedContentTypes = [projType]
         }
@@ -224,7 +297,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func saveProject(_ sender: Any) {
         if let url = currentProjectURL {
-            // Save in place
             guard let viewport = viewportView else { return }
             do {
                 try ProjectFile.save(to: url, viewport: viewport)
@@ -233,7 +305,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 showErrorAlert(message: "Could not save project", detail: error.localizedDescription)
             }
         } else {
-            // No current URL — show the save-as panel
             saveProjectAs(sender)
         }
     }
@@ -247,10 +318,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.nameFieldStringValue = "project.3dvp"
         panel.canCreateDirectories = true
 
-        // Suggest the model filename as the project name if one is loaded
-        if let modelURL = viewport.currentModelURL {
-            let stem = modelURL.deletingPathExtension().lastPathComponent
-            panel.nameFieldStringValue = stem + ".3dvp"
+        // Suggest the first loaded model's name as a project name default.
+        if let firstURL = viewport.sceneManager.objects.first?.sourceURL {
+            panel.nameFieldStringValue = firstURL.deletingPathExtension().lastPathComponent + ".3dvp"
         }
 
         panel.beginSheetModal(for: window) { [weak self] response in
@@ -281,6 +351,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         print("[DEBUG] AppDelegate: alert — " + message + " — " + detail)
     }
 
+    // MARK: - Lights & Background Inspector (Phase 7)
+
+    @objc private func showLightsInspector(_ sender: Any) {
+        // Toggle: if already visible, close it; otherwise create and show.
+        if let panel = lightsPanel {
+            if panel.isVisible {
+                panel.orderOut(nil)
+            } else {
+                panel.makeKeyAndOrderFront(nil)
+            }
+            return
+        }
+
+        guard let viewport = viewportView else { return }
+
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 296, height: 540),
+            styleMask:   [.titled, .closable, .resizable, .utilityWindow, .nonactivatingPanel],
+            backing:     .buffered,
+            defer:       false
+        )
+        panel.title         = "Lights & Background"
+        panel.isFloatingPanel = true
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.hidesOnDeactivate = false
+
+        let inspectorView = LightsInspectorPanel(
+            lightManager:     viewport.lightManager,
+            backgroundConfig: viewport.backgroundConfig
+        )
+
+        let hostingView = NSHostingView(rootView: inspectorView)
+        panel.contentView = hostingView
+
+        // Position top-right of the main window if possible.
+        if let win = window {
+            let winFrame  = win.frame
+            let panelSize = panel.frame.size
+            let originX   = winFrame.maxX - panelSize.width - 20
+            let originY   = winFrame.maxY - panelSize.height - 40
+            panel.setFrameOrigin(NSPoint(x: originX, y: originY))
+        } else {
+            panel.center()
+        }
+
+        lightsPanel = panel
+        panel.makeKeyAndOrderFront(nil)
+        print("[DEBUG] AppDelegate: lights inspector panel opened")
+    }
+
     // MARK: - Export Video
 
     @objc private func exportVideo(_ sender: Any) {
@@ -305,7 +425,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // ── Codec picker accessory view ───────────────────────────────────────
         let (accessory, codecPopup) = makeCodecAccessoryView()
 
         let panel = NSSavePanel()
@@ -333,14 +452,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // Builds the NSView that appears as the accessory in the NSSavePanel.
-    // Returns the container view and a reference to the popup for reading the selection.
     private func makeCodecAccessoryView() -> (view: NSView, popup: NSPopUpButton) {
         let label = NSTextField(labelWithString: "Format:")
-        label.font        = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
-        label.alignment   = .right
-        label.isEditable  = false
-        label.isBezeled   = false
+        label.font            = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        label.alignment       = .right
+        label.isEditable      = false
+        label.isBezeled       = false
         label.drawsBackground = false
 
         let popup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -355,8 +472,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         stack.spacing      = 8
         stack.edgeInsets   = NSEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
         stack.translatesAutoresizingMaskIntoConstraints = false
-
-        // Give the stack a fixed height so the panel lays it out correctly
         stack.frame = NSRect(x: 0, y: 0, width: 420, height: 44)
 
         print("[DEBUG] AppDelegate: codec accessory view created")

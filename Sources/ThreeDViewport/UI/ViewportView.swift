@@ -24,10 +24,11 @@ enum ControlMode {
 final class ViewportView: MTKView {
 
     // Owned scene objects
-    let sceneManager: SceneManager
-    let camera: CameraController
-    let lightManager: LightManager
-    let timeline: Timeline
+    let sceneManager:     SceneManager
+    let camera:           CameraController
+    let lightManager:     LightManager
+    let backgroundConfig: BackgroundConfig
+    let timeline:         Timeline
     var renderer: Renderer?
 
     // Phase 6: HUD observable state — AppDelegate embeds the SwiftUI overlay using this.
@@ -52,10 +53,11 @@ final class ViewportView: MTKView {
     // MARK: - Init
 
     init(frame: NSRect) {
-        sceneManager = SceneManager()
-        camera       = CameraController()
-        lightManager = LightManager()
-        timeline     = Timeline()
+        sceneManager     = SceneManager()
+        camera           = CameraController()
+        lightManager     = LightManager()
+        backgroundConfig = BackgroundConfig()
+        timeline         = Timeline()
 
         guard let metalDevice = MTLCreateSystemDefaultDevice() else {
             fatalError("[DEBUG] ViewportView: MTLCreateSystemDefaultDevice returned nil — Metal not supported")
@@ -73,11 +75,12 @@ final class ViewportView: MTKView {
         enableSetNeedsDisplay    = false
 
         renderer = Renderer(
-            device:       metalDevice,
-            sceneManager: sceneManager,
-            camera:       camera,
-            lightManager: lightManager,
-            timeline:     timeline
+            device:           metalDevice,
+            sceneManager:     sceneManager,
+            camera:           camera,
+            lightManager:     lightManager,
+            backgroundConfig: backgroundConfig,
+            timeline:         timeline
         )
 
         if renderer == nil {
@@ -452,10 +455,13 @@ final class ViewportView: MTKView {
     }
 
     // Step sizes for arrow-key navigation
-    private let orbitStep: Float   = Float.pi / 36.0   // 5° per key press
-    private let translateStep: Float = 0.05
+    // panStep is passed to camera.pan() which applies its own sensitivity×distance scaling,
+    // so the on-screen movement stays proportional to the current zoom level.
+    private let panStep:       Float = 50.0             // camera pan pixels-equivalent per key
+    private let translateStep: Float = 0.05             // world-units per key (object & object Z)
+    private let lightStep:     Float = Float.pi / 36.0  // 5° per key (light azimuth / elevation)
     private let intensityStep: Float = 0.1
-    private let zoomStep: Float    = 0.1                // fraction of current distance
+    private let zoomStep:      Float = 0.1              // fraction of current distance per key
 
     override func keyDown(with event: NSEvent) {
         let kc = event.keyCode
@@ -478,8 +484,13 @@ final class ViewportView: MTKView {
                 return
 
             case KC.l:
-                controlMode = .light
-                syncOverlayState()
+                if controlMode == .light {
+                    // Already in light mode — cycle to next light.
+                    lightManager.cycleSelection()
+                } else {
+                    controlMode = .light
+                    syncOverlayState()
+                }
                 return
 
             case KC.o:
@@ -505,13 +516,14 @@ final class ViewportView: MTKView {
         case KC.left, KC.kp4:
             switch controlMode {
             case .camera:
-                camera.orbit(deltaX: -orbitStep / 0.005, deltaY: 0)
+                // Pan camera left in view space
+                camera.pan(deltaX: -panStep, deltaY: 0)
             case .light:
-                lightManager.rotatePrimary(deltaAzimuth: -orbitStep, deltaElevation: 0)
+                // Azimuth left for directional/spot/laser; horizontal for point
+                lightManager.rotateSelected(deltaAzimuth: -lightStep, deltaElevation: 0)
             case .object:
                 if let obj = sceneManager.selectedObject {
-                    let q = simd_quatf(angle: -orbitStep, axis: SIMD3<Float>(0, 1, 0))
-                    obj.transform = rotationMatrix4x4(q) * obj.transform
+                    obj.transform.columns.3.x -= translateStep
                 }
             }
 
@@ -519,13 +531,12 @@ final class ViewportView: MTKView {
         case KC.right, KC.kp6:
             switch controlMode {
             case .camera:
-                camera.orbit(deltaX: orbitStep / 0.005, deltaY: 0)
+                camera.pan(deltaX: panStep, deltaY: 0)
             case .light:
-                lightManager.rotatePrimary(deltaAzimuth: orbitStep, deltaElevation: 0)
+                lightManager.rotateSelected(deltaAzimuth: lightStep, deltaElevation: 0)
             case .object:
                 if let obj = sceneManager.selectedObject {
-                    let q = simd_quatf(angle: orbitStep, axis: SIMD3<Float>(0, 1, 0))
-                    obj.transform = rotationMatrix4x4(q) * obj.transform
+                    obj.transform.columns.3.x += translateStep
                 }
             }
 
@@ -533,13 +544,12 @@ final class ViewportView: MTKView {
         case KC.up, KC.kp8:
             switch controlMode {
             case .camera:
-                camera.orbit(deltaX: 0, deltaY: -orbitStep / 0.005)
+                camera.pan(deltaX: 0, deltaY: panStep)
             case .light:
-                lightManager.rotatePrimary(deltaAzimuth: 0, deltaElevation: -orbitStep)
+                lightManager.rotateSelected(deltaAzimuth: 0, deltaElevation: -lightStep)
             case .object:
                 if let obj = sceneManager.selectedObject {
-                    let q = simd_quatf(angle: orbitStep, axis: SIMD3<Float>(1, 0, 0))
-                    obj.transform = rotationMatrix4x4(q) * obj.transform
+                    obj.transform.columns.3.y += translateStep
                 }
             }
 
@@ -547,36 +557,36 @@ final class ViewportView: MTKView {
         case KC.down, KC.kp2:
             switch controlMode {
             case .camera:
-                camera.orbit(deltaX: 0, deltaY: orbitStep / 0.005)
+                camera.pan(deltaX: 0, deltaY: -panStep)
             case .light:
-                lightManager.rotatePrimary(deltaAzimuth: 0, deltaElevation: orbitStep)
+                lightManager.rotateSelected(deltaAzimuth: 0, deltaElevation: lightStep)
             case .object:
                 if let obj = sceneManager.selectedObject {
-                    let q = simd_quatf(angle: -orbitStep, axis: SIMD3<Float>(1, 0, 0))
-                    obj.transform = rotationMatrix4x4(q) * obj.transform
+                    obj.transform.columns.3.y -= translateStep
                 }
             }
 
-        // ── Plus / KP+ — zoom in / translate +Z / intensity up ───────────────
+        // ── Plus / KP+ — zoom in / light depth in / object +Z ────────────────
         case KC.kpPlus, KC.regEqual:
             switch controlMode {
             case .camera:
                 camera.zoom(delta: camera.distance * zoomStep / 0.05)
             case .light:
-                lightManager.adjustIntensity(delta: intensityStep)
+                // Move positional light forward along its direction (+Z into scene)
+                lightManager.moveSelectedDepth(delta: translateStep * 2)
             case .object:
                 if let obj = sceneManager.selectedObject {
                     obj.transform.columns.3.z += translateStep
                 }
             }
 
-        // ── Minus / KP− — zoom out / translate −Z / intensity down ───────────
+        // ── Minus / KP− — zoom out / light depth out / object −Z ─────────────
         case KC.kpMinus, KC.regMinus:
             switch controlMode {
             case .camera:
                 camera.zoom(delta: -(camera.distance * zoomStep / 0.05))
             case .light:
-                lightManager.adjustIntensity(delta: -intensityStep)
+                lightManager.moveSelectedDepth(delta: -translateStep * 2)
             case .object:
                 if let obj = sceneManager.selectedObject {
                     obj.transform.columns.3.z -= translateStep

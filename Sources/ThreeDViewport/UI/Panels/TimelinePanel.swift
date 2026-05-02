@@ -14,7 +14,7 @@ struct TimelinePanel: View {
 
     var body: some View {
         ZStack {
-            Color(NSColor(calibratedWhite: 0.12, alpha: 1.0))
+            Color(NSColor(calibratedWhite: 0.22, alpha: 1.0))
 
             HStack(spacing: 12) {
 

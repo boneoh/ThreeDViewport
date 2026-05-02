@@ -1,7 +1,7 @@
 import Foundation
 import simd
 
-// Phase 4: Static save/load bridge between ProjectData (Codable JSON) and the
+// Phase 4/5/6: Static save/load bridge between ProjectData (Codable JSON) and the
 // live ViewportView state.  All methods throw on failure so callers can surface
 // errors to the user via NSAlert.
 
@@ -40,6 +40,7 @@ final class ProjectFile {
 
         print("[DEBUG] ProjectFile: saved "
             + String(json.count) + " bytes → " + url.lastPathComponent
+            + "  models=" + String(data.modelPaths.count)
             + "  objects=" + String(data.objects.count)
             + "  keyframes=" + String(data.objects.reduce(0) { $0 + $1.keyframes.count })
             + "  camKeyframes=" + String(data.cameraKeyframes.count))
@@ -47,8 +48,9 @@ final class ProjectFile {
 
     // MARK: - Load
 
-    /// Reads a .3dvp file at `url`, restores camera/timeline, reloads the model,
-    /// and replaces its keyframe tracks with the saved data.
+    /// Reads a .3dvp file at `url`, restores timeline, loads all models, restores
+    /// keyframe tracks and camera state.  Camera is applied AFTER model loading so
+    /// it overrides any fitToScene calls made during load.
     static func load(from url: URL, into viewport: ViewportView) throws {
         let json: Data
         do {
@@ -66,6 +68,7 @@ final class ProjectFile {
 
         print("[DEBUG] ProjectFile: loaded version=" + String(data.version)
             + " from " + url.lastPathComponent
+            + "  models=" + String(data.modelPaths.count)
             + "  objects=" + String(data.objects.count))
 
         applyData(data, to: viewport)
@@ -77,6 +80,7 @@ final class ProjectFile {
         let cam = vp.camera
         let tl  = vp.timeline
 
+        // ── Camera static state ───────────────────────────────────────────────
         let cameraData = CameraData(
             yaw:      cam.yaw,
             pitch:    cam.pitch,
@@ -86,10 +90,15 @@ final class ProjectFile {
             targetZ:  cam.target.z
         )
 
+        // ── Timeline ──────────────────────────────────────────────────────────
         let timelineData = TimelineData(
             duration:    tl.duration,
             currentTime: tl.currentTime
         )
+
+        // ── Objects — paths + keyframes ───────────────────────────────────────
+        // Phase 6: each object carries its own sourceURL.
+        let modelPaths: [String] = vp.sceneManager.objects.compactMap { $0.sourceURL?.path }
 
         let objectsData: [ObjectData] = vp.sceneManager.objects.map { obj in
             let kfData: [KeyframeData] = (obj.keyframeTrack?.keyframes ?? []).map { kf in
@@ -118,8 +127,9 @@ final class ProjectFile {
         }
 
         return ProjectData(
-            version:         2,
-            modelPath:       vp.currentModelURL?.path,
+            version:         3,
+            modelPath:       nil,           // v3 uses modelPaths instead
+            modelPaths:      modelPaths,
             timeline:        timelineData,
             camera:          cameraData,
             objects:         objectsData,
@@ -131,23 +141,13 @@ final class ProjectFile {
 
     private static func applyData(_ data: ProjectData, to vp: ViewportView) {
 
-        // ── Camera ────────────────────────────────────────────────────────────
-        let c = data.camera
-        vp.camera.yaw      = c.yaw
-        vp.camera.pitch    = c.pitch
-        vp.camera.distance = c.distance
-        vp.camera.target   = SIMD3<Float>(c.targetX, c.targetY, c.targetZ)
-        print("[DEBUG] ProjectFile: camera restored — yaw=" + String(format: "%.3f", c.yaw)
-            + " pitch=" + String(format: "%.3f", c.pitch)
-            + " dist="  + String(format: "%.3f", c.distance))
-
         // ── Timeline ──────────────────────────────────────────────────────────
         vp.timeline.duration    = data.timeline.duration
         vp.timeline.currentTime = 0.0   // always start from the beginning on load
         vp.timeline.isPlaying   = false
         print("[DEBUG] ProjectFile: timeline duration=" + String(format: "%.2f", data.timeline.duration))
 
-        // ── Camera keyframes (Phase 5) ────────────────────────────────────────
+        // ── Camera keyframes (Phase 5) — restored before model load ───────────
         if data.cameraKeyframes.isEmpty {
             vp.camera.keyframeTrack = nil
             print("[DEBUG] ProjectFile: no camera keyframes in project")
@@ -167,20 +167,53 @@ final class ProjectFile {
                 + " camera keyframes")
         }
 
-        // ── Model + keyframes ─────────────────────────────────────────────────
-        if let pathStr = data.modelPath {
-            let modelURL = URL(fileURLWithPath: pathStr)
+        // ── Models ────────────────────────────────────────────────────────────
+        // v3: modelPaths array.  v1/v2 fallback: single modelPath string.
+        let paths: [String]
+        if !data.modelPaths.isEmpty {
+            paths = data.modelPaths
+        } else if let p = data.modelPath, !p.isEmpty {
+            paths = [p]
+        } else {
+            paths = []
+        }
+
+        // Clear scene, then add each model.  addModelToScene appends without
+        // triggering fitToScene on the second+ object, and sets sourceURL.
+        vp.sceneManager.clear()
+
+        var loadedCount = 0
+        for pathStr in paths {
             if FileManager.default.fileExists(atPath: pathStr) {
-                // loadModel creates a demo animation; we replace it immediately after.
-                vp.loadModel(url: modelURL)
-                applyKeyframes(data.objects, to: vp)
+                vp.addModelToScene(url: URL(fileURLWithPath: pathStr))
+                loadedCount += 1
             } else {
                 print("[DEBUG] ProjectFile: model file not found at " + pathStr)
             }
-        } else {
-            print("[DEBUG] ProjectFile: no model path stored in project")
         }
+
+        if loadedCount == 0 && paths.isEmpty {
+            print("[DEBUG] ProjectFile: no model paths stored in project")
+        }
+
+        // Replace demo animations with saved keyframes.
+        applyKeyframes(data.objects, to: vp)
+
+        // ── Camera static state — applied LAST so it overrides any fitToScene ─
+        let c = data.camera
+        vp.camera.yaw      = c.yaw
+        vp.camera.pitch    = c.pitch
+        vp.camera.distance = c.distance
+        vp.camera.target   = SIMD3<Float>(c.targetX, c.targetY, c.targetZ)
+        print("[DEBUG] ProjectFile: camera restored — yaw=" + String(format: "%.3f", c.yaw)
+            + " pitch=" + String(format: "%.3f", c.pitch)
+            + " dist="  + String(format: "%.3f", c.distance))
+
+        // Sync HUD with restored scene.
+        vp.syncOverlayState()
     }
+
+    // MARK: - Apply keyframes
 
     // Replaces each object's keyframeTrack with the saved keyframes.
     // Matches objects by name; logs a warning for any unmatched names.

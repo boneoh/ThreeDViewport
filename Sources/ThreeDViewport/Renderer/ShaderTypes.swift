@@ -1,22 +1,79 @@
 import simd
 
-// Uniforms must exactly match the Metal struct in Shaders.metal.
-// All vectors are padded to float4 to avoid Metal alignment surprises.
-// Layout (bytes):
+// ── Per-object transform uniforms (buffer index 2) ──────────────────────────
+// Light data is now in LightUniforms (buffer index 3).
+// Layout:
 //   modelMatrix          64
 //   viewProjectionMatrix 64
 //   normalMatrix         64
-//   lightDirection       16   (xyz used, w ignored)
-//   lightColor           16   (xyz used, w ignored)
-//   ambientColor         16   (xyz used, w ignored)
 //   ─────────────────────────
-//   Total               240
+//   Total               192
 
 struct Uniforms {
-    var modelMatrix: matrix_float4x4
+    var modelMatrix:          matrix_float4x4
     var viewProjectionMatrix: matrix_float4x4
-    var normalMatrix: matrix_float4x4
-    var lightDirection: SIMD4<Float>
-    var lightColor: SIMD4<Float>
+    var normalMatrix:         matrix_float4x4
+}
+
+// ── Per-light data ───────────────────────────────────────────────────────────
+// Matches the Metal ShaderLight struct exactly (64 bytes, 16-byte aligned).
+//   position:  xyz = world-space position; w = light type (see LightType.rawValue)
+//   direction: xyz = normalised direction the light points; w = unused
+//   color:     xyz = RGB × intensity (pre-multiplied); w = raw intensity
+//   params:    x = cos(innerConeAngle), y = cos(outerConeAngle),
+//              z = range (world units), w = unused
+struct ShaderLight {
+    var position:  SIMD4<Float>
+    var direction: SIMD4<Float>
+    var color:     SIMD4<Float>
+    var params:    SIMD4<Float>
+
+    init() {
+        position  = SIMD4<Float>(0, 0, 0, 1)   // w=1 → directional
+        direction = SIMD4<Float>(0, -1, 0, 0)
+        color     = SIMD4<Float>(0, 0, 0, 0)
+        params    = SIMD4<Float>(0.97, 0.94, 10, 0)
+    }
+}
+
+// ── Light uniforms block (buffer index 3) ───────────────────────────────────
+// Layout:
+//   ambientColor   float4  16
+//   countAndPad    uint4   16  (x = active light count, yzw = padding)
+//   light0..3      64×4   256
+//   ─────────────────────────
+//   Total                 288
+struct LightUniforms {
     var ambientColor: SIMD4<Float>
+    var countAndPad:  SIMD4<UInt32>   // x = lightCount
+    var light0: ShaderLight
+    var light1: ShaderLight
+    var light2: ShaderLight
+    var light3: ShaderLight
+
+    init() {
+        ambientColor = SIMD4<Float>(0.05, 0.05, 0.08, 0)
+        countAndPad  = SIMD4<UInt32>(0, 0, 0, 0)
+        light0 = ShaderLight()
+        light1 = ShaderLight()
+        light2 = ShaderLight()
+        light3 = ShaderLight()
+    }
+
+    mutating func setLight(_ light: ShaderLight, at index: Int) {
+        switch index {
+        case 0: light0 = light
+        case 1: light1 = light
+        case 2: light2 = light
+        case 3: light3 = light
+        default: break
+        }
+    }
+}
+
+// ── Background gradient uniforms (buffer index 0 in background pass) ────────
+// Layout: two float4 = 32 bytes.
+struct BackgroundUniforms {
+    var colorTop:    SIMD4<Float>
+    var colorBottom: SIMD4<Float>
 }
