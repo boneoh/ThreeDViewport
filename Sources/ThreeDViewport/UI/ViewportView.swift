@@ -282,12 +282,25 @@ final class ViewportView: MTKView {
 
     // MARK: - Add Object Keyframe
 
+    /// Stamps a keyframe for the currently selected (or primary) object.
+    /// Called by the timeline panel's "Add Object Keyframe" button.
     func addKeyframeAtCurrentTime() {
-        // Use selectedObject so the keyframe targets the active object.
         guard let obj = sceneManager.selectedObject ?? sceneManager.primaryObject else {
             print("[DEBUG] ViewportView: addKeyframeAtCurrentTime — no object selected")
             return
         }
+        let index = sceneManager.objects.firstIndex { $0 === obj } ?? sceneManager.selectedIndex
+        addKeyframeAtCurrentTime(forObjectAt: index)
+    }
+
+    /// Stamps a keyframe for the object at `index` using its current live transform.
+    /// Called by the Timeline Editor's Insert key handler.
+    func addKeyframeAtCurrentTime(forObjectAt index: Int) {
+        guard index >= 0, index < sceneManager.objects.count else {
+            print("[DEBUG] ViewportView: addKeyframeAtCurrentTime(forObjectAt:) — index out of range")
+            return
+        }
+        let obj = sceneManager.objects[index]
 
         if obj.keyframeTrack == nil {
             obj.keyframeTrack = KeyframeTrack()

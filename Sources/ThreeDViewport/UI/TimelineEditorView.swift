@@ -1,0 +1,498 @@
+import AppKit
+import simd
+
+// MARK: - Track reference
+
+private enum TrackRef: Equatable {
+    case camera
+    case object(Int)   // index into sceneManager.objects
+}
+
+// MARK: - Safe array subscript (file-private)
+
+private extension Array {
+    subscript(safe index: Int) -> Element? {
+        guard index >= 0, index < count else { return nil }
+        return self[index]
+    }
+}
+
+// MARK: - TimelineEditorView
+
+/// AppKit canvas that draws track lanes, keyframe diamonds, a time ruler,
+/// and a playhead.  Handles all mouse and keyboard input for the Timeline Editor panel.
+final class TimelineEditorView: NSView {
+
+    // ── External references ───────────────────────────────────────────────────
+
+    weak var timeline:     Timeline?
+    weak var sceneManager: SceneManager?
+    weak var camera:       CameraController?
+
+    // ── Insert callbacks (set by AppDelegate) ─────────────────────────────────
+
+    /// Called when the user presses Insert with an object lane selected.
+    /// The argument is the object's index in sceneManager.objects.
+    var onInsertObjectKeyframe: ((Int) -> Void)?
+
+    /// Called when the user presses Insert with the Camera lane selected.
+    var onInsertCameraKeyframe: (() -> Void)?
+
+    // ── Layout constants ──────────────────────────────────────────────────────
+
+    private let labelWidth:      CGFloat = 120
+    private let rulerHeight:     CGFloat = 24
+    private let laneHeight:      CGFloat = 28
+    private let diamondHalfSize: CGFloat = 5
+
+    /// Pixels per second — computed from view width and duration so the full
+    /// timeline always fits without horizontal scrolling.
+    private var pxPerSecond: CGFloat {
+        let trackWidth = max(1, bounds.width - labelWidth)
+        let dur        = max(0.001, timeline?.duration ?? 10.0)
+        return trackWidth / CGFloat(dur)
+    }
+
+    // ── Selection state ───────────────────────────────────────────────────────
+
+    /// Index of the currently selected lane.  nil = nothing selected.
+    private var selectedTrackIndex: Int? = nil
+
+    /// Index of the selected diamond within its lane.
+    /// nil = lane selected but no diamond; only valid when selectedTrackIndex != nil.
+    private var selectedKFIndex: Int? = nil
+
+    // ── Drag state ────────────────────────────────────────────────────────────
+
+    private var isDragging:      Bool    = false
+    private var dragTrackIndex:  Int     = 0
+    private var dragCurrentTime: Double  = 0
+    private var dragMouseStartX: CGFloat = 0
+    private var dragTimeStart:   Double  = 0
+
+    // ── Refresh timer ─────────────────────────────────────────────────────────
+
+    private var refreshTimer: Timer?
+
+    // MARK: - Init
+
+    override init(frame: NSRect) { super.init(frame: frame) }
+    required init?(coder: NSCoder) { super.init(coder: coder) }
+
+    override var isFlipped: Bool { true }   // y=0 at top, natural for lane layout
+    override var acceptsFirstResponder: Bool { true }
+
+    // MARK: - Timer management
+
+    func startRefreshTimer() {
+        refreshTimer?.invalidate()
+        // Fire at ~30 fps; always mark dirty so the playhead and scene changes show up.
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0,
+                                            repeats: true) { [weak self] _ in
+            self?.needsDisplay = true
+        }
+    }
+
+    func stopRefreshTimer() {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+    }
+
+    // MARK: - Track helpers
+
+    private typealias TrackList = [(name: String, ref: TrackRef)]
+
+    /// Ordered track list: Camera first, then scene objects.
+    private func buildTracks() -> TrackList {
+        var result: TrackList = [("Camera", .camera)]
+        for (i, obj) in (sceneManager?.objects ?? []).enumerated() {
+            result.append((obj.name, .object(i)))
+        }
+        return result
+    }
+
+    /// Sorted keyframe times for a given track.
+    private func keyframeTimes(for ref: TrackRef) -> [Double] {
+        switch ref {
+        case .camera:
+            return camera?.keyframeTrack?.keyframes.map { $0.time } ?? []
+        case .object(let i):
+            return sceneManager?.objects[safe: i]?.keyframeTrack?.keyframes.map { $0.time } ?? []
+        }
+    }
+
+    // MARK: - Geometry helpers
+
+    private func timeToX(_ t: Double) -> CGFloat {
+        labelWidth + CGFloat(t) * pxPerSecond
+    }
+
+    private func xToTime(_ x: CGFloat) -> Double {
+        max(0, Double((x - labelWidth) / pxPerSecond))
+    }
+
+    private func laneTop(_ index: Int) -> CGFloat {
+        rulerHeight + CGFloat(index) * laneHeight
+    }
+
+    private func laneCenter(_ index: Int) -> CGFloat {
+        laneTop(index) + laneHeight / 2
+    }
+
+    /// Returns (trackIndex, kfIndex) if `point` is within the hit area of a diamond.
+    private func hitTestDiamond(at point: NSPoint,
+                                 tracks: TrackList) -> (trackIndex: Int, kfIndex: Int)? {
+        let hitRadius: CGFloat = diamondHalfSize + 5
+        for (ti, (_, ref)) in tracks.enumerated() {
+            let cy = laneCenter(ti)
+            for (ki, t) in keyframeTimes(for: ref).enumerated() {
+                let cx = timeToX(t)
+                if abs(point.x - cx) <= hitRadius && abs(point.y - cy) <= hitRadius {
+                    return (ti, ki)
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Returns the lane index if `point` is inside any lane row.
+    private func hitTestLane(at point: NSPoint, tracks: TrackList) -> Int? {
+        for i in 0..<tracks.count {
+            if point.y >= laneTop(i) && point.y < laneTop(i) + laneHeight {
+                return i
+            }
+        }
+        return nil
+    }
+
+    // MARK: - Draw
+
+    override func draw(_ dirtyRect: NSRect) {
+        let tracks   = buildTracks()
+        let duration = timeline?.duration  ?? 10.0
+        let curTime  = timeline?.currentTime ?? 0.0
+        let w        = bounds.width
+        let totalH   = rulerHeight + CGFloat(tracks.count) * laneHeight
+
+        // ── Background ────────────────────────────────────────────────────────
+        NSColor(white: 0.18, alpha: 1).setFill()
+        NSBezierPath.fill(bounds)
+
+        // ── Label column ──────────────────────────────────────────────────────
+        NSColor(white: 0.22, alpha: 1).setFill()
+        NSBezierPath.fill(NSRect(x: 0, y: 0, width: labelWidth, height: totalH))
+
+        // ── Ruler background ──────────────────────────────────────────────────
+        NSColor(white: 0.14, alpha: 1).setFill()
+        NSBezierPath.fill(NSRect(x: 0, y: 0, width: w, height: rulerHeight))
+
+        // ── Lane rows ─────────────────────────────────────────────────────────
+        for i in 0..<tracks.count {
+            let rowRect = NSRect(x: labelWidth, y: laneTop(i),
+                                 width: w - labelWidth, height: laneHeight)
+            if i == selectedTrackIndex {
+                NSColor(white: 0.27, alpha: 1).setFill()
+            } else {
+                NSColor(white: i % 2 == 0 ? 0.18 : 0.21, alpha: 1).setFill()
+            }
+            NSBezierPath.fill(rowRect)
+
+            // Row separator
+            NSColor(white: 0.13, alpha: 1).setFill()
+            NSBezierPath.fill(NSRect(x: 0, y: laneTop(i) + laneHeight - 1,
+                                     width: w, height: 1))
+        }
+
+        // ── Label column separator ────────────────────────────────────────────
+        NSColor(white: 0.12, alpha: 1).setFill()
+        NSBezierPath.fill(NSRect(x: labelWidth - 1, y: 0, width: 1, height: totalH))
+
+        // ── Track name labels ─────────────────────────────────────────────────
+        let nameAttrs: [NSAttributedString.Key: Any] = [
+            .font:            NSFont.systemFont(ofSize: 11, weight: .regular),
+            .foregroundColor: NSColor(white: 0.80, alpha: 1)
+        ]
+        for (i, (name, _)) in tracks.enumerated() {
+            let str  = name as NSString
+            let size = str.size(withAttributes: nameAttrs)
+            str.draw(at: NSPoint(x: 8, y: laneCenter(i) - size.height / 2),
+                     withAttributes: nameAttrs)
+        }
+
+        // ── Ruler ticks + time labels ─────────────────────────────────────────
+        let tickAttrs: [NSAttributedString.Key: Any] = [
+            .font:            NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .regular),
+            .foregroundColor: NSColor(white: 0.55, alpha: 1)
+        ]
+        // Choose label density based on available pixel density
+        let labelEvery: Int = duration > 60 ? 10 : (duration > 30 ? 5 : (duration > 15 ? 2 : 1))
+
+        var t: Double = 0
+        while t <= duration + 0.0001 {
+            let x = timeToX(t)
+            if x >= labelWidth - 1 && x <= w + 1 {
+                let isFive = Int(round(t)) % 5 == 0
+                let tickH: CGFloat = isFive ? 10 : 6
+                let tick  = NSBezierPath()
+                tick.move(to: NSPoint(x: x, y: rulerHeight - tickH))
+                tick.line(to: NSPoint(x: x, y: rulerHeight))
+                NSColor(white: 0.45, alpha: 1).setStroke()
+                tick.lineWidth = isFive ? 1.5 : 0.8
+                tick.stroke()
+
+                if Int(round(t)) % labelEvery == 0 {
+                    let label = String(format: "%.0fs", t) as NSString
+                    let size  = label.size(withAttributes: tickAttrs)
+                    label.draw(at: NSPoint(x: x - size.width / 2, y: 4),
+                               withAttributes: tickAttrs)
+                }
+            }
+            t += 1
+        }
+
+        // ── Duration end marker ───────────────────────────────────────────────
+        let endX = timeToX(duration)
+        if endX >= labelWidth && endX <= w {
+            let endLine = NSBezierPath()
+            endLine.move(to: NSPoint(x: endX, y: 0))
+            endLine.line(to: NSPoint(x: endX, y: totalH))
+            let dashes: [CGFloat] = [4, 3]
+            endLine.setLineDash(dashes, count: 2, phase: 0)
+            endLine.lineWidth = 1
+            NSColor(white: 0.50, alpha: 0.5).setStroke()
+            endLine.stroke()
+        }
+
+        // ── Keyframe diamonds ─────────────────────────────────────────────────
+        let hs = diamondHalfSize
+        for (ti, (_, ref)) in tracks.enumerated() {
+            let cy = laneCenter(ti)
+            for (ki, kfTime) in keyframeTimes(for: ref).enumerated() {
+                let cx = timeToX(kfTime)
+                guard cx >= labelWidth - hs && cx <= w + hs else { continue }
+
+                let isSelected = (ti == selectedTrackIndex && ki == selectedKFIndex)
+                let diamond    = NSBezierPath()
+                diamond.move(to: NSPoint(x: cx,      y: cy - hs))
+                diamond.line(to: NSPoint(x: cx + hs, y: cy))
+                diamond.line(to: NSPoint(x: cx,      y: cy + hs))
+                diamond.line(to: NSPoint(x: cx - hs, y: cy))
+                diamond.close()
+
+                (isSelected ? NSColor.controlAccentColor
+                            : NSColor(white: 0.72, alpha: 1)).setFill()
+                diamond.fill()
+
+                (isSelected ? NSColor.white.withAlphaComponent(0.9)
+                            : NSColor(white: 0.38, alpha: 1)).setStroke()
+                diamond.lineWidth = isSelected ? 1.5 : 0.8
+                diamond.stroke()
+            }
+        }
+
+        // ── Playhead ──────────────────────────────────────────────────────────
+        let phX = timeToX(curTime)
+        if phX >= labelWidth - 1 && phX <= w + 1 {
+            // Downward triangle in ruler
+            let tri = NSBezierPath()
+            tri.move(to: NSPoint(x: phX - 5, y: 0))
+            tri.line(to: NSPoint(x: phX + 5, y: 0))
+            tri.line(to: NSPoint(x: phX,     y: 9))
+            tri.close()
+            NSColor.systemRed.setFill()
+            tri.fill()
+
+            // Vertical line through all lanes
+            let line = NSBezierPath()
+            line.move(to: NSPoint(x: phX, y: 9))
+            line.line(to: NSPoint(x: phX, y: totalH))
+            NSColor.systemRed.withAlphaComponent(0.75).setStroke()
+            line.lineWidth = 1.5
+            line.stroke()
+        }
+
+        // ── Ruler bottom border ───────────────────────────────────────────────
+        NSColor(white: 0.10, alpha: 1).setFill()
+        NSBezierPath.fill(NSRect(x: 0, y: rulerHeight - 1, width: w, height: 1))
+    }
+
+    // MARK: - Mouse input
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        let pt     = convert(event.locationInWindow, from: nil)
+        let tracks = buildTracks()
+
+        // Ruler click → scrub
+        if pt.y < rulerHeight && pt.x >= labelWidth {
+            scrubToX(pt.x)
+            return
+        }
+
+        // Diamond hit → select diamond + scrub to its time
+        if let hit = hitTestDiamond(at: pt, tracks: tracks) {
+            select(trackIndex: hit.trackIndex, kfIndex: hit.kfIndex)
+            let times = keyframeTimes(for: tracks[hit.trackIndex].ref)
+            if hit.kfIndex < times.count {
+                timeline?.seek(to: times[hit.kfIndex])
+            }
+            return
+        }
+
+        // Lane hit → select lane, deselect any diamond
+        if let lane = hitTestLane(at: pt, tracks: tracks) {
+            select(trackIndex: lane, kfIndex: nil)
+            return
+        }
+
+        // Click outside all lanes → deselect
+        select(trackIndex: nil, kfIndex: nil)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        let pt     = convert(event.locationInWindow, from: nil)
+        let tracks = buildTracks()
+
+        // Ruler drag → scrub
+        if !isDragging && pt.y < rulerHeight && pt.x >= labelWidth {
+            scrubToX(pt.x)
+            return
+        }
+
+        // Begin drag if a diamond is selected and the mouse has moved into the track area
+        if !isDragging {
+            guard let ti = selectedTrackIndex, let ki = selectedKFIndex else { return }
+            let times = keyframeTimes(for: tracks[ti].ref)
+            guard ki < times.count else { return }
+            isDragging      = true
+            dragTrackIndex  = ti
+            dragCurrentTime = times[ki]
+            dragMouseStartX = pt.x
+            dragTimeStart   = times[ki]
+        }
+
+        guard isDragging else { return }
+
+        let dx      = pt.x - dragMouseStartX
+        let maxT    = timeline?.duration ?? Double.infinity
+        let newTime = max(0, min(maxT, dragTimeStart + Double(dx / pxPerSecond)))
+
+        let ref = tracks[dragTrackIndex].ref
+        applyRetime(ref: ref, fromTime: dragCurrentTime, toTime: newTime)
+        dragCurrentTime = newTime
+
+        // Re-resolve diamond index after re-sort
+        let updatedTimes = keyframeTimes(for: ref)
+        selectedKFIndex  = updatedTimes.firstIndex { abs($0 - newTime) < 0.0005 }
+
+        timeline?.seek(to: newTime)
+        needsDisplay = true
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        isDragging = false
+    }
+
+    // MARK: - Keyboard input
+
+    override func keyDown(with event: NSEvent) {
+        let tracks = buildTracks()
+        switch event.keyCode {
+
+        case 51, 117:   // Backspace / Forward Delete → remove selected diamond
+            deleteSelectedKeyframe(tracks: tracks)
+
+        case 114:       // Insert / Help → stamp keyframe at current time in selected lane
+            insertKeyframeInSelectedLane(tracks: tracks)
+
+        case 123:       // Left arrow → nudge one frame earlier
+            nudgeSelected(by: -1.0 / 30.0, tracks: tracks)
+
+        case 124:       // Right arrow → nudge one frame later
+            nudgeSelected(by:  1.0 / 30.0, tracks: tracks)
+
+        default:
+            super.keyDown(with: event)
+        }
+    }
+
+    // MARK: - Private action helpers
+
+    private func select(trackIndex: Int?, kfIndex: Int?) {
+        selectedTrackIndex = trackIndex
+        selectedKFIndex    = kfIndex
+        needsDisplay       = true
+    }
+
+    private func scrubToX(_ x: CGFloat) {
+        let t = min(xToTime(x), timeline?.duration ?? Double.infinity)
+        timeline?.seek(to: t)
+        needsDisplay = true
+    }
+
+    private func applyRetime(ref: TrackRef, fromTime: Double, toTime: Double) {
+        switch ref {
+        case .camera:
+            guard let track = camera?.keyframeTrack,
+                  let idx   = track.keyframes.firstIndex(where: { abs($0.time - fromTime) < 0.0005 })
+            else { return }
+            track.retimeKeyframe(at: idx, to: toTime)
+
+        case .object(let i):
+            guard let obj   = sceneManager?.objects[safe: i],
+                  let track = obj.keyframeTrack,
+                  let idx   = track.keyframes.firstIndex(where: { abs($0.time - fromTime) < 0.0005 })
+            else { return }
+            track.retimeKeyframe(at: idx, to: toTime)
+        }
+    }
+
+    private func deleteSelectedKeyframe(tracks: TrackList) {
+        guard let ti = selectedTrackIndex, let ki = selectedKFIndex else { return }
+        let ref = tracks[ti].ref
+        switch ref {
+        case .camera:
+            camera?.keyframeTrack?.removeKeyframe(at: ki)
+        case .object(let i):
+            sceneManager?.objects[safe: i]?.keyframeTrack?.removeKeyframe(at: ki)
+        }
+        selectedKFIndex = nil
+        needsDisplay    = true
+        print("[DEBUG] TimelineEditorView: deleted keyframe lane=\(ti) kf=\(ki)")
+    }
+
+    private func insertKeyframeInSelectedLane(tracks: TrackList) {
+        guard let ti = selectedTrackIndex else { return }
+        let ref = tracks[ti].ref
+        switch ref {
+        case .camera:        onInsertCameraKeyframe?()
+        case .object(let i): onInsertObjectKeyframe?(i)
+        }
+        // Re-select the newly stamped diamond (callbacks are synchronous)
+        let t            = timeline?.currentTime ?? 0
+        let updatedTimes = keyframeTimes(for: ref)
+        selectedKFIndex  = updatedTimes.firstIndex { abs($0 - t) < 0.001 }
+        needsDisplay     = true
+        print("[DEBUG] TimelineEditorView: inserted keyframe at t=\(String(format: "%.3f", t))"
+            + " lane=\(ti)")
+    }
+
+    private func nudgeSelected(by delta: Double, tracks: TrackList) {
+        guard let ti = selectedTrackIndex, let ki = selectedKFIndex else { return }
+        let ref   = tracks[ti].ref
+        let times = keyframeTimes(for: ref)
+        guard ki < times.count else { return }
+
+        let oldTime = times[ki]
+        let maxT    = timeline?.duration ?? Double.infinity
+        let newTime = max(0, min(maxT, oldTime + delta))
+
+        applyRetime(ref: ref, fromTime: oldTime, toTime: newTime)
+
+        let updatedTimes = keyframeTimes(for: ref)
+        selectedKFIndex  = updatedTimes.firstIndex { abs($0 - newTime) < 0.0005 }
+
+        timeline?.seek(to: newTime)
+        needsDisplay = true
+    }
+}

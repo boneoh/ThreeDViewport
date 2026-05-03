@@ -57,6 +57,11 @@ final class FeedbackProcessor {
     /// True once the ring buffer has been filled once (priming complete).
     private(set) var isFull:  Bool = false
 
+    /// True once the first active blend pass has written to outputTexture.
+    /// Guards against blitting uninitialized GPU memory on non-tick frames
+    /// between isFull becoming true and the first actual blend pass running.
+    private var hasOutput: Bool = false
+
     private var currentWidth:  Int = 0
     private var currentHeight: Int = 0
 
@@ -155,6 +160,7 @@ final class FeedbackProcessor {
         frameCounter = 0
         writeIndex   = 0
         isFull       = false
+        hasOutput    = false
         print("[DEBUG] FeedbackProcessor: reset")
     }
 
@@ -203,8 +209,9 @@ final class FeedbackProcessor {
 
         guard isTick else {
             // Non-tick frame: persist the last blended output so there is no
-            // flash between ticks.  Fall back to the raw scene while priming.
-            if isFull, let output = outputTexture {
+            // flash between ticks.  Fall back to the raw scene while priming or
+            // before the first blend pass has written to outputTexture.
+            if isFull && hasOutput, let output = outputTexture {
                 blitToTexture(commandBuffer: commandBuffer, source: output, dest: dest)
             } else {
                 blitToTexture(commandBuffer: commandBuffer, source: scene, dest: dest)
@@ -219,6 +226,8 @@ final class FeedbackProcessor {
                          feedbackTex:  queue[writeIndex],
                          outputTex:    output,
                          decay:        settings.decay)
+
+            hasOutput = true
 
             // Replace oldest slot with the blended result
             copyTexture(commandBuffer: commandBuffer, from: output, to: queue[writeIndex])
@@ -248,11 +257,11 @@ final class FeedbackProcessor {
     /// Call this when the timeline is paused or has reached the end so the last
     /// feedback output (or raw scene while priming) stays on screen.
     func blitLastOutput(commandBuffer: MTLCommandBuffer, dest: MTLTexture) {
-        if isFull, let output = outputTexture {
-            // Feedback active: keep the last blended result visible.
+        if isFull && hasOutput, let output = outputTexture {
+            // Feedback active and at least one blend has run: keep the last blended result.
             blitToTexture(commandBuffer: commandBuffer, source: output, dest: dest)
         } else if let scene = sceneTexture {
-            // Still priming: show the raw scene.
+            // Still priming, or isFull but first blend not yet run: show the raw scene.
             blitToTexture(commandBuffer: commandBuffer, source: scene, dest: dest)
         }
     }

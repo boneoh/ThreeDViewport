@@ -52,6 +52,22 @@ final class CameraKeyframeTrack {
         print("[DEBUG] CameraKeyframeTrack: all keyframes removed")
     }
 
+    /// Remove the keyframe at the given index. No-op if index is out of range.
+    func removeKeyframe(at index: Int) {
+        guard index >= 0, index < keyframes.count else { return }
+        let t = keyframes[index].time
+        keyframes.remove(at: index)
+        print("[DEBUG] CameraKeyframeTrack: removed keyframe at t="
+            + String(format: "%.3f", t) + " remaining=" + String(keyframes.count))
+    }
+
+    /// Move the keyframe at `index` to `newTime` and re-sort by time.
+    func retimeKeyframe(at index: Int, to newTime: Double) {
+        guard index >= 0, index < keyframes.count else { return }
+        keyframes[index].time = newTime
+        keyframes.sort { $0.time < $1.time }
+    }
+
     // MARK: - Evaluation
 
     /// Returns the interpolated camera state at `time`, or nil if empty.

@@ -14,6 +14,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // Feedback delay-line panel.
     private var feedbackPanel: NSPanel?
 
+    // Timeline editor (AppKit canvas panel).
+    private var timelineEditorWC: TimelineEditorWindowController?
+
     // Tracks the last saved/opened project URL for ⌘S "save in place".
     private var currentProjectURL: URL?
 
@@ -229,6 +232,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         colorModeItem.target = self
         viewMenu.addItem(colorModeItem)
+
+        // ── Window menu ───────────────────────────────────────────────────────
+        let windowItem = NSMenuItem()
+        mainMenu.addItem(windowItem)
+        let windowMenu = NSMenu(title: "Window")
+        windowItem.submenu = windowMenu
+
+        let timelineEditorItem = NSMenuItem(
+            title: "Timeline Editor",
+            action: #selector(showTimelineEditor(_:)),
+            keyEquivalent: ""
+        )
+        timelineEditorItem.target = self
+        windowMenu.addItem(timelineEditorItem)
 
         NSApplication.shared.mainMenu = mainMenu
         print("[DEBUG] AppDelegate: menu setup complete")
@@ -521,6 +538,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         feedbackPanel = panel
         panel.makeKeyAndOrderFront(nil)
         print("[DEBUG] AppDelegate: feedback panel opened")
+    }
+
+    // MARK: - Timeline Editor
+
+    @objc private func showTimelineEditor(_ sender: Any) {
+        // Toggle: if the panel already exists and is visible, close it.
+        if let wc = timelineEditorWC {
+            if wc.window?.isVisible == true {
+                wc.window?.orderOut(nil)
+            } else {
+                wc.showWindow(nil)
+                positionTimelineEditor(wc)
+            }
+            return
+        }
+
+        guard let viewport = viewportView else { return }
+
+        let wc = TimelineEditorWindowController(
+            timeline:     viewport.timeline,
+            sceneManager: viewport.sceneManager,
+            camera:       viewport.camera
+        )
+        wc.editorView.onInsertObjectKeyframe = { [weak viewport] index in
+            viewport?.addKeyframeAtCurrentTime(forObjectAt: index)
+        }
+        wc.editorView.onInsertCameraKeyframe = { [weak viewport] in
+            viewport?.addCameraKeyframeAtCurrentTime()
+        }
+
+        timelineEditorWC = wc
+        wc.showWindow(nil)
+        positionTimelineEditor(wc)
+        print("[DEBUG] AppDelegate: timeline editor panel opened")
+    }
+
+    private func positionTimelineEditor(_ wc: TimelineEditorWindowController) {
+        guard let win = window, let panel = wc.window else { return }
+        let winFrame   = win.frame
+        let panelFrame = panel.frame
+        // Position below the main window, left-aligned.
+        let originX = winFrame.minX
+        let originY = winFrame.minY - panelFrame.height - 8
+        panel.setFrameOrigin(NSPoint(x: originX, y: max(originY, 0)))
     }
 
     // MARK: - Export Video
