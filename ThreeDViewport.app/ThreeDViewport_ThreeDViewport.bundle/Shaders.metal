@@ -1,0 +1,310 @@
+#include <metal_stdlib>
+using namespace metal;
+
+// ── Shared structs (must match ShaderTypes.swift exactly) ────────────────────
+
+struct Uniforms {
+    float4x4 modelMatrix;
+    float4x4 viewProjectionMatrix;
+    float4x4 normalMatrix;
+    float4   cameraPosition;   // xyz = world pos, w unused
+};
+
+// Light type constants stored in ShaderLight.position.w
+#define LIGHT_AMBIENT     0
+#define LIGHT_DIRECTIONAL 1
+#define LIGHT_POINT       2
+#define LIGHT_SPOT        3
+#define LIGHT_LASER       4
+
+struct ShaderLight {
+    float4 position;   // xyz=world pos,  w=type
+    float4 direction;  // xyz=direction,  w=unused
+    float4 color;      // xyz=RGB×intens, w=intensity
+    float4 params;     // x=cos(inner), y=cos(outer), z=range, w=unused
+};
+
+struct LightUniforms {
+    float4      ambientColor;
+    uint4       countAndPad;   // x = lightCount
+    ShaderLight lights[4];
+};
+
+struct MaterialUniforms {
+    float4  baseColorFactor;
+    float4  emissiveFactor;      // w unused
+    float   metallicFactor;
+    float   roughnessFactor;
+    uint    hasBaseColorTex;
+    uint    hasNormalTex;
+    uint    hasMetallicRoughTex;
+    uint    hasEmissiveTex;
+    uint    colorMode;           // 0=greyscale, 1=color
+    uint    pad;
+};
+
+struct BackgroundUniforms {
+    float4 colorTop;
+    float4 colorBottom;
+};
+
+// ── Scene vertex / fragment ───────────────────────────────────────────────────
+
+struct VertexOut {
+    float4 position      [[position]];
+    float3 worldNormal;
+    float3 worldPosition;
+    float2 uv;
+    float3 worldTangent;
+    float3 worldBitangent;
+};
+
+vertex VertexOut vertex_main(
+    uint                    vid       [[vertex_id]],
+    constant packed_float3 *positions [[buffer(0)]],
+    constant packed_float3 *normals   [[buffer(1)]],
+    constant Uniforms      &uniforms  [[buffer(2)]],
+    constant packed_float2 *uvs       [[buffer(4)]],
+    constant packed_float4 *tangents  [[buffer(5)]]   // xyz=tangent, w=handedness
+) {
+    VertexOut out;
+
+    float3 pos  = float3(positions[vid]);
+    float3 norm = float3(normals[vid]);
+
+    float4 worldPos4  = uniforms.modelMatrix * float4(pos, 1.0);
+    out.position      = uniforms.viewProjectionMatrix * worldPos4;
+    out.worldPosition = worldPos4.xyz;
+
+    // Normal matrix: upper-left 3x3 of the provided normalMatrix (inverse-transpose of model)
+    float3x3 normalMat = float3x3(
+        uniforms.normalMatrix.columns[0].xyz,
+        uniforms.normalMatrix.columns[1].xyz,
+        uniforms.normalMatrix.columns[2].xyz
+    );
+    float3 N = normalize(normalMat * norm);
+    out.worldNormal = N;
+
+    // Tangent frame (for normal mapping)
+    float4 tang = tangents[vid];
+    float3 T    = normalize(normalMat * tang.xyz);
+    // Gram-Schmidt re-orthogonalise against N
+    T = normalize(T - dot(T, N) * N);
+    float3 B = cross(N, T) * tang.w;   // handedness from w component
+    out.worldTangent   = T;
+    out.worldBitangent = B;
+
+    out.uv = float2(uvs[vid]);
+
+    return out;
+}
+
+// ── PBR BRDF helpers ─────────────────────────────────────────────────────────
+
+// GGX / Trowbridge-Reitz normal distribution function
+static float D_GGX(float NdotH, float roughness) {
+    float a  = roughness * roughness;
+    float a2 = a * a;
+    float d  = NdotH * NdotH * (a2 - 1.0) + 1.0;
+    return a2 / (M_PI_F * d * d + 1e-7);
+}
+
+// Smith-GGX combined geometry term (Schlick approximation)
+static float G_Smith(float NdotV, float NdotL, float roughness) {
+    float r  = roughness + 1.0;
+    float k  = (r * r) / 8.0;
+    float gV = NdotV / (NdotV * (1.0 - k) + k);
+    float gL = NdotL / (NdotL * (1.0 - k) + k);
+    return gV * gL;
+}
+
+// Fresnel-Schlick approximation
+static float3 F_Schlick(float cosTheta, float3 F0) {
+    return F0 + (1.0 - F0) * pow(saturate(1.0 - cosTheta), 5.0);
+}
+
+// ── Light attenuation / direction helper ────────────────────────────────────
+// Returns true if the light contributes; fills out L (toward light) and
+// attenuation. Mirrors the geometry logic from the old evaluateLight.
+static bool sampleLight(ShaderLight light,
+                         float3      worldPos,
+                         thread float3 &L,
+                         thread float  &attenuation)
+{
+    int lightType = int(light.position.w);
+
+    if (lightType == LIGHT_AMBIENT) { return false; }
+
+    if (lightType == LIGHT_DIRECTIONAL) {
+        L           = normalize(-light.direction.xyz);
+        attenuation = 1.0;
+        return true;
+    }
+
+    // Positional
+    float3 toLight = light.position.xyz - worldPos;
+    float  dist    = length(toLight);
+    float  range   = light.params.z;
+    if (dist >= range) return false;
+
+    L = normalize(toLight);
+    float normDist = dist / range;
+    attenuation    = pow(max(0.0, 1.0 - normDist * normDist), 2.0);
+
+    if (lightType == LIGHT_SPOT || lightType == LIGHT_LASER) {
+        float3 surfaceDir = normalize(worldPos - light.position.xyz);
+        float  cosAngle   = dot(surfaceDir, normalize(light.direction.xyz));
+        float  cosOuter   = light.params.y;
+        float  cosInner   = light.params.x;
+        if (cosAngle < cosOuter) return false;
+        float spotAtten = (lightType == LIGHT_LASER)
+            ? (cosAngle >= cosInner ? 1.0 : 0.0)
+            : smoothstep(cosOuter, cosInner, cosAngle);
+        attenuation *= spotAtten;
+    }
+
+    return true;
+}
+
+// ── Scene fragment shader ─────────────────────────────────────────────────────
+
+fragment float4 fragment_main(
+    VertexOut               in           [[stage_in]],
+    constant Uniforms      &uniforms     [[buffer(2)]],
+    constant LightUniforms &lightData    [[buffer(3)]],
+    constant MaterialUniforms &matData   [[buffer(4)]],
+    texture2d<float>        baseColorTex [[texture(0)]],
+    texture2d<float>        normalTex    [[texture(1)]],
+    texture2d<float>        mrTex        [[texture(2)]],
+    texture2d<float>        emissiveTex  [[texture(3)]]
+) {
+    constexpr sampler texSampler(filter::linear,
+                                  mip_filter::linear,
+                                  address::repeat);
+
+    // ── Surface normal ─────────────────────────────────────────────────────
+    float3 N = normalize(in.worldNormal);
+    if (matData.hasNormalTex) {
+        float3 tangentNormal = normalTex.sample(texSampler, in.uv).rgb * 2.0 - 1.0;
+        float3x3 TBN = float3x3(normalize(in.worldTangent),
+                                 normalize(in.worldBitangent),
+                                 N);
+        N = normalize(TBN * tangentNormal);
+    }
+
+    // ── View direction ─────────────────────────────────────────────────────
+    float3 V = normalize(uniforms.cameraPosition.xyz - in.worldPosition);
+
+    // ── Base color ─────────────────────────────────────────────────────────
+    float4 baseColor = matData.baseColorFactor;
+    if (matData.hasBaseColorTex) {
+        // Texture was loaded as sRGB — Metal linearises on sample automatically
+        baseColor *= baseColorTex.sample(texSampler, in.uv);
+    }
+    float3 albedo = baseColor.rgb;
+
+    // ── Metallic / roughness ───────────────────────────────────────────────
+    float metallic  = matData.metallicFactor;
+    float roughness = matData.roughnessFactor;
+    if (matData.hasMetallicRoughTex) {
+        float4 mr = mrTex.sample(texSampler, in.uv);
+        metallic  *= mr.b;   // metallic  = blue channel
+        roughness *= mr.g;   // roughness = green channel
+    }
+    roughness = max(roughness, 0.04);   // clamp to avoid singularities
+
+    // ── PBR dielectric/metallic F0 ─────────────────────────────────────────
+    float3 F0 = mix(float3(0.04), albedo, metallic);
+
+    // ── Ambient term (global + Ambient-type lights) ────────────────────────
+    float3 ambientLight = lightData.ambientColor.rgb;
+    uint count = lightData.countAndPad.x;
+    for (uint i = 0; i < count; i++) {
+        if (int(lightData.lights[i].position.w) == LIGHT_AMBIENT) {
+            ambientLight += lightData.lights[i].color.rgb;
+        }
+    }
+    float3 color = ambientLight * albedo * (1.0 - metallic * 0.9);
+
+    // ── Per-light BRDF accumulation ────────────────────────────────────────
+    float NdotV = max(dot(N, V), 0.0001);
+
+    for (uint i = 0; i < count; i++) {
+        ShaderLight light = lightData.lights[i];
+        if (int(light.position.w) == LIGHT_AMBIENT) { continue; }
+
+        float3 L;
+        float  atten;
+        if (!sampleLight(light, in.worldPosition, L, atten)) { continue; }
+
+        float3 H     = normalize(V + L);
+        float  NdotL = max(dot(N, L), 0.0);
+        float  NdotH = max(dot(N, H), 0.0);
+        float  VdotH = max(dot(V, H), 0.0);
+
+        if (NdotL <= 0.0) { continue; }
+
+        // Cook-Torrance specular BRDF
+        float  D = D_GGX(NdotH, roughness);
+        float  G = G_Smith(NdotV, NdotL, roughness);
+        float3 F = F_Schlick(VdotH, F0);
+
+        float3 specular = (D * G * F) / max(4.0 * NdotV * NdotL, 0.001);
+
+        // Lambertian diffuse (energy-conserving: metals have no diffuse)
+        float3 kD      = (float3(1.0) - F) * (1.0 - metallic);
+        float3 diffuse = kD * albedo / M_PI_F;
+
+        color += (diffuse + specular) * NdotL * light.color.rgb * atten;
+    }
+
+    // ── Emissive ───────────────────────────────────────────────────────────
+    float3 emissive = matData.emissiveFactor.rgb;
+    if (matData.hasEmissiveTex) {
+        emissive *= emissiveTex.sample(texSampler, in.uv).rgb;
+    }
+    color += emissive;
+
+    // ── Tone mapping (Reinhard) ────────────────────────────────────────────
+    color = color / (color + float3(1.0));
+
+    // ── Gamma encode for .bgra8Unorm render target ─────────────────────────
+    color = pow(saturate(color), float3(1.0 / 2.2));
+
+    // ── Greyscale mode — convert to Rec.709 luminance ─────────────────────
+    if (matData.colorMode == 0) {
+        float luma = dot(color, float3(0.2126, 0.7152, 0.0722));
+        color = float3(luma);
+    }
+
+    return float4(color, 1.0);
+}
+
+// ── Background gradient ───────────────────────────────────────────────────────
+
+struct BgVertOut {
+    float4 position [[position]];
+    float  y;          // 0 = bottom of screen, 1 = top
+};
+
+vertex BgVertOut background_vertex(uint vid [[vertex_id]]) {
+    const float2 pos[4] = {
+        float2(-1.0, -1.0),
+        float2( 1.0, -1.0),
+        float2(-1.0,  1.0),
+        float2( 1.0,  1.0)
+    };
+    float2 p = pos[vid];
+    BgVertOut out;
+    out.position = float4(p, 0.999, 1.0);
+    out.y        = p.y * 0.5 + 0.5;
+    return out;
+}
+
+fragment float4 background_fragment(
+    BgVertOut                   in [[stage_in]],
+    constant BackgroundUniforms &bg [[buffer(0)]]
+) {
+    float3 color = mix(bg.colorBottom.rgb, bg.colorTop.rgb, in.y);
+    return float4(color, 1.0);
+}
