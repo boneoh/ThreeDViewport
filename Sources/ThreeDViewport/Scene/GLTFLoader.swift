@@ -97,18 +97,7 @@ final class GLTFLoader {
         let vertexCount = positions.count / 3
         if vertexCount == 0 { return nil }
 
-        // ── Normals ─────────────────────────────────────────────────────────
-        let normals: [Float]
-        if let acc = primitive.attribute(forName: "NORMAL")?.accessor,
-           let raw = extractFloat3(from: acc, label: "NORMAL") {
-            normals = raw
-        } else {
-            let seq = (0..<vertexCount).map { UInt32($0) }
-            normals = generateFlatNormals(positions: positions, indices: seq)
-            print("[DEBUG] GLTFLoader: generated flat normals")
-        }
-
-        // ── Indices ─────────────────────────────────────────────────────────
+        // ── Indices (must be read before normals so connectivity is available) ─
         let indices: [UInt32]
         if let acc = primitive.indices,
            let raw = extractIndices(from: acc) {
@@ -117,6 +106,19 @@ final class GLTFLoader {
             indices = (0..<vertexCount).map { UInt32($0) }
         }
         if indices.isEmpty { return nil }
+
+        // ── Normals ─────────────────────────────────────────────────────────
+        let normals: [Float]
+        if let acc = primitive.attribute(forName: "NORMAL")?.accessor,
+           let raw = extractFloat3(from: acc, label: "NORMAL") {
+            normals = raw
+        } else {
+            // Generate smooth normals from the real indexed triangles.
+            // Passing sequential indices here (as was done before) gives completely
+            // wrong normals because the triangle connectivity is ignored.
+            normals = generateSmoothedNormals(positions: positions, indices: indices)
+            print("[DEBUG] GLTFLoader: generated smooth normals from \(indices.count/3) triangles")
+        }
 
         // ── UV coordinates ──────────────────────────────────────────────────
         var hasUVs = false
@@ -162,9 +164,23 @@ final class GLTFLoader {
         let tangBuffer = makeBuffer(tangents,  label: "tangents")
         let idxBuffer  = makeBuffer(indices,   label: "indices")
 
+        // ── Vertex color (COLOR_0) ───────────────────────────────────────────
+        // Used as the base color tint when the primitive has no material.
+        // Handles the common case of meshes exported with per-vertex colour
+        // and no PBR material block (e.g. some procedural / CAD models).
+        var vertexColor: SIMD4<Float>? = nil
+        if let acc = primitive.attribute(forName: "COLOR_0")?.accessor {
+            vertexColor = extractFirstVertexColor(from: acc)
+            if let c = vertexColor {
+                print(String(format: "[DEBUG] GLTFLoader: COLOR_0 first vertex (%.2f,%.2f,%.2f,%.2f)",
+                             c.x, c.y, c.z, c.w))
+            }
+        }
+
         // ── Material ────────────────────────────────────────────────────────
         let material = loadMaterial(from: primitive.material,
-                                     hasTangents: hasTangents)
+                                     hasTangents: hasTangents,
+                                     vertexColor: vertexColor)
 
         // ── Assemble ────────────────────────────────────────────────────────
         let obj = SceneObject(name: name)
@@ -188,10 +204,17 @@ final class GLTFLoader {
     // MARK: - Material Loading
 
     private func loadMaterial(from gltfMat: GLTFMaterial?,
-                               hasTangents: Bool) -> PBRMaterial {
+                               hasTangents: Bool,
+                               vertexColor: SIMD4<Float>? = nil) -> PBRMaterial {
         var mat = PBRMaterial()
         guard let gm = gltfMat else {
-            print("[DEBUG] GLTFLoader: no material — using defaults")
+            // No PBR material: use vertex color as base color when available.
+            if let vc = vertexColor {
+                mat.baseColorFactor = vc
+                print("[DEBUG] GLTFLoader: no material — using COLOR_0 as base color")
+            } else {
+                print("[DEBUG] GLTFLoader: no material — using defaults")
+            }
             return mat
         }
 
@@ -603,9 +626,12 @@ final class GLTFLoader {
         return result
     }
 
-    // MARK: - Flat Normal Generation
+    // MARK: - Smooth Normal Generation
 
-    private func generateFlatNormals(positions: [Float], indices: [UInt32]) -> [Float] {
+    // Accumulates face normals for every vertex that shares a triangle,
+    // then normalises — produces smooth shading from indexed geometry.
+    // (Equivalent to what most DCC tools call "smooth normals".)
+    private func generateSmoothedNormals(positions: [Float], indices: [UInt32]) -> [Float] {
         let vertexCount = positions.count / 3
         var normals     = [Float](repeating: 0, count: positions.count)
 
@@ -639,6 +665,45 @@ final class GLTFLoader {
         }
 
         return normals
+    }
+
+    // MARK: - Vertex Color Extraction
+
+    // Reads the first vertex's colour from a COLOR_0 accessor and returns it
+    // normalised to [0,1].  Supports VEC4 UInt8 (most common) and VEC4 Float.
+    private func extractFirstVertexColor(from accessor: GLTFAccessor) -> SIMD4<Float>? {
+        guard let bv   = accessor.bufferView,
+              let data = bv.buffer.data,
+              accessor.count > 0 else { return nil }
+
+        let baseOffset = bv.offset + accessor.offset
+
+        return data.withUnsafeBytes { raw -> SIMD4<Float>? in
+            guard let base = raw.baseAddress else { return nil }
+            switch accessor.componentType {
+            case .unsignedByte:
+                let ptr = base.advanced(by: baseOffset)
+                              .assumingMemoryBound(to: UInt8.self)
+                return SIMD4<Float>(Float(ptr[0]) / 255.0,
+                                    Float(ptr[1]) / 255.0,
+                                    Float(ptr[2]) / 255.0,
+                                    Float(ptr[3]) / 255.0)
+            case .unsignedShort:
+                let ptr = base.advanced(by: baseOffset)
+                              .assumingMemoryBound(to: UInt16.self)
+                return SIMD4<Float>(Float(ptr[0]) / 65535.0,
+                                    Float(ptr[1]) / 65535.0,
+                                    Float(ptr[2]) / 65535.0,
+                                    Float(ptr[3]) / 65535.0)
+            case .float:
+                let ptr = base.advanced(by: baseOffset)
+                              .assumingMemoryBound(to: Float.self)
+                return SIMD4<Float>(ptr[0], ptr[1], ptr[2], ptr[3])
+            default:
+                print("[DEBUG] GLTFLoader: COLOR_0 componentType unsupported")
+                return nil
+            }
+        }
     }
 
     // MARK: - Bounding Sphere

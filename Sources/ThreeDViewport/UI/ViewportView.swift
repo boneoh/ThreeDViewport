@@ -431,19 +431,54 @@ final class ViewportView: MTKView {
         lastMouseLocation = loc
 
         if isSpaceDown {
-            camera.pan(deltaX: dx, deltaY: dy)
+            // Space+drag: orbit camera around target (available in all modes).
+            camera.orbit(deltaX: dx, deltaY: dy)
 
-        } else if !timeline.isPlaying,
+        } else if controlMode == .object,
+                  !timeline.isPlaying,
                   let obj = sceneManager.selectedObject ?? sceneManager.primaryObject {
-            // Paused + drag: rotate the selected object in world space for pose authoring.
-            let sensitivity: Float = 0.005
-            let yaw   = simd_quatf(angle:  dx * sensitivity, axis: SIMD3<Float>(0, 1, 0))
-            let pitch = simd_quatf(angle: -dy * sensitivity, axis: SIMD3<Float>(1, 0, 0))
-            let delta = simd_normalize(pitch * yaw)
-            obj.transform = rotationMatrix4x4(delta) * obj.transform
+            // Object mode + paused: translate in the camera's view plane.
+            // Scale with distance so the feel is consistent at any zoom level.
+            let scale = camera.distance * 0.001
+            let move  = camera.rightVector * (dx * scale)
+                      + camera.upVector   * (dy * scale)
+            obj.transform.columns.3.x += move.x
+            obj.transform.columns.3.y += move.y
+            obj.transform.columns.3.z += move.z
 
         } else {
-            camera.orbit(deltaX: dx, deltaY: dy)
+            // Camera / Light mode (or playing): pan the camera.
+            camera.pan(deltaX: dx, deltaY: dy)
+        }
+    }
+
+    // MARK: - Right Mouse Input
+
+    override func rightMouseDown(with event: NSEvent) {
+        lastMouseLocation = convert(event.locationInWindow, from: nil)
+    }
+
+    override func rightMouseDragged(with event: NSEvent) {
+        let loc = convert(event.locationInWindow, from: nil)
+        let dx  = Float(loc.x - lastMouseLocation.x)
+        let dy  = Float(loc.y - lastMouseLocation.y)
+        lastMouseLocation = loc
+
+        let sensitivity: Float = 0.005
+        switch controlMode {
+        case .object:
+            guard !timeline.isPlaying,
+                  let obj = sceneManager.selectedObject ?? sceneManager.primaryObject
+            else { return }
+            // Right drag on object: rotate (yaw + pitch around world axes).
+            let yaw   = simd_quatf(angle:  dx * sensitivity, axis: SIMD3<Float>(0, 1, 0))
+            let pitch = simd_quatf(angle: -dy * sensitivity, axis: SIMD3<Float>(1, 0, 0))
+            obj.transform = rotationMatrix4x4(simd_normalize(pitch * yaw)) * obj.transform
+
+        case .camera, .light:
+            // Right drag in camera / light mode: free-look.
+            // Camera position stays fixed; aim direction rotates.
+            camera.freeLook(deltaYaw: dx * sensitivity, deltaPitch: dy * sensitivity)
         }
     }
 
@@ -459,7 +494,20 @@ final class ViewportView: MTKView {
     }
 
     override func scrollWheel(with event: NSEvent) {
-        camera.zoom(delta: Float(event.scrollingDeltaY))
+        let delta = Float(event.scrollingDeltaY)
+        if controlMode == .object,
+           !timeline.isPlaying,
+           let obj = sceneManager.selectedObject ?? sceneManager.primaryObject {
+            // Object mode: scroll translates the object along the camera forward axis.
+            // Same sensitivity formula as camera zoom so the feel is equivalent.
+            let move = delta * camera.distance * 0.05
+            let fwd  = camera.forwardVector
+            obj.transform.columns.3.x += fwd.x * move
+            obj.transform.columns.3.y += fwd.y * move
+            obj.transform.columns.3.z += fwd.z * move
+        } else {
+            camera.zoom(delta: delta)
+        }
     }
 
     // MARK: - Keyboard Input
@@ -482,19 +530,23 @@ final class ViewportView: MTKView {
         static let kp6:      UInt16 = 88   // →
         static let kp8:      UInt16 = 91   // ↑
         static let kp2:      UInt16 = 84   // ↓
-        // Zoom / intensity
+        // Zoom / intensity / depth
         static let kpPlus:   UInt16 = 69   // keypad +
         static let kpMinus:  UInt16 = 78   // keypad −
-        static let regMinus: UInt16 = 27   // regular −
+        static let regMinus: UInt16 = 27   // regular − / _ (Shift+−)
         static let regEqual: UInt16 = 24   // regular = / + (Shift+=)
+        // Roll (object) — both shifted and unshifted land on same key code
+        static let leftBracket:  UInt16 = 33   // [ and {
+        static let rightBracket: UInt16 = 30   // ] and }
     }
 
     // Step sizes for arrow-key navigation
     // panStep is passed to camera.pan() which applies its own sensitivity×distance scaling,
     // so the on-screen movement stays proportional to the current zoom level.
     private let panStep:       Float = 50.0             // camera pan pixels-equivalent per key
-    private let translateStep: Float = 0.05             // world-units per key (object & object Z)
+    private let translateStep: Float = 0.05             // world-units per key (object)
     private let lightStep:     Float = Float.pi / 36.0  // 5° per key (light azimuth / elevation)
+    private let rotStep:       Float = Float.pi / 36.0  // 5° per key (object/camera rotation)
     private let intensityStep: Float = 0.1
     private let zoomStep:      Float = 0.1              // fraction of current distance per key
 
@@ -555,14 +607,21 @@ final class ViewportView: MTKView {
         case KC.left, KC.kp4:
             switch controlMode {
             case .camera:
-                // Pan camera left in view space
-                camera.pan(deltaX: -panStep, deltaY: 0)
+                if event.modifierFlags.contains(.shift) {
+                    camera.freeLook(deltaYaw: -rotStep, deltaPitch: 0)
+                } else {
+                    camera.pan(deltaX: panStep, deltaY: 0)
+                }
             case .light:
-                // Azimuth left for directional/spot/laser; horizontal for point
                 lightManager.rotateSelected(deltaAzimuth: -lightStep, deltaElevation: 0)
             case .object:
                 if let obj = sceneManager.selectedObject {
-                    obj.transform.columns.3.x -= translateStep
+                    if event.modifierFlags.contains(.shift) {
+                        let q = simd_quatf(angle: -rotStep, axis: SIMD3<Float>(0, 1, 0))
+                        obj.transform = rotationMatrix4x4(q) * obj.transform
+                    } else {
+                        obj.transform.columns.3.x -= translateStep
+                    }
                 }
             }
 
@@ -570,12 +629,21 @@ final class ViewportView: MTKView {
         case KC.right, KC.kp6:
             switch controlMode {
             case .camera:
-                camera.pan(deltaX: panStep, deltaY: 0)
+                if event.modifierFlags.contains(.shift) {
+                    camera.freeLook(deltaYaw: rotStep, deltaPitch: 0)
+                } else {
+                    camera.pan(deltaX: -panStep, deltaY: 0)
+                }
             case .light:
                 lightManager.rotateSelected(deltaAzimuth: lightStep, deltaElevation: 0)
             case .object:
                 if let obj = sceneManager.selectedObject {
-                    obj.transform.columns.3.x += translateStep
+                    if event.modifierFlags.contains(.shift) {
+                        let q = simd_quatf(angle: rotStep, axis: SIMD3<Float>(0, 1, 0))
+                        obj.transform = rotationMatrix4x4(q) * obj.transform
+                    } else {
+                        obj.transform.columns.3.x += translateStep
+                    }
                 }
             }
 
@@ -583,12 +651,21 @@ final class ViewportView: MTKView {
         case KC.up, KC.kp8:
             switch controlMode {
             case .camera:
-                camera.pan(deltaX: 0, deltaY: panStep)
+                if event.modifierFlags.contains(.shift) {
+                    camera.freeLook(deltaYaw: 0, deltaPitch: rotStep)
+                } else {
+                    camera.pan(deltaX: 0, deltaY: panStep)
+                }
             case .light:
                 lightManager.rotateSelected(deltaAzimuth: 0, deltaElevation: -lightStep)
             case .object:
                 if let obj = sceneManager.selectedObject {
-                    obj.transform.columns.3.y += translateStep
+                    if event.modifierFlags.contains(.shift) {
+                        let q = simd_quatf(angle: rotStep, axis: SIMD3<Float>(1, 0, 0))
+                        obj.transform = rotationMatrix4x4(q) * obj.transform
+                    } else {
+                        obj.transform.columns.3.y += translateStep
+                    }
                 }
             }
 
@@ -596,13 +673,36 @@ final class ViewportView: MTKView {
         case KC.down, KC.kp2:
             switch controlMode {
             case .camera:
-                camera.pan(deltaX: 0, deltaY: -panStep)
+                if event.modifierFlags.contains(.shift) {
+                    camera.freeLook(deltaYaw: 0, deltaPitch: -rotStep)
+                } else {
+                    camera.pan(deltaX: 0, deltaY: -panStep)
+                }
             case .light:
                 lightManager.rotateSelected(deltaAzimuth: 0, deltaElevation: lightStep)
             case .object:
                 if let obj = sceneManager.selectedObject {
-                    obj.transform.columns.3.y -= translateStep
+                    if event.modifierFlags.contains(.shift) {
+                        let q = simd_quatf(angle: -rotStep, axis: SIMD3<Float>(1, 0, 0))
+                        obj.transform = rotationMatrix4x4(q) * obj.transform
+                    } else {
+                        obj.transform.columns.3.y -= translateStep
+                    }
                 }
+            }
+
+        // ── [ / { — roll object left ──────────────────────────────────────────
+        case KC.leftBracket:
+            if controlMode == .object, let obj = sceneManager.selectedObject {
+                let q = simd_quatf(angle: -rotStep, axis: SIMD3<Float>(0, 0, 1))
+                obj.transform = rotationMatrix4x4(q) * obj.transform
+            }
+
+        // ── ] / } — roll object right ─────────────────────────────────────────
+        case KC.rightBracket:
+            if controlMode == .object, let obj = sceneManager.selectedObject {
+                let q = simd_quatf(angle: rotStep, axis: SIMD3<Float>(0, 0, 1))
+                obj.transform = rotationMatrix4x4(q) * obj.transform
             }
 
         // ── Plus / KP+ — zoom in / light depth in / object +Z ────────────────

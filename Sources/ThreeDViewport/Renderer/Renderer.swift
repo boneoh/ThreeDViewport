@@ -43,7 +43,10 @@ final class Renderer: NSObject, MTKViewDelegate {
     var feedbackProcessor: FeedbackProcessor?
     var feedbackSettings:  FeedbackSettings?
 
-    private var lastAnimatedTime: Double = -1.0
+    private var lastAnimatedTime:  Double = -1.0
+    /// Tracks currentTime at the end of each frame so we can detect scrub / stop
+    /// while the timeline is not playing and reset the feedback queue accordingly.
+    private var lastRenderedTime:  Double = -1.0
 
     // One-shot material diagnostics — prints once per object on the first draw
     private var materialDebugPrinted: Set<String> = []
@@ -158,6 +161,17 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     func draw(in view: MTKView) {
         timeline.tick()
+
+        // Reset feedback when the user stops or manually scrubs the playhead.
+        // Pause and reaching the end of playback leave the last blended frame intact.
+        // The check fires whenever currentTime changes while the timeline is not
+        // playing — stop() resets currentTime to 0, seek() sets it to an arbitrary
+        // value, and both happen only while isPlaying is false.
+        if !timeline.isPlaying && timeline.currentTime != lastRenderedTime {
+            feedbackProcessor?.reset()
+        }
+        lastRenderedTime = timeline.currentTime
+
         if timeline.currentTime != lastAnimatedTime {
             applyAnimation()
             lastAnimatedTime = timeline.currentTime

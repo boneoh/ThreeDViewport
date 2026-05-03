@@ -37,6 +37,21 @@ final class CameraController {
         return SIMD3<Float>(x, y, z)
     }
 
+    /// Unit vector pointing from the camera toward the target (world space).
+    var forwardVector: SIMD3<Float> {
+        simd_normalize(target - eyePosition)
+    }
+
+    /// Camera's right vector in world space (perpendicular to forward and world-up).
+    var rightVector: SIMD3<Float> {
+        simd_normalize(simd_cross(forwardVector, SIMD3<Float>(0, 1, 0)))
+    }
+
+    /// Camera's up vector in world space (perpendicular to right and forward).
+    var upVector: SIMD3<Float> {
+        simd_cross(rightVector, forwardVector)
+    }
+
     var viewMatrix: matrix_float4x4 {
         return makeLookAt(eye: eyePosition, center: target, up: SIMD3<Float>(0, 1, 0))
     }
@@ -74,6 +89,20 @@ final class CameraController {
         let up      = simd_cross(right, forward)
         target -= right * (deltaX * sensitivity * distance)
         target += up    * (deltaY * sensitivity * distance)
+    }
+
+    /// Free-look: camera position stays fixed; aim direction rotates.
+    /// Analogous to rotating an object in place — only the orientation changes.
+    /// After adjusting yaw/pitch, target is repositioned so eyePosition is unchanged.
+    func freeLook(deltaYaw: Float, deltaPitch: Float) {
+        let eye = eyePosition                       // save current position
+        yaw   -= deltaYaw
+        pitch  = max(-Float.pi / 2.0 + 0.01,
+                 min( Float.pi / 2.0 - 0.01, pitch - deltaPitch))
+        // Push target out along the new forward direction, keeping eye fixed.
+        let cosP   = cos(pitch)
+        let offset = SIMD3<Float>(cosP * sin(yaw), sin(pitch), cosP * cos(yaw))
+        target = eye - distance * offset
     }
 
     // MARK: - Convenience
