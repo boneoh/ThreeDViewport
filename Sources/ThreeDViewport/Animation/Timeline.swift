@@ -9,6 +9,7 @@ final class Timeline: ObservableObject {
     @Published var currentTime: Double = 0.0
     @Published var isPlaying: Bool = false
     @Published var duration: Double = 10.0
+    @Published var isLooping: Bool = false
 
     let frameRate: Double = 30.0
 
@@ -61,9 +62,14 @@ final class Timeline: ObservableObject {
         currentTime += dt
 
         if currentTime >= duration {
-            currentTime = duration
-            isPlaying = false
-            print("[DEBUG] Timeline: reached end at t=" + String(format: "%.3f", currentTime))
+            if isLooping {
+                currentTime = 0.0
+                print("[DEBUG] Timeline: looped back to t=0")
+            } else {
+                currentTime = duration
+                isPlaying = false
+                print("[DEBUG] Timeline: reached end at t=" + String(format: "%.3f", currentTime))
+            }
         }
 
         return true

@@ -61,6 +61,35 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
         print("[DEBUG] TimelineEditorWindowController: panel closed")
     }
 
+    // MARK: - Resize
+
+    /// Recalculates the required window height from the current track count and
+    /// resizes the panel if needed.  Call after loading a project or adding/removing
+    /// objects so the panel height matches the actual number of lanes.
+    /// The panel's top edge is kept fixed; the bottom edge grows or shrinks.
+    func updateWindowHeight() {
+        guard let panel = window else { return }
+        let numTracks = 1
+            + (editorView.sceneManager?.objects.count ?? 0)
+            + (editorView.lightManager?.lights.count  ?? 0)
+        let newContentH = Self.contentHeight(for: numTracks)
+
+        // Convert desired content height to a full frame height, then compare.
+        let sampleRect  = NSRect(x: 0, y: 0, width: panel.frame.width, height: newContentH)
+        let newFrameH   = panel.frameRect(forContentRect: sampleRect).height
+        let currentH    = panel.frame.height
+        guard abs(newFrameH - currentH) > 1 else { return }
+
+        // Anchor the top edge: lower the origin by the delta so the top stays put.
+        var f  = panel.frame
+        let dy = newFrameH - currentH
+        f.origin.y    -= dy
+        f.size.height += dy
+        panel.setFrame(f, display: true)
+        print("[DEBUG] TimelineEditorWindowController: resized — "
+            + "tracks=\(numTracks) contentH=\(newContentH)")
+    }
+
     // MARK: - Helpers
 
     private static func contentHeight(for numTracks: Int) -> CGFloat {

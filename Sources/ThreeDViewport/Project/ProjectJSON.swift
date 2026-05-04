@@ -1,6 +1,6 @@
 import Foundation
 
-// Phase 4/5/6/8/9/10: Codable structs that define the .3dvp project file format (JSON).
+// Phase 4/5/6/8/9/10/11: Codable structs that define the .3dvp project file format (JSON).
 // Version history:
 //   1 — initial: model path, camera, timeline, per-object keyframe tracks.
 //   2 — Phase 5: added cameraKeyframes array.
@@ -10,6 +10,7 @@ import Foundation
 //               repositioned objects are restored correctly without requiring a keyframe.
 //   5 — Phase 9: added feedback settings (isEnabled, interval, decay, length).
 //   6 — Phase 10: added lightKeyframeTracks — one array of keyframes per light slot (0–3).
+//   7 — Phase 11: added isLooping (loop playback toggle).
 //
 // Design rules:
 //   • No binary data inline — .glb files are referenced by absolute path.
@@ -21,7 +22,7 @@ import Foundation
 //     All new fields have defaults so older files load without error.
 
 struct ProjectData: Codable {
-    var version:             Int     = 6
+    var version:             Int     = 7
     var modelPath:           String? = nil   // v1/v2 compat; ignored when modelPaths non-empty.
     var modelPaths:          [String] = []   // v3 — ordered list of absolute .glb paths.
     var timeline:            TimelineData
@@ -36,6 +37,8 @@ struct ProjectData: Codable {
     /// One inner array per light slot (index 0–3). Empty inner array = no animation for that slot.
     /// Outer array may be shorter than the light count if trailing slots have no keyframes.
     var lightKeyframeTracks: [[LightKeyframeData]] = []
+    // v7 additions:
+    var isLooping:           Bool = false               // loop playback toggle; false = stop at end.
 }
 
 // v5: Feedback delay-line settings.  Defaults match FeedbackSettings initial values

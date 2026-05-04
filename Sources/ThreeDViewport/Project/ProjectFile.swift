@@ -43,7 +43,8 @@ final class ProjectFile {
             + "  models=" + String(data.modelPaths.count)
             + "  objects=" + String(data.objects.count)
             + "  keyframes=" + String(data.objects.reduce(0) { $0 + $1.keyframes.count })
-            + "  camKeyframes=" + String(data.cameraKeyframes.count))
+            + "  camKeyframes=" + String(data.cameraKeyframes.count)
+            + "  looping=" + String(data.isLooping))
     }
 
     // MARK: - Load
@@ -161,7 +162,7 @@ final class ProjectFile {
         }
 
         return ProjectData(
-            version:             6,
+            version:             7,
             modelPath:           nil,           // v3+ uses modelPaths instead
             modelPaths:          modelPaths,
             timeline:            timelineData,
@@ -170,7 +171,8 @@ final class ProjectFile {
             cameraKeyframes:     cameraKfData,
             isColorMode:         vp.renderSettings.isColorMode,
             feedback:            feedbackData,
-            lightKeyframeTracks: lightKfData
+            lightKeyframeTracks: lightKfData,
+            isLooping:           vp.timeline.isLooping
         )
     }
 
@@ -245,6 +247,10 @@ final class ProjectFile {
         vp.feedbackSettings.length    = fb.length
         print("[DEBUG] ProjectFile: feedback enabled=\(fb.isEnabled)"
             + " interval=\(fb.interval) decay=\(fb.decay) length=\(fb.length)")
+
+        // ── Loop toggle (v7) ──────────────────────────────────────────────────
+        vp.timeline.isLooping = data.isLooping
+        print("[DEBUG] ProjectFile: isLooping=\(data.isLooping)")
 
         // Replace demo animations with saved keyframes; restore base transforms.
         applyKeyframes(data.objects, to: vp)

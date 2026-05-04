@@ -57,17 +57,31 @@ final class TimelineEditorView: NSView {
     /// Called when the user presses Escape while in edit mode (discard changes).
     var onCancelEdit: (() -> Void)?
 
+    // ── Bidirectional sync callbacks (set by AppDelegate) ─────────────────────
+
+    /// Called when a lane row or diamond is clicked, so AppDelegate can switch the
+    /// viewport to the matching control mode / selection.
+    var onLaneSelected: ((TrackRef) -> Void)?
+
+    /// View that receives key events not handled by the timeline editor.
+    /// Set to the ViewportView so viewport shortcuts work even when the
+    /// Timeline Editor panel has keyboard focus.
+    weak var keyForwardTarget: NSView?
+
     // ── Layout constants ──────────────────────────────────────────────────────
 
     private let labelWidth:      CGFloat = 120
     private let rulerHeight:     CGFloat = 24
     private let laneHeight:      CGFloat = 28
     private let diamondHalfSize: CGFloat = 5
+    /// Extra space reserved on the right so keyframes at the last frame
+    /// are never flush against the window edge and remain easy to click.
+    private let rightPad:        CGFloat = 24
 
     /// Pixels per second — computed from view width and duration so the full
     /// timeline always fits without horizontal scrolling.
     private var pxPerSecond: CGFloat {
-        let trackWidth = max(1, bounds.width - labelWidth)
+        let trackWidth = max(1, bounds.width - labelWidth - rightPad)
         let dur        = max(0.001, timeline?.duration ?? 10.0)
         return trackWidth / CGFloat(dur)
     }
@@ -397,19 +411,27 @@ final class TimelineEditorView: NSView {
             return
         }
 
-        // Diamond hit → select diamond + scrub to its time
+        // Diamond hit → select diamond + scrub to its time.
+        // Double-click immediately enters edit mode.
         if let hit = hitTestDiamond(at: pt, tracks: tracks) {
             select(trackIndex: hit.trackIndex, kfIndex: hit.kfIndex)
             let times = keyframeTimes(for: tracks[hit.trackIndex].ref)
             if hit.kfIndex < times.count {
                 timeline?.seek(to: times[hit.kfIndex])
             }
+            // Notify viewport so it switches to the matching control mode.
+            onLaneSelected?(tracks[hit.trackIndex].ref)
+            if event.clickCount == 2 {
+                // Double-click: jump straight into edit mode (same as select + Return).
+                handleReturnKey(tracks: tracks)
+            }
             return
         }
 
-        // Lane hit → select lane, deselect any diamond
+        // Lane hit → select lane, deselect any diamond, notify viewport.
         if let lane = hitTestLane(at: pt, tracks: tracks) {
             select(trackIndex: lane, kfIndex: nil)
+            onLaneSelected?(tracks[lane].ref)
             return
         }
 
@@ -492,7 +514,13 @@ final class TimelineEditorView: NSView {
             nudgeSelected(by:  1.0 / 30.0, tracks: tracks)
 
         default:
-            super.keyDown(with: event)
+            // Forward unrecognised keys to the viewport so shortcuts like
+            // O / C / L / arrows still work while the timeline editor has focus.
+            if let target = keyForwardTarget {
+                target.keyDown(with: event)
+            } else {
+                super.keyDown(with: event)
+            }
         }
     }
 
@@ -508,6 +536,20 @@ final class TimelineEditorView: NSView {
         onCommitEdit?()
         isEditingKeyframe  = false
         selectedTrackIndex = nil
+        selectedKFIndex    = nil
+        needsDisplay       = true
+    }
+
+    /// Selects the lane matching `ref`.
+    /// If the lane is already selected (e.g. because the user just clicked a diamond
+    /// on it and `onLaneSelected` triggered a viewport mode change that bounced back
+    /// here) the call is a no-op so the existing `selectedKFIndex` is preserved —
+    /// without this guard, the round-trip clears the diamond and breaks drag.
+    func selectTrack(_ ref: TrackRef) {
+        let tracks = buildTracks()
+        guard let idx = tracks.firstIndex(where: { $0.ref == ref }) else { return }
+        guard idx != selectedTrackIndex else { return }   // same lane — keep diamond selection
+        selectedTrackIndex = idx
         selectedKFIndex    = nil
         needsDisplay       = true
     }

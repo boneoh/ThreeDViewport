@@ -35,6 +35,13 @@ struct TimelinePanel: View {
                 }
                 .disabled(exportState.isExporting)
 
+                // ── Loop toggle ───────────────────────────────────────────────
+                transportButton(label: "↺", tooltip: "Loop playback",
+                                isActive: timeline.isLooping) {
+                    timeline.isLooping.toggle()
+                }
+                .disabled(exportState.isExporting)
+
                 // ── Time display ──────────────────────────────────────────────
                 Text(timeString(timeline.currentTime))
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
@@ -204,11 +211,15 @@ struct TimelinePanel: View {
 
     @ViewBuilder
     private func transportButton(label: String, tooltip: String,
+                                  isActive: Bool = false,
                                   action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(label)
                 .font(.system(size: 14))
                 .frame(width: 28, height: 28)
+                .foregroundColor(isActive
+                    ? Color(NSColor.controlAccentColor)
+                    : Color(NSColor.labelColor))
         }
         .buttonStyle(.borderless)
         .help(tooltip)

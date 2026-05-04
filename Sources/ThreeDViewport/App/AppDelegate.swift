@@ -323,6 +323,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         viewportView?.newProject()
         currentProjectURL = nil
         window?.title = "ThreeDViewport"
+        timelineEditorWC?.updateWindowHeight()
         print("[DEBUG] AppDelegate: new project")
     }
 
@@ -411,6 +412,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             try ProjectFile.load(from: url, into: viewport)
             currentProjectURL = url
             window?.title = "ThreeDViewport — " + url.deletingPathExtension().lastPathComponent
+            // Resize the timeline editor if the number of tracks changed.
+            timelineEditorWC?.updateWindowHeight()
             print("[DEBUG] AppDelegate: project loaded from " + url.lastPathComponent)
         } catch {
             showErrorAlert(message: "Could not open project", detail: error.localizedDescription)
@@ -804,6 +807,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         viewport.onEnterKey = { [weak wc] in
             wc?.editorView.commitEditIfActive()
         }
+
+        // ── Timeline lane click → viewport control mode / selection ───────────
+        // Clicking any row (or its label, or a diamond on that row) in the
+        // timeline editor switches the viewport to the matching mode.
+        wc.editorView.onLaneSelected = { [weak viewport] ref in
+            guard let viewport = viewport else { return }
+            switch ref {
+            case .camera:
+                viewport.setControlMode(.camera)
+            case .object(let i):
+                viewport.sceneManager.selectedIndex = i
+                viewport.setControlMode(.object)
+                viewport.syncOverlayState()
+            case .light(let i):
+                viewport.lightManager.selectedIndex = i
+                viewport.setControlMode(.light)
+            }
+        }
+
+        // ── Viewport mode / selection change → timeline lane highlight ─────────
+        // Pressing C / L / O (or cycling with L / O) in the viewport updates
+        // the highlighted row in the timeline editor.
+        viewport.onControlModeChanged = { [weak wc] ref in
+            wc?.editorView.selectTrack(ref)
+        }
+
+        // ── Key forwarding: timeline editor → viewport ─────────────────────────
+        // Keys the timeline editor doesn't consume (e.g. C, L, O, arrows) are
+        // forwarded to the viewport so shortcuts work regardless of focus.
+        wc.editorView.keyForwardTarget = viewport
 
         timelineEditorWC = wc
         wc.showWindow(nil)

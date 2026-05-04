@@ -64,6 +64,10 @@ final class ViewportView: MTKView {
     /// Wired by AppDelegate to commit any active keyframe edit in the Timeline Editor.
     var onEnterKey: (() -> Void)?
 
+    /// Called whenever the active control mode or its selection changes.
+    /// AppDelegate wires this to keep the Timeline Editor's row highlight in sync.
+    var onControlModeChanged: ((TrackRef) -> Void)?
+
     // MARK: - Init
 
     init(frame: NSRect) {
@@ -143,7 +147,8 @@ final class ViewportView: MTKView {
     func newProject() {
         sceneManager.clear()
         timeline.stop()
-        timeline.duration = 10.0
+        timeline.duration  = 10.0
+        timeline.isLooping = false
         camera.yaw      = 0.0
         camera.pitch    = 0.4
         camera.distance = 5.0
@@ -222,10 +227,15 @@ final class ViewportView: MTKView {
     // MARK: - Control Mode (external access for edit-mode wiring)
 
     /// Sets the active control mode from outside the viewport (e.g. AppDelegate keyframe edit wiring).
-    /// Updates the HUD overlay automatically.
+    /// Updates the HUD overlay and notifies the timeline editor to highlight the matching lane.
     func setControlMode(_ mode: ControlMode) {
         controlMode = mode
         syncOverlayState()
+        switch mode {
+        case .camera:        onControlModeChanged?(.camera)
+        case .object:        onControlModeChanged?(.object(sceneManager.selectedIndex))
+        case .light:         onControlModeChanged?(.light(lightManager.selectedIndex))
+        }
     }
 
     // MARK: - Overlay sync
@@ -600,6 +610,8 @@ final class ViewportView: MTKView {
         static let rightBracket: UInt16 = 30   // ] and }
         // Commit / dismiss
         static let returnKey:    UInt16 = 36   // Return / Enter
+        // Keyframe insertion
+        static let insert:       UInt16 = 114  // Insert / Help key
     }
 
     // Step sizes for arrow-key navigation
@@ -611,6 +623,7 @@ final class ViewportView: MTKView {
     private let rotStep:       Float = Float.pi / 36.0  // 5° per key (object/camera rotation)
     private let intensityStep: Float = 0.1
     private let zoomStep:      Float = 0.1              // fraction of current distance per key
+    private let scaleStep:     Float = 1.05             // Option+=/− scales object by ±5% per key
 
     override func keyDown(with event: NSEvent) {
         let kc = event.keyCode
@@ -618,6 +631,19 @@ final class ViewportView: MTKView {
         // ── Return key — commit active keyframe edit in Timeline Editor ─────────
         if kc == KC.returnKey, !event.isARepeat {
             onEnterKey?()
+            return
+        }
+
+        // ── Insert key — stamp a keyframe for the current mode / selection ──────
+        if kc == KC.insert, !event.isARepeat {
+            switch controlMode {
+            case .camera:
+                addCameraKeyframeAtCurrentTime()
+            case .object:
+                addKeyframeAtCurrentTime()
+            case .light:
+                addLightKeyframeAtCurrentTime(forLightAt: lightManager.selectedIndex)
+            }
             return
         }
 
@@ -640,6 +666,7 @@ final class ViewportView: MTKView {
             case KC.c:
                 controlMode = .camera
                 syncOverlayState()
+                onControlModeChanged?(.camera)
                 return
 
             case KC.l:
@@ -650,6 +677,7 @@ final class ViewportView: MTKView {
                     controlMode = .light
                     syncOverlayState()
                 }
+                onControlModeChanged?(.light(lightManager.selectedIndex))
                 return
 
             case KC.o:
@@ -661,6 +689,7 @@ final class ViewportView: MTKView {
                     controlMode = .object
                     syncOverlayState()
                 }
+                onControlModeChanged?(.object(sceneManager.selectedIndex))
                 return
 
             default:
@@ -773,7 +802,7 @@ final class ViewportView: MTKView {
                 obj.transform = rotationMatrix4x4(q) * obj.transform
             }
 
-        // ── Plus / KP+ — zoom in / light depth in / object +Z ────────────────
+        // ── Plus / KP+ — zoom in / light depth in / object +Z / Option: scale up ─
         case KC.kpPlus, KC.regEqual:
             switch controlMode {
             case .camera:
@@ -783,11 +812,20 @@ final class ViewportView: MTKView {
                 lightManager.moveSelectedDepth(delta: translateStep * 2)
             case .object:
                 if let obj = sceneManager.selectedObject {
-                    obj.transform.columns.3.z += translateStep
+                    if event.modifierFlags.contains(.option) {
+                        // Option+= : scale object up 5%
+                        let sv = SIMD4<Float>(scaleStep, scaleStep, scaleStep, 1)
+                        obj.transform.columns.0 *= sv
+                        obj.transform.columns.1 *= sv
+                        obj.transform.columns.2 *= sv
+                        print("[DEBUG] ViewportView: object scale up ×\(scaleStep)")
+                    } else {
+                        obj.transform.columns.3.z += translateStep
+                    }
                 }
             }
 
-        // ── Minus / KP− — zoom out / light depth out / object −Z ─────────────
+        // ── Minus / KP− — zoom out / light depth out / object −Z / Option: scale down ─
         case KC.kpMinus, KC.regMinus:
             switch controlMode {
             case .camera:
@@ -796,7 +834,17 @@ final class ViewportView: MTKView {
                 lightManager.moveSelectedDepth(delta: -translateStep * 2)
             case .object:
                 if let obj = sceneManager.selectedObject {
-                    obj.transform.columns.3.z -= translateStep
+                    if event.modifierFlags.contains(.option) {
+                        // Option+- : scale object down 5%
+                        let s: Float = 1.0 / scaleStep
+                        let sv = SIMD4<Float>(s, s, s, 1)
+                        obj.transform.columns.0 *= sv
+                        obj.transform.columns.1 *= sv
+                        obj.transform.columns.2 *= sv
+                        print("[DEBUG] ViewportView: object scale down ×\(s)")
+                    } else {
+                        obj.transform.columns.3.z -= translateStep
+                    }
                 }
             }
 
