@@ -68,6 +68,10 @@ final class TimelineEditorView: NSView {
     /// Timeline Editor panel has keyboard focus.
     weak var keyForwardTarget: NSView?
 
+    /// Set to true by the ViewportView before it calls keyDown on us so we
+    /// know not to forward the event back (prevents a ping-pong loop).
+    var isReceivingForwardedKey: Bool = false
+
     // ── Layout constants ──────────────────────────────────────────────────────
 
     private let labelWidth:      CGFloat = 120
@@ -505,6 +509,21 @@ final class TimelineEditorView: NSView {
             guard !isEditingKeyframe else { return }
             insertKeyframeInSelectedLane(tracks: tracks)
 
+        case 115:       // Home → seek to first frame
+            guard !isEditingKeyframe else { super.keyDown(with: event); return }
+            timeline?.seek(to: 0)
+            needsDisplay = true
+
+        case 119:       // End → seek to last frame
+            guard !isEditingKeyframe else { super.keyDown(with: event); return }
+            if let dur = timeline?.duration { timeline?.seek(to: dur) }
+            needsDisplay = true
+
+        case 48:        // Tab / Shift+Tab → jump to adjacent keyframe in selected lane
+            guard !isEditingKeyframe else { super.keyDown(with: event); return }
+            seekToAdjacentKeyframe(backward: event.modifierFlags.contains(.shift),
+                                   tracks: tracks)
+
         case 123:       // Left arrow → nudge one frame earlier
             guard !isEditingKeyframe else { super.keyDown(with: event); return }
             nudgeSelected(by: -1.0 / 30.0, tracks: tracks)
@@ -516,8 +535,16 @@ final class TimelineEditorView: NSView {
         default:
             // Forward unrecognised keys to the viewport so shortcuts like
             // O / C / L / arrows still work while the timeline editor has focus.
-            if let target = keyForwardTarget {
-                target.keyDown(with: event)
+            // Set isReceivingForwardedKey on the target first so it doesn't
+            // bounce the event back here (prevents a ping-pong loop).
+            if let target = keyForwardTarget, !isReceivingForwardedKey {
+                if let vp = target as? ViewportView {
+                    vp.isReceivingForwardedKey = true
+                    vp.keyDown(with: event)
+                    vp.isReceivingForwardedKey = false
+                } else {
+                    target.keyDown(with: event)
+                }
             } else {
                 super.keyDown(with: event)
             }
@@ -669,6 +696,28 @@ final class TimelineEditorView: NSView {
         needsDisplay     = true
         print("[DEBUG] TimelineEditorView: inserted keyframe at t=\(String(format: "%.3f", t))"
             + " lane=\(ti)")
+    }
+
+    /// Seeks the playhead to the keyframe before or after the current time on the
+    /// selected lane.  Used by Tab / Shift+Tab in keyDown.
+    private func seekToAdjacentKeyframe(backward: Bool, tracks: TrackList) {
+        guard let ti = selectedTrackIndex else { return }
+        let ref   = tracks[ti].ref
+        let times = keyframeTimes(for: ref).sorted()
+        guard !times.isEmpty else { return }
+        let cur = timeline?.currentTime ?? 0
+        let eps = 1.0 / (timeline?.frameRate ?? 30.0) / 2
+        if backward {
+            if let t = times.last(where: { $0 < cur - eps }) {
+                timeline?.seek(to: t)
+                needsDisplay = true
+            }
+        } else {
+            if let t = times.first(where: { $0 > cur + eps }) {
+                timeline?.seek(to: t)
+                needsDisplay = true
+            }
+        }
     }
 
     private func nudgeSelected(by delta: Double, tracks: TrackList) {

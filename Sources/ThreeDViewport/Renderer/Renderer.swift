@@ -35,18 +35,24 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     // MARK: - Render mode
 
-    var isWireframe: Bool = false
-    var isColorMode: Bool = false   // false = greyscale (default)
+    var isWireframe:   Bool = false
+    var isColorMode:   Bool = false   // false = greyscale (default)
+    var showAxesGizmo: Bool = false
+
+    // Gizmo pipeline (no depth attachment, alpha-blended 2-D overlay)
+    private var gizmoPipelineState: MTLRenderPipelineState?
 
     // MARK: - Feedback (optional — set by ViewportView after init)
 
     var feedbackProcessor: FeedbackProcessor?
     var feedbackSettings:  FeedbackSettings?
 
-    private var lastAnimatedTime:  Double = -1.0
-    /// Tracks currentTime at the end of each frame so we can detect scrub / stop
-    /// while the timeline is not playing and reset the feedback queue accordingly.
-    private var lastRenderedTime:  Double = -1.0
+    private var lastAnimatedTime: Double = -1.0
+    /// currentTime at end of previous frame — detects manual scrub while paused.
+    private var lastRenderedTime: Double = -1.0
+    /// isPlaying state at end of previous frame — lets us distinguish "just stopped"
+    /// (natural end of playback) from "scrubbed while paused".
+    private var lastWasPlaying:   Bool   = false
 
     // One-shot material diagnostics — prints once per object on the first draw
     private var materialDebugPrinted: Set<String> = []
@@ -135,6 +141,32 @@ final class Renderer: NSObject, MTKViewDelegate {
         bgDepthDesc.depthCompareFunction = .always
         bgDepthDesc.isDepthWriteEnabled  = false
         backgroundDepthState = device.makeDepthStencilState(descriptor: bgDepthDesc)
+
+        // ── Axes gizmo pipeline ───────────────────────────────────────────────
+        guard let gizmoVertFn = library.makeFunction(name: "gizmo_vertex"),
+              let gizmoFragFn = library.makeFunction(name: "gizmo_fragment") else {
+            print("[DEBUG] Renderer: gizmo shaders not found")
+            return
+        }
+        let gizmoDesc = MTLRenderPipelineDescriptor()
+        gizmoDesc.label          = "Gizmo"
+        gizmoDesc.vertexFunction   = gizmoVertFn
+        gizmoDesc.fragmentFunction = gizmoFragFn
+        // Alpha-blend so axis lines composite cleanly over the scene
+        let gizmoCA = gizmoDesc.colorAttachments[0]!
+        gizmoCA.pixelFormat                 = .bgra8Unorm
+        gizmoCA.isBlendingEnabled           = true
+        gizmoCA.sourceRGBBlendFactor        = .sourceAlpha
+        gizmoCA.destinationRGBBlendFactor   = .oneMinusSourceAlpha
+        gizmoCA.sourceAlphaBlendFactor      = .one
+        gizmoCA.destinationAlphaBlendFactor = .zero
+        // No depth attachment — gizmo always renders on top
+        do {
+            gizmoPipelineState = try device.makeRenderPipelineState(descriptor: gizmoDesc)
+            print("[DEBUG] Renderer: gizmo pipeline created")
+        } catch {
+            print("[DEBUG] Renderer: gizmo pipeline failed — " + error.localizedDescription)
+        }
     }
 
     private func buildDummyBuffers() {
@@ -162,14 +194,14 @@ final class Renderer: NSObject, MTKViewDelegate {
     func draw(in view: MTKView) {
         timeline.tick()
 
-        // Reset feedback when the user stops or manually scrubs the playhead.
-        // Pause and reaching the end of playback leave the last blended frame intact.
-        // The check fires whenever currentTime changes while the timeline is not
-        // playing — stop() resets currentTime to 0, seek() sets it to an arbitrary
-        // value, and both happen only while isPlaying is false.
-        if !timeline.isPlaying && timeline.currentTime != lastRenderedTime {
+        // Reset feedback only when the user manually scrubs while already paused.
+        // "Just stopped" (isPlaying flipped to false this frame) must NOT reset —
+        // that would wipe the last feedback frame at the natural end of playback.
+        let justStopped = lastWasPlaying && !timeline.isPlaying
+        if !timeline.isPlaying && !justStopped && timeline.currentTime != lastRenderedTime {
             feedbackProcessor?.reset()
         }
+        lastWasPlaying   = timeline.isPlaying
         lastRenderedTime = timeline.currentTime
 
         if timeline.currentTime != lastAnimatedTime {
@@ -205,7 +237,11 @@ final class Renderer: NSObject, MTKViewDelegate {
             desc.colorAttachments[0].texture     = sceneTex
             desc.colorAttachments[0].loadAction  = .clear
             desc.colorAttachments[0].storeAction = .store
-            desc.colorAttachments[0].clearColor  = backgroundConfig.clearColor
+            // alpha=0 marks cleared pixels as background so the feedback blend
+            // shader can use scene.a as a content mask (geometry writes alpha=1).
+            let bc = backgroundConfig.clearColor
+            desc.colorAttachments[0].clearColor  = MTLClearColor(
+                red: bc.red, green: bc.green, blue: bc.blue, alpha: 0.0)
             desc.depthAttachment.texture         = depthTex
             desc.depthAttachment.loadAction      = .clear
             desc.depthAttachment.storeAction     = .dontCare
@@ -317,8 +353,89 @@ final class Renderer: NSObject, MTKViewDelegate {
             }
         }
 
+        // Axes gizmo overlay — drawn on top of everything (no depth test).
+        if showAxesGizmo {
+            drawGizmoPass(commandBuffer: commandBuffer,
+                          dest:          drawable.texture,
+                          width:         Int(view.drawableSize.width),
+                          height:        Int(view.drawableSize.height))
+        }
+
         commandBuffer.present(drawable)
         commandBuffer.commit()
+    }
+
+    // MARK: - Axes gizmo
+
+    /// Swift-side vertex struct matching the Metal `GizmoVertex` layout exactly.
+    /// float4 position (16 B) + float4 color (16 B) = 32 B, no padding needed.
+    private struct GizmoVertex {
+        var position: SIMD4<Float>  // xy = NDC, zw = 0,1
+        var color:    SIMD4<Float>
+    }
+
+    /// Renders a small XYZ orientation gizmo in the bottom-right corner of `dest`.
+    func drawGizmoPass(commandBuffer: MTLCommandBuffer,
+                        dest: MTLTexture,
+                        width: Int, height: Int) {
+        guard let pipeline = gizmoPipelineState else { return }
+
+        // Project world X/Y/Z axes through the camera's rotation (no translation).
+        // The view matrix upper-left 3×3 maps world dirs to camera screen coords.
+        let vm = camera.viewMatrix
+        // World axes projected: column index selects the axis (X=0, Y=1, Z=2).
+        // vm.columns.n.x = camera-right component; .y = camera-up component.
+        let xDir = SIMD2<Float>(vm.columns.0.x, vm.columns.0.y)
+        let yDir = SIMD2<Float>(vm.columns.1.x, vm.columns.1.y)
+        let zDir = SIMD2<Float>(vm.columns.2.x, vm.columns.2.y)
+
+        // Gizmo metrics (screen pixels → NDC)
+        let fw = Float(width); let fh = Float(height)
+        let gizmoRadius: Float = 36          // half-size of the gizmo box
+        let margin:      Float = 18
+        // Centre of gizmo in NDC (bottom-right corner; NDC y=−1 at bottom)
+        let cx = 1.0 - (margin + gizmoRadius) / fw * 2
+        let cy = -1.0 + (margin + gizmoRadius) / fh * 2
+        let scale     = gizmoRadius * 2 / min(fw, fh)  // axis length in NDC
+        let thickness = 2.5 / fh                        // line width in NDC
+
+        let axisData: [(SIMD2<Float>, SIMD4<Float>)] = [
+            (xDir, SIMD4<Float>(0.95, 0.25, 0.25, 1.0)),  // X — red
+            (yDir, SIMD4<Float>(0.25, 0.90, 0.25, 1.0)),  // Y — green
+            (zDir, SIMD4<Float>(0.35, 0.55, 1.00, 1.0)),  // Z — blue
+        ]
+
+        var verts: [GizmoVertex] = []
+        verts.reserveCapacity(axisData.count * 4)
+
+        for (dir, col) in axisData {
+            let ndx = dir.x * scale
+            let ndy = dir.y * scale
+            let ex  = cx + ndx; let ey = cy + ndy
+            let len = sqrt(ndx * ndx + ndy * ndy)
+            let px: Float = len > 0.0001 ? -ndy / len * thickness : 0
+            let py: Float = len > 0.0001 ?  ndx / len * thickness : thickness
+            // Four corners of the thin rectangle (triangleStrip order)
+            verts.append(GizmoVertex(position: SIMD4<Float>(cx - px, cy - py, 0, 1), color: col))
+            verts.append(GizmoVertex(position: SIMD4<Float>(cx + px, cy + py, 0, 1), color: col))
+            verts.append(GizmoVertex(position: SIMD4<Float>(ex - px, ey - py, 0, 1), color: col))
+            verts.append(GizmoVertex(position: SIMD4<Float>(ex + px, ey + py, 0, 1), color: col))
+        }
+
+        let passDesc = MTLRenderPassDescriptor()
+        passDesc.colorAttachments[0].texture     = dest
+        passDesc.colorAttachments[0].loadAction  = .load   // preserve scene content
+        passDesc.colorAttachments[0].storeAction = .store
+
+        guard let enc = commandBuffer.makeRenderCommandEncoder(descriptor: passDesc) else { return }
+        enc.setRenderPipelineState(pipeline)
+        verts.withUnsafeBytes { ptr in
+            enc.setVertexBytes(ptr.baseAddress!, length: ptr.count, index: 0)
+        }
+        for i in 0..<axisData.count {
+            enc.drawPrimitives(type: .triangleStrip, vertexStart: i * 4, vertexCount: 4)
+        }
+        enc.endEncoding()
     }
 
     // MARK: - Material helpers

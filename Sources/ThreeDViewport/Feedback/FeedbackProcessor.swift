@@ -23,6 +23,15 @@ import QuartzCore
 // On non-feedback frames (frameCounter % interval ≠ 0):
 //   Scene is displayed unchanged — no queue read/write.
 
+/// Uniform block passed to the feedback blend shader.
+/// Layout must match `struct FeedbackUniforms` in FeedbackShaders.metal exactly.
+struct FeedbackUniforms {
+    var decay:      Float   // blend weight 0–1
+    var blendMode:  UInt32  // BlendMode.rawValue
+    var swapLayers: UInt32  // 0 = scene on top, 1 = feedback on top
+    var padding:    UInt32  // keeps struct 16-byte aligned
+}
+
 final class FeedbackProcessor {
 
     let device: MTLDevice
@@ -225,7 +234,7 @@ final class FeedbackProcessor {
                          sceneTex:     scene,
                          feedbackTex:  queue[writeIndex],
                          outputTex:    output,
-                         decay:        settings.decay)
+                         settings:     settings)
 
             hasOutput = true
 
@@ -272,7 +281,7 @@ final class FeedbackProcessor {
                                sceneTex:     MTLTexture,
                                feedbackTex:  MTLTexture,
                                outputTex:    MTLTexture,
-                               decay:        Float) {
+                               settings:     FeedbackSettings) {
         guard let pipeline = blendPipeline else { return }
 
         let passDesc = MTLRenderPassDescriptor()
@@ -284,8 +293,13 @@ final class FeedbackProcessor {
         enc.setRenderPipelineState(pipeline)
         enc.setFragmentTexture(sceneTex,    index: 0)
         enc.setFragmentTexture(feedbackTex, index: 1)
-        var d = decay
-        enc.setFragmentBytes(&d, length: MemoryLayout<Float>.stride, index: 0)
+        var u = FeedbackUniforms(
+            decay:      settings.decay,
+            blendMode:  UInt32(settings.blendMode.rawValue),
+            swapLayers: settings.swapLayers ? 1 : 0,
+            padding:    0
+        )
+        enc.setFragmentBytes(&u, length: MemoryLayout<FeedbackUniforms>.stride, index: 0)
         enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         enc.endEncoding()
     }

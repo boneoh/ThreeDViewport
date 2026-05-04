@@ -72,21 +72,84 @@ struct FeedbackPanel: View {
                 Divider().padding(.bottom, 10)
 
                 if settings.isEnabled {
+                    // ── Blend mode picker ─────────────────────────────────────
+                    HStack(spacing: 6) {
+                        Text("Mode")
+                            .frame(width: 52, alignment: .leading)
+                            .foregroundColor(.secondary)
+                            .font(.caption)
+                        Picker("", selection: $settings.blendMode) {
+                            // Normal
+                            Text(BlendMode.normal.displayName).tag(BlendMode.normal)
+                            Divider()
+                            // Darkening
+                            Text(BlendMode.multiply.displayName).tag(BlendMode.multiply)
+                            Text(BlendMode.darken.displayName).tag(BlendMode.darken)
+                            Text(BlendMode.colorBurn.displayName).tag(BlendMode.colorBurn)
+                            Text(BlendMode.linearBurn.displayName).tag(BlendMode.linearBurn)
+                            Divider()
+                            // Lightening
+                            Text(BlendMode.screen.displayName).tag(BlendMode.screen)
+                            Text(BlendMode.lighten.displayName).tag(BlendMode.lighten)
+                            Text(BlendMode.colorDodge.displayName).tag(BlendMode.colorDodge)
+                            Text(BlendMode.linearDodge.displayName).tag(BlendMode.linearDodge)
+                            Divider()
+                            // Contrast
+                            Text(BlendMode.overlay.displayName).tag(BlendMode.overlay)
+                            Text(BlendMode.softLight.displayName).tag(BlendMode.softLight)
+                            Text(BlendMode.hardLight.displayName).tag(BlendMode.hardLight)
+                            Text(BlendMode.vividLight.displayName).tag(BlendMode.vividLight)
+                            Text(BlendMode.linearLight.displayName).tag(BlendMode.linearLight)
+                            Text(BlendMode.pinLight.displayName).tag(BlendMode.pinLight)
+                            Text(BlendMode.hardMix.displayName).tag(BlendMode.hardMix)
+                            Divider()
+                            // Difference
+                            Text(BlendMode.difference.displayName).tag(BlendMode.difference)
+                            Text(BlendMode.exclusion.displayName).tag(BlendMode.exclusion)
+                            Text(BlendMode.subtract.displayName).tag(BlendMode.subtract)
+                            Text(BlendMode.divide.displayName).tag(BlendMode.divide)
+                            Divider()
+                            // Component
+                            Text(BlendMode.hue.displayName).tag(BlendMode.hue)
+                            Text(BlendMode.saturation.displayName).tag(BlendMode.saturation)
+                            Text(BlendMode.color.displayName).tag(BlendMode.color)
+                            Text(BlendMode.luminosity.displayName).tag(BlendMode.luminosity)
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .font(.caption)
+                    }
+
+                    // ── Swap layers toggle ────────────────────────────────────
+                    HStack(spacing: 6) {
+                        Text("Swap")
+                            .frame(width: 52, alignment: .leading)
+                            .foregroundColor(.secondary)
+                            .font(.caption)
+                        Toggle("Feedback on top", isOn: $settings.swapLayers)
+                            .toggleStyle(.checkbox)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                    }
+
+                    Divider().padding(.vertical, 4)
+
                     // ── Parameters ────────────────────────────────────────────
                     VStack(alignment: .leading, spacing: 10) {
-
-                        IntSliderRow(
-                            label:  "Interval",
-                            value:  $settings.interval,
-                            range:  1...60,
-                            suffix: "fr"
-                        )
 
                         FloatSliderRow(
                             label:  "Decay",
                             value:  $settings.decay,
                             range:  0.0...1.0,
                             format: "%.2f"
+                        )
+
+                        IntSliderRow(
+                            label:  "Interval",
+                            value:  $settings.interval,
+                            range:  1...60,
+                            suffix: "fr"
                         )
 
                         IntSliderRow(

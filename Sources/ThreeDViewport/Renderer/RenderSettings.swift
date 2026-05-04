@@ -10,6 +10,10 @@ final class RenderSettings: ObservableObject {
     // false = greyscale (toggle with T or View > Color Rendering)
     @Published var isColorMode: Bool = true
 
+    // When true, a small XYZ orientation gizmo is rendered in the bottom-right
+    // corner of the viewport (and included in video exports).
+    @Published var showAxesGizmo: Bool = false
+
     init() {
         print("[DEBUG] RenderSettings: initialized — color mode")
     }

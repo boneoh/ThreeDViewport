@@ -11,6 +11,8 @@ import Foundation
 //   5 — Phase 9: added feedback settings (isEnabled, interval, decay, length).
 //   6 — Phase 10: added lightKeyframeTracks — one array of keyframes per light slot (0–3).
 //   7 — Phase 11: added isLooping (loop playback toggle).
+//   8 — Added background (mode, solid colour, gradient colours) and isWireframe.
+//   9 — Added blendMode and swapLayers to FeedbackData.
 //
 // Design rules:
 //   • No binary data inline — .glb files are referenced by absolute path.
@@ -22,32 +24,135 @@ import Foundation
 //     All new fields have defaults so older files load without error.
 
 struct ProjectData: Codable {
-    var version:             Int     = 7
+    var version:             Int     = 9
     var modelPath:           String? = nil   // v1/v2 compat; ignored when modelPaths non-empty.
     var modelPaths:          [String] = []   // v3 — ordered list of absolute .glb paths.
     var timeline:            TimelineData
     var camera:              CameraData
     var objects:             [ObjectData]
-    var cameraKeyframes:     [CameraKeyframeData] = []  // Phase 5; empty = no camera animation.
-    // v4 additions (default values make old files load cleanly):
-    var isColorMode:         Bool = true                // Phase 8 color / greyscale toggle.
-    // v5 additions:
-    var feedback:            FeedbackData = FeedbackData()  // feedback delay-line settings.
-    // v6 additions:
-    /// One inner array per light slot (index 0–3). Empty inner array = no animation for that slot.
-    /// Outer array may be shorter than the light count if trailing slots have no keyframes.
+    var cameraKeyframes:     [CameraKeyframeData] = []  // v2; empty = no camera animation.
+    var isColorMode:         Bool = true                // v4; color / greyscale toggle.
+    var feedback:            FeedbackData = FeedbackData()  // v5; feedback delay-line settings.
+    /// v6: one inner array per light slot (index 0–3).
     var lightKeyframeTracks: [[LightKeyframeData]] = []
-    // v7 additions:
-    var isLooping:           Bool = false               // loop playback toggle; false = stop at end.
+    var isLooping:           Bool = false               // v7; false = stop at end.
+    var background:          BackgroundData = BackgroundData()  // v8; background colour/gradient.
+    var isWireframe:         Bool = false               // v8; wireframe rendering toggle.
+    var showAxesGizmo:       Bool = false               // v8; XYZ orientation gizmo.
+
+    // MARK: - Memberwise init (required because we define init(from:) below)
+
+    init(version:             Int                    = 8,
+         modelPath:           String?                = nil,
+         modelPaths:          [String]               = [],
+         timeline:            TimelineData,
+         camera:              CameraData,
+         objects:             [ObjectData],
+         cameraKeyframes:     [CameraKeyframeData]   = [],
+         isColorMode:         Bool                   = true,
+         feedback:            FeedbackData           = FeedbackData(),
+         lightKeyframeTracks: [[LightKeyframeData]]  = [],
+         isLooping:           Bool                   = false,
+         background:          BackgroundData         = BackgroundData(),
+         isWireframe:         Bool                   = false,
+         showAxesGizmo:       Bool                   = false) {
+        self.version             = version
+        self.modelPath           = modelPath
+        self.modelPaths          = modelPaths
+        self.timeline            = timeline
+        self.camera              = camera
+        self.objects             = objects
+        self.cameraKeyframes     = cameraKeyframes
+        self.isColorMode         = isColorMode
+        self.feedback            = feedback
+        self.lightKeyframeTracks = lightKeyframeTracks
+        self.isLooping           = isLooping
+        self.background          = background
+        self.isWireframe         = isWireframe
+        self.showAxesGizmo       = showAxesGizmo
+    }
+
+    // MARK: - Custom decoder
+    //
+    // Swift's synthesized Codable throws DecodingError.keyNotFound for ANY missing key,
+    // even when the property has a default value.  We use try? so that project files saved
+    // by older app versions load cleanly — missing keys fall back to the field defaults above.
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // Required fields — present in every version
+        timeline = try c.decode(TimelineData.self,  forKey: .timeline)
+        camera   = try c.decode(CameraData.self,    forKey: .camera)
+        objects  = try c.decode([ObjectData].self,  forKey: .objects)
+        // Version-gated fields — absent in older files; fall back to defaults on failure
+        version             = (try? c.decode(Int.self,                   forKey: .version))             ?? 1
+        modelPath           =  try? c.decode(String.self,                forKey: .modelPath)
+        modelPaths          = (try? c.decode([String].self,              forKey: .modelPaths))          ?? []
+        cameraKeyframes     = (try? c.decode([CameraKeyframeData].self,  forKey: .cameraKeyframes))     ?? []
+        isColorMode         = (try? c.decode(Bool.self,                  forKey: .isColorMode))         ?? true
+        feedback            = (try? c.decode(FeedbackData.self,          forKey: .feedback))            ?? FeedbackData()
+        lightKeyframeTracks = (try? c.decode([[LightKeyframeData]].self, forKey: .lightKeyframeTracks)) ?? []
+        isLooping           = (try? c.decode(Bool.self,                  forKey: .isLooping))           ?? false
+        background          = (try? c.decode(BackgroundData.self,        forKey: .background))          ?? BackgroundData()
+        isWireframe         = (try? c.decode(Bool.self,                  forKey: .isWireframe))         ?? false
+        showAxesGizmo       = (try? c.decode(Bool.self,                  forKey: .showAxesGizmo))       ?? false
+    }
+}
+
+// v8: Background colour/gradient settings.  Defaults match BackgroundConfig initial values
+// (solid black) so v1–v7 project files load with the standard black background.
+struct BackgroundData: Codable {
+    var mode:            Int   = 0      // BackgroundMode raw value: 0=solid, 1=gradient
+    // Solid colour (RGB, linear 0–1)
+    var solidR:          Float = 0
+    var solidG:          Float = 0
+    var solidB:          Float = 0
+    // Gradient top colour
+    var gradTopR:        Float = 0.05
+    var gradTopG:        Float = 0.06
+    var gradTopB:        Float = 0.14
+    // Gradient bottom colour
+    var gradBottomR:     Float = 0
+    var gradBottomG:     Float = 0
+    var gradBottomB:     Float = 0
 }
 
 // v5: Feedback delay-line settings.  Defaults match FeedbackSettings initial values
 // so v1–v4 project files load with feedback disabled.
+// v9: added blendMode (Int raw value) and swapLayers (Bool).
 struct FeedbackData: Codable {
-    var isEnabled: Bool  = false
-    var interval:  Int   = 10
-    var decay:     Float = 0.5
-    var length:    Int   = 10
+    var isEnabled:  Bool  = false
+    var interval:   Int   = 10
+    var decay:      Float = 0.5
+    var length:     Int   = 10
+    var blendMode:  Int   = 0       // BlendMode.normal
+    var swapLayers: Bool  = false
+
+    // Custom decoder so files saved before v9 (missing blendMode/swapLayers)
+    // load cleanly using the defaults above.
+    init(from decoder: Decoder) throws {
+        let c        = try decoder.container(keyedBy: CodingKeys.self)
+        isEnabled    = (try? c.decode(Bool.self,  forKey: .isEnabled))  ?? false
+        interval     = (try? c.decode(Int.self,   forKey: .interval))   ?? 10
+        decay        = (try? c.decode(Float.self, forKey: .decay))      ?? 0.5
+        length       = (try? c.decode(Int.self,   forKey: .length))     ?? 10
+        blendMode    = (try? c.decode(Int.self,   forKey: .blendMode))  ?? 0
+        swapLayers   = (try? c.decode(Bool.self,  forKey: .swapLayers)) ?? false
+    }
+
+    init(isEnabled:  Bool  = false,
+         interval:   Int   = 10,
+         decay:      Float = 0.5,
+         length:     Int   = 10,
+         blendMode:  Int   = 0,
+         swapLayers: Bool  = false) {
+        self.isEnabled  = isEnabled
+        self.interval   = interval
+        self.decay      = decay
+        self.length     = length
+        self.blendMode  = blendMode
+        self.swapLayers = swapLayers
+    }
 }
 
 struct TimelineData: Codable {

@@ -60,13 +60,20 @@ final class VideoExporter {
     private let sceneManager:      SceneManager
     private let camera:            CameraController
     private let lightManager:      LightManager
+    private let backgroundConfig:  BackgroundConfig
     private let pipelineState:     MTLRenderPipelineState
     private let depthStencilState: MTLDepthStencilState
     private let animDuration:      Double
     private let frameRate:         Double
 
-    // Phase 8: color/greyscale mode matching the live display
-    var isColorMode: Bool = false
+    // Phase 8+: rendering options matching the live display
+    var isColorMode:   Bool = false
+    var isWireframe:   Bool = false
+    var showAxesGizmo: Bool = false
+
+    // Background gradient pipeline (mirrors Renderer's background pipeline)
+    private var backgroundPipelineState: MTLRenderPipelineState?
+    private var backgroundDepthState:    MTLDepthStencilState?
 
     // Feedback settings — nil means no feedback during export
     var feedbackSettings: FeedbackSettings?
@@ -75,6 +82,9 @@ final class VideoExporter {
     private var dummyUVBuffer:      MTLBuffer?
     private var dummyTangentBuffer: MTLBuffer?
 
+    // Gizmo pipeline — built lazily from the same Metal library as the scene pipeline
+    private var gizmoPipelineState: MTLRenderPipelineState?
+
     // MARK: - Init
 
     init?(device:            MTLDevice,
@@ -82,6 +92,7 @@ final class VideoExporter {
           sceneManager:      SceneManager,
           camera:            CameraController,
           lightManager:      LightManager,
+          backgroundConfig:  BackgroundConfig,
           timeline:          Timeline,
           pipelineState:     MTLRenderPipelineState,
           depthStencilState: MTLDepthStencilState) {
@@ -91,6 +102,7 @@ final class VideoExporter {
         self.sceneManager      = sceneManager
         self.camera            = camera
         self.lightManager      = lightManager
+        self.backgroundConfig  = backgroundConfig
         self.pipelineState     = pipelineState
         self.depthStencilState = depthStencilState
         self.animDuration      = timeline.duration
@@ -105,6 +117,57 @@ final class VideoExporter {
         dummyTangentBuffer = device.makeBuffer(bytes: &dummyTan,
                                                length: 4 * MemoryLayout<Float>.stride,
                                                options: .storageModeShared)
+
+        // Background gradient pipeline — same shaders as the live renderer
+        if let library  = try? device.makeDefaultLibrary(bundle: Bundle.module),
+           let bgV      = library.makeFunction(name: "background_vertex"),
+           let bgF      = library.makeFunction(name: "background_fragment") {
+            let bgDesc = MTLRenderPipelineDescriptor()
+            bgDesc.label            = "BackgroundExport"
+            bgDesc.vertexFunction   = bgV
+            bgDesc.fragmentFunction = bgF
+            bgDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
+            bgDesc.depthAttachmentPixelFormat      = .depth32Float
+            backgroundPipelineState = try? device.makeRenderPipelineState(descriptor: bgDesc)
+
+            let bgDepthDesc = MTLDepthStencilDescriptor()
+            bgDepthDesc.depthCompareFunction = .always
+            bgDepthDesc.isDepthWriteEnabled  = false
+            backgroundDepthState = device.makeDepthStencilState(descriptor: bgDepthDesc)
+
+            if backgroundPipelineState != nil {
+                print("[DEBUG] VideoExporter: background pipeline created")
+            } else {
+                print("[DEBUG] VideoExporter: background pipeline makeRenderPipelineState failed")
+            }
+        } else {
+            print("[DEBUG] VideoExporter: background shaders not found in bundle")
+        }
+
+        // Gizmo pipeline — same shaders as the live renderer
+        if let library  = try? device.makeDefaultLibrary(bundle: Bundle.module),
+           let gizmoV   = library.makeFunction(name: "gizmo_vertex"),
+           let gizmoF   = library.makeFunction(name: "gizmo_fragment") {
+            let gizmoDesc = MTLRenderPipelineDescriptor()
+            gizmoDesc.label            = "GizmoExport"
+            gizmoDesc.vertexFunction   = gizmoV
+            gizmoDesc.fragmentFunction = gizmoF
+            let gCA = gizmoDesc.colorAttachments[0]!
+            gCA.pixelFormat                 = .bgra8Unorm
+            gCA.isBlendingEnabled           = true
+            gCA.sourceRGBBlendFactor        = .sourceAlpha
+            gCA.destinationRGBBlendFactor   = .oneMinusSourceAlpha
+            gCA.sourceAlphaBlendFactor      = .one
+            gCA.destinationAlphaBlendFactor = .zero
+            gizmoPipelineState = try? device.makeRenderPipelineState(descriptor: gizmoDesc)
+            if gizmoPipelineState != nil {
+                print("[DEBUG] VideoExporter: gizmo pipeline created")
+            } else {
+                print("[DEBUG] VideoExporter: gizmo pipeline makeRenderPipelineState failed")
+            }
+        } else {
+            print("[DEBUG] VideoExporter: gizmo shaders not found in bundle")
+        }
 
         print("[DEBUG] VideoExporter: initialized — duration="
             + String(format: "%.1f", timeline.duration)
@@ -360,17 +423,37 @@ final class VideoExporter {
         passDesc.colorAttachments[0].texture     = renderTarget
         passDesc.colorAttachments[0].loadAction  = .clear
         passDesc.colorAttachments[0].storeAction = .store
-        passDesc.colorAttachments[0].clearColor  = MTLClearColor(
-            red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0)   // pure black for keying/compositing
+        // alpha=0 for background pixels when feedback is active (content mask).
+        // When feedback is inactive renderTarget == colorTex so alpha is irrelevant.
+        let bc = backgroundConfig.clearColor
+        passDesc.colorAttachments[0].clearColor  = feedbackActive
+            ? MTLClearColor(red: bc.red, green: bc.green, blue: bc.blue, alpha: 0.0)
+            : bc
         passDesc.depthAttachment.texture          = renderDepth
         passDesc.depthAttachment.loadAction       = .clear
         passDesc.depthAttachment.storeAction      = .dontCare
         passDesc.depthAttachment.clearDepth       = 1.0
 
         if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: passDesc) {
+
+            // ── Background gradient (drawn before scene geometry) ─────────────
+            if backgroundConfig.mode == .gradient,
+               let bgPipe  = backgroundPipelineState,
+               let bgDepth = backgroundDepthState {
+                encoder.setRenderPipelineState(bgPipe)
+                encoder.setDepthStencilState(bgDepth)
+                encoder.setCullMode(.none)
+                var bgUniforms = backgroundConfig.backgroundUniforms
+                encoder.setFragmentBytes(&bgUniforms,
+                                         length: MemoryLayout<BackgroundUniforms>.stride,
+                                         index: 0)
+                encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+            }
+
+            // ── Scene geometry ────────────────────────────────────────────────
             encoder.setRenderPipelineState(pipelineState)
             encoder.setDepthStencilState(depthStencilState)
-            encoder.setTriangleFillMode(.fill)
+            encoder.setTriangleFillMode(isWireframe ? .lines : .fill)
 
             // LightUniforms — constant across all objects
             var lightUniforms = lightManager.buildLightUniforms()
@@ -438,6 +521,11 @@ final class VideoExporter {
             fp.process(commandBuffer: commandBuffer, dest: colorTex, settings: fs)
         }
 
+        // ── Axes gizmo overlay (bottom-right corner) ──────────────────────────
+        if showAxesGizmo {
+            drawGizmoPass(commandBuffer: commandBuffer, dest: colorTex)
+        }
+
         // ── Blit color → staging; synchronize if needed for CPU readback ──────
         if let blit = commandBuffer.makeBlitCommandEncoder() {
             blit.copy(from: colorTex, to: stagingTex)
@@ -449,6 +537,68 @@ final class VideoExporter {
 
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()  // must finish before getBytes
+    }
+
+    // MARK: - Axes gizmo (mirrors Renderer.drawGizmoPass exactly)
+
+    /// Swift vertex struct — matches Metal `GizmoVertex` (float4 + float4 = 32 B).
+    private struct GizmoVertex {
+        var position: SIMD4<Float>
+        var color:    SIMD4<Float>
+    }
+
+    private func drawGizmoPass(commandBuffer: MTLCommandBuffer,
+                                dest: MTLTexture) {
+        guard let pipeline = gizmoPipelineState else { return }
+
+        let vm   = camera.viewMatrix
+        let xDir = SIMD2<Float>(vm.columns.0.x, vm.columns.0.y)
+        let yDir = SIMD2<Float>(vm.columns.1.x, vm.columns.1.y)
+        let zDir = SIMD2<Float>(vm.columns.2.x, vm.columns.2.y)
+
+        let fw: Float = Float(width); let fh: Float = Float(height)
+        let gizmoRadius: Float = 36
+        let margin:      Float = 18
+        let cx    = 1.0 - (margin + gizmoRadius) / fw * 2
+        let cy    = -1.0 + (margin + gizmoRadius) / fh * 2
+        let scale = gizmoRadius * 2 / min(fw, fh)
+        let thickness = 2.5 / fh
+
+        let axisData: [(SIMD2<Float>, SIMD4<Float>)] = [
+            (xDir, SIMD4<Float>(0.95, 0.25, 0.25, 1.0)),
+            (yDir, SIMD4<Float>(0.25, 0.90, 0.25, 1.0)),
+            (zDir, SIMD4<Float>(0.35, 0.55, 1.00, 1.0)),
+        ]
+
+        var verts: [GizmoVertex] = []
+        verts.reserveCapacity(axisData.count * 4)
+        for (dir, col) in axisData {
+            let ndx = dir.x * scale
+            let ndy = dir.y * scale
+            let ex  = cx + ndx; let ey = cy + ndy
+            let len = sqrt(ndx * ndx + ndy * ndy)
+            let px: Float = len > 0.0001 ? -ndy / len * thickness : 0
+            let py: Float = len > 0.0001 ?  ndx / len * thickness : thickness
+            verts.append(GizmoVertex(position: SIMD4<Float>(cx - px, cy - py, 0, 1), color: col))
+            verts.append(GizmoVertex(position: SIMD4<Float>(cx + px, cy + py, 0, 1), color: col))
+            verts.append(GizmoVertex(position: SIMD4<Float>(ex - px, ey - py, 0, 1), color: col))
+            verts.append(GizmoVertex(position: SIMD4<Float>(ex + px, ey + py, 0, 1), color: col))
+        }
+
+        let passDesc = MTLRenderPassDescriptor()
+        passDesc.colorAttachments[0].texture     = dest
+        passDesc.colorAttachments[0].loadAction  = .load
+        passDesc.colorAttachments[0].storeAction = .store
+
+        guard let enc = commandBuffer.makeRenderCommandEncoder(descriptor: passDesc) else { return }
+        enc.setRenderPipelineState(pipeline)
+        verts.withUnsafeBytes { ptr in
+            enc.setVertexBytes(ptr.baseAddress!, length: ptr.count, index: 0)
+        }
+        for i in 0..<axisData.count {
+            enc.drawPrimitives(type: .triangleStrip, vertexStart: i * 4, vertexCount: 4)
+        }
+        enc.endEncoding()
     }
 
     // MARK: - Pixel buffer readback

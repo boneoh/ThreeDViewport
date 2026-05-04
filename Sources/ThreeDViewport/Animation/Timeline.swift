@@ -10,6 +10,9 @@ final class Timeline: ObservableObject {
     @Published var isPlaying: Bool = false
     @Published var duration: Double = 10.0
     @Published var isLooping: Bool = false
+    /// Increments each time the timeline wraps around in loop mode.
+    /// ViewportView subscribes to this to clear the feedback buffer on each loop.
+    @Published var loopRevolution: Int = 0
 
     let frameRate: Double = 30.0
 
@@ -64,7 +67,8 @@ final class Timeline: ObservableObject {
         if currentTime >= duration {
             if isLooping {
                 currentTime = 0.0
-                print("[DEBUG] Timeline: looped back to t=0")
+                loopRevolution += 1
+                print("[DEBUG] Timeline: looped back to t=0 (revolution=\(loopRevolution))")
             } else {
                 currentTime = duration
                 isPlaying = false

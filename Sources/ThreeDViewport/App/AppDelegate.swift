@@ -138,6 +138,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mainMenu.addItem(appItem)
         let appMenu = NSMenu()
         appItem.submenu = appMenu
+
+        let aboutItem = NSMenuItem(
+            title: "About ThreeDViewport",
+            action: #selector(showAbout(_:)),
+            keyEquivalent: ""
+        )
+        aboutItem.target = self
+        appMenu.addItem(aboutItem)
+
+        appMenu.addItem(.separator())
+
         appMenu.addItem(NSMenuItem(
             title: "Quit ThreeDViewport",
             action: #selector(NSApplication.terminate(_:)),
@@ -227,7 +238,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         greyItem.target = self
         viewMenu.addItem(greyItem)
 
-        // Wireframe — keyboard shortcut G; checkmark driven by validateMenuItem
+        // Wireframe — checkmark driven by validateMenuItem
         let wireItem = NSMenuItem(
             title: "Wireframe",
             action: #selector(toggleWireframe(_:)),
@@ -235,6 +246,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         wireItem.target = self
         viewMenu.addItem(wireItem)
+
+        // Axes Gizmo — shows XYZ orientation widget in the bottom-right corner
+        let gizmoItem = NSMenuItem(
+            title: "Axes Gizmo",
+            action: #selector(toggleAxesGizmo(_:)),
+            keyEquivalent: ""
+        )
+        gizmoItem.target = self
+        viewMenu.addItem(gizmoItem)
+
+        viewMenu.addItem(.separator())
+
+        // Loop Playback — when on, animation restarts instead of stopping at the end
+        let loopItem = NSMenuItem(
+            title: "Loop Playback",
+            action: #selector(toggleLoopPlayback(_:)),
+            keyEquivalent: ""
+        )
+        loopItem.target = self
+        viewMenu.addItem(loopItem)
 
         // ── Window menu — panels + macOS-standard items ────────────────────────
         let windowItem = NSMenuItem()
@@ -294,6 +325,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         NSApplication.shared.mainMenu = mainMenu
         print("[DEBUG] AppDelegate: menu setup complete")
+    }
+
+    // MARK: - About
+
+    @objc private func showAbout(_ sender: Any) {
+        NSApp.orderFrontStandardAboutPanel(options: [
+            .applicationName:    "ThreeDViewport",
+            .credits: NSAttributedString(
+                string: "A Metal-accelerated 3D animation viewport.\n"
+                      + "Load glTF/GLB models, animate with keyframes,\n"
+                      + "and export to ProRes video.",
+                attributes: [
+                    .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+                ]
+            )
+        ])
     }
 
     // MARK: - New Project
@@ -492,6 +539,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             + String(viewportView?.renderer?.isWireframe ?? false))
     }
 
+    @objc private func toggleAxesGizmo(_ sender: Any) {
+        viewportView?.renderSettings.showAxesGizmo.toggle()
+        print("[DEBUG] AppDelegate: axesGizmo toggled to "
+            + String(viewportView?.renderSettings.showAxesGizmo ?? false))
+    }
+
+    @objc private func toggleLoopPlayback(_ sender: Any) {
+        viewportView?.timeline.isLooping.toggle()
+        print("[DEBUG] AppDelegate: loopPlayback toggled to "
+            + String(viewportView?.timeline.isLooping ?? false))
+    }
+
     // Keep menu item checkmarks in sync with current rendering state.
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(toggleColorMode(_:)) {
@@ -502,6 +561,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if menuItem.action == #selector(toggleWireframe(_:)) {
             let isWireframe = viewportView?.renderer?.isWireframe ?? false
             menuItem.state = isWireframe ? .on : .off
+        }
+        if menuItem.action == #selector(toggleAxesGizmo(_:)) {
+            let isOn = viewportView?.renderSettings.showAxesGizmo ?? false
+            menuItem.state = isOn ? .on : .off
+        }
+        if menuItem.action == #selector(toggleLoopPlayback(_:)) {
+            let isOn = viewportView?.timeline.isLooping ?? false
+            menuItem.state = isOn ? .on : .off
         }
         return true
     }
@@ -833,10 +900,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             wc?.editorView.selectTrack(ref)
         }
 
-        // ── Key forwarding: timeline editor → viewport ─────────────────────────
-        // Keys the timeline editor doesn't consume (e.g. C, L, O, arrows) are
-        // forwarded to the viewport so shortcuts work regardless of focus.
+        // ── Bidirectional key forwarding ───────────────────────────────────────
+        // Timeline editor → viewport: unhandled keys reach the viewport.
         wc.editorView.keyForwardTarget = viewport
+        // Viewport → timeline editor: unhandled keys reach the timeline editor.
+        viewport.timelineKeyTarget = wc.editorView
 
         timelineEditorWC = wc
         wc.showWindow(nil)

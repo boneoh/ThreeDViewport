@@ -32,9 +32,11 @@ final class ViewportView: MTKView {
     let timeline:         Timeline
     var renderer: Renderer?
 
-    // Phase 8: observable rendering settings (color / greyscale toggle)
+    // Phase 8: observable rendering settings (color / greyscale / gizmo)
     let renderSettings = RenderSettings()
-    private var colorModeCancellable: AnyCancellable?
+    private var colorModeCancellable:   AnyCancellable?
+    private var axesGizmoCancellable:   AnyCancellable?
+    private var loopRevCancellable:     AnyCancellable?
 
     // Feedback delay-line system
     let feedbackSettings  = FeedbackSettings()
@@ -67,6 +69,13 @@ final class ViewportView: MTKView {
     /// Called whenever the active control mode or its selection changes.
     /// AppDelegate wires this to keep the Timeline Editor's row highlight in sync.
     var onControlModeChanged: ((TrackRef) -> Void)?
+
+    /// Timeline Editor view to forward unhandled keys to.  Set by AppDelegate.
+    weak var timelineKeyTarget: TimelineEditorView?
+
+    /// Set to true by the Timeline Editor before it calls keyDown on us so we
+    /// know not to forward the event back (prevents a ping-pong loop).
+    var isReceivingForwardedKey: Bool = false
 
     // MARK: - Init
 
@@ -113,10 +122,14 @@ final class ViewportView: MTKView {
         renderer?.feedbackProcessor = feedbackProcessor
         renderer?.feedbackSettings  = feedbackSettings
 
-        // Sync renderSettings → renderer whenever the toggle changes
+        // Sync renderSettings → renderer whenever toggles change
         colorModeCancellable = renderSettings.$isColorMode.sink { [weak self] value in
             self?.renderer?.isColorMode = value
             print("[DEBUG] ViewportView: colorMode = " + (value ? "color" : "greyscale"))
+        }
+        axesGizmoCancellable = renderSettings.$showAxesGizmo.sink { [weak self] value in
+            self?.renderer?.showAxesGizmo = value
+            print("[DEBUG] ViewportView: showAxesGizmo = \(value)")
         }
 
         // Reset feedback queue whenever playback starts so old frames don't contaminate new runs
@@ -126,11 +139,13 @@ final class ViewportView: MTKView {
                 self?.feedbackProcessor.reset()
             }
 
-        // Wire visibility toggle callback
-        overlayState.onToggleVisibility = { [weak self] index in
-            self?.sceneManager.toggleVisibility(at: index)
-            self?.syncOverlayState()
-        }
+        // Clear feedback buffer each time the loop wraps so end-of-loop content
+        // doesn't bleed into the beginning of the next loop.
+        loopRevCancellable = timeline.$loopRevolution
+            .dropFirst()
+            .sink { [weak self] _ in
+                self?.feedbackProcessor.reset()
+            }
 
         syncOverlayState()
     }
@@ -240,13 +255,20 @@ final class ViewportView: MTKView {
 
     // MARK: - Overlay sync
 
-    // Rebuilds the HUD state from live scene data.
-    // Call after any mutation that changes object count, names, or visibility.
+    // Rebuilds the minimal HUD state from live scene data.
+    // Call after any mode change or selection change.
     func syncOverlayState() {
-        overlayState.controlMode      = controlMode
-        overlayState.objectNames      = sceneManager.objects.map { $0.name }
-        overlayState.objectVisibility = sceneManager.objects.map { $0.isVisible }
-        overlayState.selectedIndex    = sceneManager.selectedIndex
+        overlayState.controlMode = controlMode
+        switch controlMode {
+        case .camera:
+            overlayState.selectedItemName = ""
+        case .object:
+            let idx = sceneManager.selectedIndex
+            overlayState.selectedItemName = idx < sceneManager.objects.count
+                ? sceneManager.objects[idx].name : ""
+        case .light:
+            overlayState.selectedItemName = "Light \(lightManager.selectedIndex + 1)"
+        }
     }
 
     // MARK: - Auto-normalization
@@ -443,6 +465,7 @@ final class ViewportView: MTKView {
             sceneManager:      sceneManager,
             camera:            camera,
             lightManager:      lightManager,
+            backgroundConfig:  backgroundConfig,
             timeline:          timeline,
             pipelineState:     pipeline,
             depthStencilState: depth
@@ -452,6 +475,8 @@ final class ViewportView: MTKView {
         }
 
         exporter.isColorMode      = renderSettings.isColorMode
+        exporter.isWireframe      = renderer?.isWireframe      ?? false
+        exporter.showAxesGizmo    = renderSettings.showAxesGizmo
         exporter.feedbackSettings = feedbackSettings
         feedbackProcessor.reset()   // clear live queue; exporter has its own processor
         timeline.pause()
@@ -580,6 +605,37 @@ final class ViewportView: MTKView {
         }
     }
 
+    // MARK: - Keyframe navigation
+
+    /// Seeks the playhead to the next (backward=false) or previous (backward=true)
+    /// keyframe on the track that matches the current control mode and selection.
+    func seekToAdjacentKeyframe(backward: Bool) {
+        let times: [Double]
+        switch controlMode {
+        case .camera:
+            times = camera.keyframeTrack?.keyframes.map { $0.time } ?? []
+        case .object:
+            let idx = sceneManager.selectedIndex
+            times = idx < sceneManager.objects.count
+                ? (sceneManager.objects[idx].keyframeTrack?.keyframes.map { $0.time } ?? [])
+                : []
+        case .light:
+            let idx = lightManager.selectedIndex
+            times = idx < lightManager.keyframeTracks.count
+                ? (lightManager.keyframeTracks[idx]?.keyframes.map { $0.time } ?? [])
+                : []
+        }
+        guard !times.isEmpty else { return }
+        let sorted = times.sorted()
+        let cur    = timeline.currentTime
+        let eps    = 1.0 / timeline.frameRate / 2  // half-frame tolerance
+        if backward {
+            if let t = sorted.last(where: { $0 < cur - eps }) { timeline.seek(to: t) }
+        } else {
+            if let t = sorted.first(where: { $0 > cur + eps }) { timeline.seek(to: t) }
+        }
+    }
+
     // MARK: - Keyboard Input
 
     // Key code constants
@@ -612,6 +668,10 @@ final class ViewportView: MTKView {
         static let returnKey:    UInt16 = 36   // Return / Enter
         // Keyframe insertion
         static let insert:       UInt16 = 114  // Insert / Help key
+        // Playhead navigation
+        static let home:         UInt16 = 115  // Home
+        static let end:          UInt16 = 119  // End
+        static let tab:          UInt16 = 48   // Tab
     }
 
     // Step sizes for arrow-key navigation
@@ -644,6 +704,25 @@ final class ViewportView: MTKView {
             case .light:
                 addLightKeyframeAtCurrentTime(forLightAt: lightManager.selectedIndex)
             }
+            return
+        }
+
+        // ── Home — jump playhead to start ─────────────────────────────────────
+        if kc == KC.home, !event.isARepeat {
+            timeline.seek(to: 0)
+            return
+        }
+
+        // ── End — jump playhead to end ────────────────────────────────────────
+        if kc == KC.end, !event.isARepeat {
+            timeline.seek(to: timeline.duration)
+            return
+        }
+
+        // ── Tab / Shift+Tab — next / previous keyframe for active track ───────
+        if kc == KC.tab, !event.isARepeat {
+            let backward = event.modifierFlags.contains(.shift)
+            seekToAdjacentKeyframe(backward: backward)
             return
         }
 
@@ -849,7 +928,15 @@ final class ViewportView: MTKView {
             }
 
         default:
-            super.keyDown(with: event)
+            // Forward unrecognised keys to the Timeline Editor (if present and not
+            // already bouncing a key back to us — prevents a ping-pong loop).
+            if let target = timelineKeyTarget, !isReceivingForwardedKey {
+                target.isReceivingForwardedKey = true
+                target.keyDown(with: event)
+                target.isReceivingForwardedKey = false
+            } else {
+                super.keyDown(with: event)
+            }
         }
     }
 

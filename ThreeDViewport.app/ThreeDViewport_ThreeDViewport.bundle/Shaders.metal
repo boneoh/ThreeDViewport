@@ -306,5 +306,35 @@ fragment float4 background_fragment(
     constant BackgroundUniforms &bg [[buffer(0)]]
 ) {
     float3 color = mix(bg.colorBottom.rgb, bg.colorTop.rgb, in.y);
-    return float4(color, 1.0);
+    // Alpha=0 marks this as a background pixel.
+    // The feedback blend shader uses scene.a to distinguish background (0) from
+    // geometry (1) so blend modes only interact with actual rendered content.
+    // For the non-feedback path (direct-to-drawable), alpha is ignored by the display.
+    return float4(color, 0.0);
+}
+
+// ── Axes Gizmo ────────────────────────────────────────────────────────────────
+// Simple 2-D overlay pass.  Each vertex is a screen-space NDC position plus
+// an RGBA colour.  No depth buffer — gizmo always renders on top.
+
+struct GizmoVertex {
+    float4 position;   // xy = NDC, zw unused (set to 0,1 on Swift side)
+    float4 color;
+};
+
+struct GizmoVOut {
+    float4 position [[position]];
+    float4 color;
+};
+
+vertex GizmoVOut gizmo_vertex(uint vid [[vertex_id]],
+                               device const GizmoVertex *v [[buffer(0)]]) {
+    GizmoVOut out;
+    out.position = float4(v[vid].position.xy, 0.0, 1.0);
+    out.color    = v[vid].color;
+    return out;
+}
+
+fragment float4 gizmo_fragment(GizmoVOut in [[stage_in]]) {
+    return in.color;
 }

@@ -113,7 +113,7 @@ struct TimelinePanel: View {
                             .controlSize(.small)
                         Text(String(format: "Exporting %.0f%%", exportState.progress * 100))
                             .font(.system(size: 11, weight: .medium, design: .monospaced))
-                            .foregroundColor(Color(NSColor.secondaryLabelColor))
+                            .foregroundColor(.white)
                             .frame(width: 100, alignment: .leading)
                     }
                 } else {

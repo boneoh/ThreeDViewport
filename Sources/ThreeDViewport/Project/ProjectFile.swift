@@ -38,13 +38,15 @@ final class ProjectFile {
 
         try json.write(to: url, options: .atomic)
 
-        print("[DEBUG] ProjectFile: saved "
+        print("[DEBUG] ProjectFile: saved v\(data.version) "
             + String(json.count) + " bytes → " + url.lastPathComponent
             + "  models=" + String(data.modelPaths.count)
             + "  objects=" + String(data.objects.count)
             + "  keyframes=" + String(data.objects.reduce(0) { $0 + $1.keyframes.count })
             + "  camKeyframes=" + String(data.cameraKeyframes.count)
-            + "  looping=" + String(data.isLooping))
+            + "  looping=" + String(data.isLooping)
+            + "  wireframe=" + String(data.isWireframe)
+            + "  bgMode=" + String(data.background.mode))
     }
 
     // MARK: - Load
@@ -138,10 +140,12 @@ final class ProjectFile {
         // ── Feedback settings (v5) ────────────────────────────────────────────
         let fs = vp.feedbackSettings
         let feedbackData = FeedbackData(
-            isEnabled: fs.isEnabled,
-            interval:  fs.interval,
-            decay:     fs.decay,
-            length:    fs.length
+            isEnabled:  fs.isEnabled,
+            interval:   fs.interval,
+            decay:      fs.decay,
+            length:     fs.length,
+            blendMode:  fs.blendMode.rawValue,
+            swapLayers: fs.swapLayers
         )
 
         // ── Light keyframe tracks (v6) ────────────────────────────────────────
@@ -161,8 +165,23 @@ final class ProjectFile {
             }
         }
 
+        // ── Background settings (v8) ──────────────────────────────────────────
+        let bg = vp.backgroundConfig
+        let backgroundData = BackgroundData(
+            mode:        bg.mode.rawValue,
+            solidR:      bg.solidColor.x,
+            solidG:      bg.solidColor.y,
+            solidB:      bg.solidColor.z,
+            gradTopR:    bg.gradientTop.x,
+            gradTopG:    bg.gradientTop.y,
+            gradTopB:    bg.gradientTop.z,
+            gradBottomR: bg.gradientBottom.x,
+            gradBottomG: bg.gradientBottom.y,
+            gradBottomB: bg.gradientBottom.z
+        )
+
         return ProjectData(
-            version:             7,
+            version:             9,
             modelPath:           nil,           // v3+ uses modelPaths instead
             modelPaths:          modelPaths,
             timeline:            timelineData,
@@ -172,7 +191,10 @@ final class ProjectFile {
             isColorMode:         vp.renderSettings.isColorMode,
             feedback:            feedbackData,
             lightKeyframeTracks: lightKfData,
-            isLooping:           vp.timeline.isLooping
+            isLooping:           vp.timeline.isLooping,
+            background:          backgroundData,
+            isWireframe:         vp.renderer?.isWireframe ?? false,
+            showAxesGizmo:       vp.renderSettings.showAxesGizmo
         )
     }
 
@@ -241,16 +263,34 @@ final class ProjectFile {
 
         // ── Feedback settings (v5) ────────────────────────────────────────────
         let fb = data.feedback
-        vp.feedbackSettings.isEnabled = fb.isEnabled
-        vp.feedbackSettings.interval  = fb.interval
-        vp.feedbackSettings.decay     = fb.decay
-        vp.feedbackSettings.length    = fb.length
+        vp.feedbackSettings.isEnabled  = fb.isEnabled
+        vp.feedbackSettings.interval   = fb.interval
+        vp.feedbackSettings.decay      = fb.decay
+        vp.feedbackSettings.length     = fb.length
+        vp.feedbackSettings.blendMode  = BlendMode(rawValue: fb.blendMode) ?? .normal
+        vp.feedbackSettings.swapLayers = fb.swapLayers
         print("[DEBUG] ProjectFile: feedback enabled=\(fb.isEnabled)"
-            + " interval=\(fb.interval) decay=\(fb.decay) length=\(fb.length)")
+            + " interval=\(fb.interval) decay=\(fb.decay) length=\(fb.length)"
+            + " blendMode=\(fb.blendMode) swapLayers=\(fb.swapLayers)")
 
         // ── Loop toggle (v7) ──────────────────────────────────────────────────
         vp.timeline.isLooping = data.isLooping
         print("[DEBUG] ProjectFile: isLooping=\(data.isLooping)")
+
+        // ── Background settings (v8) ──────────────────────────────────────────
+        let bd = data.background
+        vp.backgroundConfig.mode         = BackgroundMode(rawValue: bd.mode) ?? .solid
+        vp.backgroundConfig.solidColor   = SIMD3<Float>(bd.solidR,      bd.solidG,      bd.solidB)
+        vp.backgroundConfig.gradientTop  = SIMD3<Float>(bd.gradTopR,    bd.gradTopG,    bd.gradTopB)
+        vp.backgroundConfig.gradientBottom = SIMD3<Float>(bd.gradBottomR, bd.gradBottomG, bd.gradBottomB)
+        print("[DEBUG] ProjectFile: background mode=\(vp.backgroundConfig.mode.displayName)"
+            + " solid=(\(bd.solidR),\(bd.solidG),\(bd.solidB))")
+
+        // ── Wireframe + axes gizmo (v8) ───────────────────────────────────────
+        vp.renderer?.isWireframe          = data.isWireframe
+        vp.renderSettings.showAxesGizmo   = data.showAxesGizmo
+        print("[DEBUG] ProjectFile: isWireframe=\(data.isWireframe)"
+            + " showAxesGizmo=\(data.showAxesGizmo)")
 
         // Replace demo animations with saved keyframes; restore base transforms.
         applyKeyframes(data.objects, to: vp)
