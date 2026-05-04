@@ -1,6 +1,6 @@
 import Foundation
 
-// Phase 4/5/6/8/9: Codable structs that define the .3dvp project file format (JSON).
+// Phase 4/5/6/8/9/10: Codable structs that define the .3dvp project file format (JSON).
 // Version history:
 //   1 — initial: model path, camera, timeline, per-object keyframe tracks.
 //   2 — Phase 5: added cameraKeyframes array.
@@ -9,6 +9,7 @@ import Foundation
 //   4 — Phase 8: added isColorMode; added baseTransformMatrix per object so manually
 //               repositioned objects are restored correctly without requiring a keyframe.
 //   5 — Phase 9: added feedback settings (isEnabled, interval, decay, length).
+//   6 — Phase 10: added lightKeyframeTracks — one array of keyframes per light slot (0–3).
 //
 // Design rules:
 //   • No binary data inline — .glb files are referenced by absolute path.
@@ -20,17 +21,21 @@ import Foundation
 //     All new fields have defaults so older files load without error.
 
 struct ProjectData: Codable {
-    var version:         Int     = 5
-    var modelPath:       String? = nil  // v1/v2 compat — single model path; ignored when modelPaths non-empty.
-    var modelPaths:      [String] = []  // v3 — ordered list of absolute .glb paths.
-    var timeline:        TimelineData
-    var camera:          CameraData
-    var objects:         [ObjectData]
-    var cameraKeyframes: [CameraKeyframeData] = []  // Phase 5; empty = no camera animation.
+    var version:             Int     = 6
+    var modelPath:           String? = nil   // v1/v2 compat; ignored when modelPaths non-empty.
+    var modelPaths:          [String] = []   // v3 — ordered list of absolute .glb paths.
+    var timeline:            TimelineData
+    var camera:              CameraData
+    var objects:             [ObjectData]
+    var cameraKeyframes:     [CameraKeyframeData] = []  // Phase 5; empty = no camera animation.
     // v4 additions (default values make old files load cleanly):
-    var isColorMode:     Bool = true                // Phase 8 color / greyscale toggle.
+    var isColorMode:         Bool = true                // Phase 8 color / greyscale toggle.
     // v5 additions:
-    var feedback:        FeedbackData = FeedbackData()  // feedback delay-line settings.
+    var feedback:            FeedbackData = FeedbackData()  // feedback delay-line settings.
+    // v6 additions:
+    /// One inner array per light slot (index 0–3). Empty inner array = no animation for that slot.
+    /// Outer array may be shorter than the light count if trailing slots have no keyframes.
+    var lightKeyframeTracks: [[LightKeyframeData]] = []
 }
 
 // v5: Feedback delay-line settings.  Defaults match FeedbackSettings initial values
@@ -85,4 +90,17 @@ struct CameraKeyframeData: Codable {
     var targetX:  Float
     var targetY:  Float
     var targetZ:  Float
+}
+
+// v6: One saved light keyframe — intensity, colour, direction, position.
+// Type, cone angles, and enabled state are not animated; restore them from LightConfig.
+struct LightKeyframeData: Codable {
+    var time:      Double
+    var intensity: Float
+    // Colour components
+    var r: Float; var g: Float; var b: Float
+    // Direction (normalised)
+    var dx: Float; var dy: Float; var dz: Float
+    // Position
+    var px: Float; var py: Float; var pz: Float
 }

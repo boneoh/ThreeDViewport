@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
+import simd
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
@@ -16,6 +17,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // Timeline editor (AppKit canvas panel).
     private var timelineEditorWC: TimelineEditorWindowController?
+
+    // ── Keyframe edit-mode snapshot ───────────────────────────────────────────
+    // Stores the state that existed when the user entered edit mode, so we can
+    // restore it on Escape / cancel.
+    private enum KFEditSnapshot {
+        case object(index: Int, savedTransform: matrix_float4x4, kfTime: Double)
+        case camera(yaw: Float, pitch: Float, distance: Float,
+                    target: SIMD3<Float>, kfTime: Double)
+        case light(index: Int, savedIntensity: Float, savedColor: SIMD3<Float>,
+                   savedDirection: SIMD3<Float>, savedPosition: SIMD3<Float>, kfTime: Double)
+    }
+    private var kfEditSnapshot: KFEditSnapshot? = nil
 
     // Tracks the last saved/opened project URL for ⌘S "save in place".
     private var currentProjectURL: URL?
@@ -136,17 +149,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let fileMenu = NSMenu(title: "File")
         fileItem.submenu = fileMenu
 
-        // New Project (⌘N)
-        let newProjectItem = NSMenuItem(
-            title: "New Project",
-            action: #selector(newProject(_:)),
-            keyEquivalent: "n"
-        )
-        newProjectItem.target = self
-        fileMenu.addItem(newProjectItem)
-
-        fileMenu.addItem(.separator())
-
         // Open Model — replaces entire scene (⌘O)
         let openModelItem = NSMenuItem(
             title: "Open Model...",
@@ -156,7 +158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         openModelItem.target = self
         fileMenu.addItem(openModelItem)
 
-        // Add Model to Scene — appends without clearing (⌘⇧O)  Phase 6
+        // Add Model to Scene — appends without clearing (⌘⇧O)
         let addModelItem = NSMenuItem(
             title: "Add Model to Scene...",
             action: #selector(addModelToScene(_:)),
@@ -166,6 +168,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         fileMenu.addItem(addModelItem)
 
         fileMenu.addItem(.separator())
+
+        // New Project (⌘N)
+        let newProjectItem = NSMenuItem(
+            title: "New Project",
+            action: #selector(newProject(_:)),
+            keyEquivalent: "n"
+        )
+        newProjectItem.target = self
+        fileMenu.addItem(newProjectItem)
 
         let openProjectItem = NSMenuItem(
             title: "Open Project...",
@@ -201,51 +212,85 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         exportItem.target = self
         fileMenu.addItem(exportItem)
 
-        // ── View menu ─────────────────────────────────────────────────────────
+        // ── View menu — rendering toggles only ───────────────────────────────
         let viewItem = NSMenuItem()
         mainMenu.addItem(viewItem)
         let viewMenu = NSMenu(title: "View")
         viewItem.submenu = viewMenu
 
-        let lightsItem = NSMenuItem(
-            title: "Lights & Background...",
-            action: #selector(showLightsInspector(_:)),
-            keyEquivalent: "l"
-        )
-        lightsItem.target = self
-        viewMenu.addItem(lightsItem)
-
-        let feedbackItem = NSMenuItem(
-            title: "Feedback...",
-            action: #selector(showFeedbackPanel(_:)),
-            keyEquivalent: "f"
-        )
-        feedbackItem.target = self
-        viewMenu.addItem(feedbackItem)
-
-        viewMenu.addItem(.separator())
-
-        let colorModeItem = NSMenuItem(
-            title: "Color Rendering",
+        // Greyscale Mode — checkmark driven by validateMenuItem
+        let greyItem = NSMenuItem(
+            title: "Greyscale Mode",
             action: #selector(toggleColorMode(_:)),
             keyEquivalent: "t"
         )
-        colorModeItem.target = self
-        viewMenu.addItem(colorModeItem)
+        greyItem.target = self
+        viewMenu.addItem(greyItem)
 
-        // ── Window menu ───────────────────────────────────────────────────────
+        // Wireframe — keyboard shortcut G; checkmark driven by validateMenuItem
+        let wireItem = NSMenuItem(
+            title: "Wireframe",
+            action: #selector(toggleWireframe(_:)),
+            keyEquivalent: ""
+        )
+        wireItem.target = self
+        viewMenu.addItem(wireItem)
+
+        // ── Window menu — panels + macOS-standard items ────────────────────────
         let windowItem = NSMenuItem()
         mainMenu.addItem(windowItem)
         let windowMenu = NSMenu(title: "Window")
         windowItem.submenu = windowMenu
 
+        // Standard macOS window management
+        windowMenu.addItem(NSMenuItem(
+            title: "Minimize",
+            action: #selector(NSWindow.performMiniaturize(_:)),
+            keyEquivalent: "m"
+        ))
+        windowMenu.addItem(NSMenuItem(
+            title: "Zoom",
+            action: #selector(NSWindow.performZoom(_:)),
+            keyEquivalent: ""
+        ))
+
+        windowMenu.addItem(.separator())
+
+        windowMenu.addItem(NSMenuItem(
+            title: "Bring All to Front",
+            action: #selector(NSApplication.arrangeInFront(_:)),
+            keyEquivalent: ""
+        ))
+
+        windowMenu.addItem(.separator())
+
+        // Floating inspector panels
+        let lightsItem = NSMenuItem(
+            title: "Lights & Background…",
+            action: #selector(showLightsInspector(_:)),
+            keyEquivalent: "l"
+        )
+        lightsItem.target = self
+        windowMenu.addItem(lightsItem)
+
+        let feedbackItem = NSMenuItem(
+            title: "Feedback…",
+            action: #selector(showFeedbackPanel(_:)),
+            keyEquivalent: "f"
+        )
+        feedbackItem.target = self
+        windowMenu.addItem(feedbackItem)
+
         let timelineEditorItem = NSMenuItem(
             title: "Timeline Editor",
             action: #selector(showTimelineEditor(_:)),
-            keyEquivalent: ""
+            keyEquivalent: "j"
         )
         timelineEditorItem.target = self
         windowMenu.addItem(timelineEditorItem)
+
+        // Register as the system Window menu so AppKit tracks open windows.
+        NSApplication.shared.windowsMenu = windowMenu
 
         NSApplication.shared.mainMenu = mainMenu
         print("[DEBUG] AppDelegate: menu setup complete")
@@ -430,7 +475,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         print("[DEBUG] AppDelegate: alert — " + message + " — " + detail)
     }
 
-    // MARK: - Color Mode Toggle (Phase 8)
+    // MARK: - Rendering Toggles
 
     @objc private func toggleColorMode(_ sender: Any) {
         viewportView?.renderSettings.isColorMode.toggle()
@@ -438,11 +483,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             + String(viewportView?.renderSettings.isColorMode ?? false))
     }
 
-    // Keep menu item title and checkmark in sync with current state.
+    @objc private func toggleWireframe(_ sender: Any) {
+        viewportView?.renderer?.isWireframe.toggle()
+        print("[DEBUG] AppDelegate: wireframe toggled to "
+            + String(viewportView?.renderer?.isWireframe ?? false))
+    }
+
+    // Keep menu item checkmarks in sync with current rendering state.
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(toggleColorMode(_:)) {
-            let isColor = viewportView?.renderSettings.isColorMode ?? false
-            menuItem.title = isColor ? "Color Rendering  ✓" : "Color Rendering"
+            // Checkmark when greyscale is active (isColorMode == false).
+            let isGreyscale = !(viewportView?.renderSettings.isColorMode ?? true)
+            menuItem.state = isGreyscale ? .on : .off
+        }
+        if menuItem.action == #selector(toggleWireframe(_:)) {
+            let isWireframe = viewportView?.renderer?.isWireframe ?? false
+            menuItem.state = isWireframe ? .on : .off
         }
         return true
     }
@@ -559,13 +615,194 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let wc = TimelineEditorWindowController(
             timeline:     viewport.timeline,
             sceneManager: viewport.sceneManager,
-            camera:       viewport.camera
+            camera:       viewport.camera,
+            lightManager: viewport.lightManager
         )
         wc.editorView.onInsertObjectKeyframe = { [weak viewport] index in
             viewport?.addKeyframeAtCurrentTime(forObjectAt: index)
         }
         wc.editorView.onInsertCameraKeyframe = { [weak viewport] in
             viewport?.addCameraKeyframeAtCurrentTime()
+        }
+        wc.editorView.onInsertLightKeyframe = { [weak viewport] index in
+            viewport?.addLightKeyframeAtCurrentTime(forLightAt: index)
+        }
+
+        // ── Enter edit mode ───────────────────────────────────────────────────
+        // Called when the user presses Return on a selected diamond.
+        // Save the pose that the keyframe currently stores, seek to its time,
+        // and switch the viewport to the appropriate control mode so the user
+        // can adjust the pose live with normal mouse / keyboard controls.
+        wc.editorView.onEnterEditMode = { [weak self, weak viewport] ref, kfTime in
+            guard let self = self, let viewport = viewport else { return }
+
+            // Make sure we're paused so the renderer won't keep advancing time.
+            viewport.timeline.pause()
+
+            // Seek to the keyframe time — triggers applyAnimation() on the next draw,
+            // setting obj.transform / camera properties to the stored keyframe pose.
+            viewport.timeline.seek(to: kfTime)
+
+            switch ref {
+            case .camera:
+                // Evaluate the camera track at kfTime to get the exact saved values.
+                let c = viewport.camera
+                if let track = c.keyframeTrack,
+                   let state = track.evaluate(at: kfTime) {
+                    self.kfEditSnapshot = .camera(
+                        yaw:      state.yaw,
+                        pitch:    state.pitch,
+                        distance: state.distance,
+                        target:   state.target,
+                        kfTime:   kfTime
+                    )
+                } else {
+                    // Fallback: save the current live state.
+                    self.kfEditSnapshot = .camera(
+                        yaw:      c.yaw,
+                        pitch:    c.pitch,
+                        distance: c.distance,
+                        target:   c.target,
+                        kfTime:   kfTime
+                    )
+                }
+                viewport.setControlMode(.camera)
+                print("[DEBUG] AppDelegate: entered camera keyframe edit at t="
+                    + String(format: "%.3f", kfTime))
+
+            case .object(let i):
+                guard i < viewport.sceneManager.objects.count else { return }
+                let obj = viewport.sceneManager.objects[i]
+                // Evaluate the track at kfTime to get the saved transform.
+                let savedTransform: matrix_float4x4
+                if let track = obj.keyframeTrack,
+                   let delta = track.evaluate(at: kfTime) {
+                    savedTransform = obj.baseTransform * delta
+                } else {
+                    savedTransform = obj.transform
+                }
+                self.kfEditSnapshot = .object(
+                    index:          i,
+                    savedTransform: savedTransform,
+                    kfTime:         kfTime
+                )
+                // Select this object and enter Object mode so viewport controls target it.
+                viewport.sceneManager.selectedIndex = i
+                viewport.setControlMode(.object)
+                print("[DEBUG] AppDelegate: entered object keyframe edit index=\(i)"
+                    + " t=" + String(format: "%.3f", kfTime))
+
+            case .light(let i):
+                guard i < viewport.lightManager.lights.count else { return }
+                // Evaluate the light track at kfTime to get the saved values.
+                let lm = viewport.lightManager
+                let savedIntensity:  Float
+                let savedColor:      SIMD3<Float>
+                let savedDirection:  SIMD3<Float>
+                let savedPosition:   SIMD3<Float>
+                if i < lm.keyframeTracks.count,
+                   let track = lm.keyframeTracks[i],
+                   let state = track.evaluate(at: kfTime) {
+                    savedIntensity  = state.intensity
+                    savedColor      = state.color
+                    savedDirection  = state.direction
+                    savedPosition   = state.position
+                } else {
+                    let light       = lm.lights[i]
+                    savedIntensity  = light.intensity
+                    savedColor      = light.color
+                    savedDirection  = light.direction
+                    savedPosition   = light.position
+                }
+                self.kfEditSnapshot = .light(
+                    index:          i,
+                    savedIntensity: savedIntensity,
+                    savedColor:     savedColor,
+                    savedDirection: savedDirection,
+                    savedPosition:  savedPosition,
+                    kfTime:         kfTime
+                )
+                // Select this light and enter Light mode.
+                viewport.lightManager.selectedIndex = i
+                viewport.setControlMode(.light)
+                print("[DEBUG] AppDelegate: entered light keyframe edit index=\(i)"
+                    + " t=" + String(format: "%.3f", kfTime))
+            }
+        }
+
+        // ── Commit edit ───────────────────────────────────────────────────────
+        // The user pressed Return a second time.  The object/camera is already at
+        // the new pose (the user moved it live).  Write a keyframe — addKeyframe
+        // deduplicates within 1 ms, so this naturally overwrites the old one.
+        wc.editorView.onCommitEdit = { [weak self, weak viewport] in
+            guard let self = self,
+                  let snapshot = self.kfEditSnapshot,
+                  let viewport = viewport else { return }
+
+            switch snapshot {
+            case .object(let index, _, let kfTime):
+                viewport.timeline.seek(to: kfTime)
+                viewport.addKeyframeAtCurrentTime(forObjectAt: index)
+                print("[DEBUG] AppDelegate: committed object keyframe edit index=\(index)"
+                    + " t=" + String(format: "%.3f", kfTime))
+
+            case .camera(_, _, _, _, let kfTime):
+                viewport.timeline.seek(to: kfTime)
+                viewport.addCameraKeyframeAtCurrentTime()
+                print("[DEBUG] AppDelegate: committed camera keyframe edit"
+                    + " t=" + String(format: "%.3f", kfTime))
+
+            case .light(let index, _, _, _, _, let kfTime):
+                viewport.timeline.seek(to: kfTime)
+                viewport.addLightKeyframeAtCurrentTime(forLightAt: index)
+                print("[DEBUG] AppDelegate: committed light keyframe edit index=\(index)"
+                    + " t=" + String(format: "%.3f", kfTime))
+            }
+
+            self.kfEditSnapshot = nil
+        }
+
+        // ── Cancel edit ───────────────────────────────────────────────────────
+        // The user pressed Escape.  Restore the saved pose so the keyframe's
+        // original state is visible again.
+        wc.editorView.onCancelEdit = { [weak self, weak viewport] in
+            guard let self = self,
+                  let snapshot = self.kfEditSnapshot,
+                  let viewport = viewport else { return }
+
+            switch snapshot {
+            case .object(let index, let savedTransform, let kfTime):
+                guard index < viewport.sceneManager.objects.count else { return }
+                viewport.sceneManager.objects[index].transform = savedTransform
+                print("[DEBUG] AppDelegate: cancelled object keyframe edit index=\(index)"
+                    + " t=" + String(format: "%.3f", kfTime))
+
+            case .camera(let yaw, let pitch, let distance, let target, let kfTime):
+                let c      = viewport.camera
+                c.yaw      = yaw
+                c.pitch    = pitch
+                c.distance = distance
+                c.target   = target
+                print("[DEBUG] AppDelegate: cancelled camera keyframe edit"
+                    + " t=" + String(format: "%.3f", kfTime))
+
+            case .light(let index, let savedIntensity, let savedColor,
+                        let savedDirection, let savedPosition, let kfTime):
+                guard index < viewport.lightManager.lights.count else { return }
+                viewport.lightManager.lights[index].intensity  = savedIntensity
+                viewport.lightManager.lights[index].color      = savedColor
+                viewport.lightManager.lights[index].direction  = savedDirection
+                viewport.lightManager.lights[index].position   = savedPosition
+                print("[DEBUG] AppDelegate: cancelled light keyframe edit index=\(index)"
+                    + " t=" + String(format: "%.3f", kfTime))
+            }
+
+            self.kfEditSnapshot = nil
+        }
+
+        // Wire viewport Return key → commit any active keyframe edit.
+        viewport.onEnterKey = { [weak wc] in
+            wc?.editorView.commitEditIfActive()
         }
 
         timelineEditorWC = wc

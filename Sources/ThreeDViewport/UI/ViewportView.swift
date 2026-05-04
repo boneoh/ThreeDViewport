@@ -60,6 +60,10 @@ final class ViewportView: MTKView {
     // Holds the VideoExporter alive for the duration of an export.
     private var activeExporter: VideoExporter?
 
+    /// Called when the user presses Return/Enter in the viewport.
+    /// Wired by AppDelegate to commit any active keyframe edit in the Timeline Editor.
+    var onEnterKey: (() -> Void)?
+
     // MARK: - Init
 
     init(frame: NSRect) {
@@ -215,6 +219,15 @@ final class ViewportView: MTKView {
         }
     }
 
+    // MARK: - Control Mode (external access for edit-mode wiring)
+
+    /// Sets the active control mode from outside the viewport (e.g. AppDelegate keyframe edit wiring).
+    /// Updates the HUD overlay automatically.
+    func setControlMode(_ mode: ControlMode) {
+        controlMode = mode
+        syncOverlayState()
+    }
+
     // MARK: - Overlay sync
 
     // Rebuilds the HUD state from live scene data.
@@ -340,6 +353,40 @@ final class ViewportView: MTKView {
 
         print("[DEBUG] ViewportView: keyframe added at t=" + String(format: "%.3f", timeline.currentTime)
             + " for '" + obj.name + "'")
+    }
+
+    // MARK: - Add Light Keyframe
+
+    /// Stamps a keyframe for the light at `index` using its current live state.
+    /// Called by the Timeline Editor's Insert key handler and by edit-mode commit.
+    func addLightKeyframeAtCurrentTime(forLightAt index: Int) {
+        guard index >= 0, index < lightManager.lights.count else {
+            print("[DEBUG] ViewportView: addLightKeyframeAtCurrentTime — index out of range")
+            return
+        }
+        let light = lightManager.lights[index]
+
+        // Create the track slot if this is the first keyframe for this light.
+        while lightManager.keyframeTracks.count <= index {
+            lightManager.keyframeTracks.append(nil)
+        }
+        if lightManager.keyframeTracks[index] == nil {
+            lightManager.keyframeTracks[index] = LightKeyframeTrack()
+            print("[DEBUG] ViewportView: created LightKeyframeTrack for light \(index)")
+        }
+
+        let kf = LightKeyframe(
+            time:      timeline.currentTime,
+            intensity: light.intensity,
+            color:     light.color,
+            direction: light.direction,
+            position:  light.position
+        )
+        lightManager.keyframeTracks[index]?.addKeyframe(kf)
+
+        print("[DEBUG] ViewportView: light keyframe added at t="
+            + String(format: "%.3f", timeline.currentTime)
+            + " light=\(index)")
     }
 
     // MARK: - Add Camera Keyframe
@@ -551,6 +598,8 @@ final class ViewportView: MTKView {
         // Roll (object) — both shifted and unshifted land on same key code
         static let leftBracket:  UInt16 = 33   // [ and {
         static let rightBracket: UInt16 = 30   // ] and }
+        // Commit / dismiss
+        static let returnKey:    UInt16 = 36   // Return / Enter
     }
 
     // Step sizes for arrow-key navigation
@@ -565,6 +614,12 @@ final class ViewportView: MTKView {
 
     override func keyDown(with event: NSEvent) {
         let kc = event.keyCode
+
+        // ── Return key — commit active keyframe edit in Timeline Editor ─────────
+        if kc == KC.returnKey, !event.isARepeat {
+            onEnterKey?()
+            return
+        }
 
         // ── Mode-switch keys — single-fire only (no repeat) ──────────────────
         if !event.isARepeat {

@@ -272,6 +272,22 @@ Open with **Window › Timeline Editor**. The panel shows one horizontal lane pe
 | ← → arrow keys | Nudge the selected diamond ±1 frame (1/30 s) |
 | **Delete** | Remove the selected keyframe |
 | **Insert** | Stamp a new keyframe at the current playhead time for the selected lane, using the object's or camera's current live state |
+| **Return** (on a selected diamond) | Enter **in-place edit mode** for that keyframe (see below) |
+| **Return** (while editing) | Commit the new pose — overwrites the keyframe |
+| **Escape** (while editing) | Cancel — restores the original pose |
+
+### In-Place Keyframe Edit Mode
+
+Select a diamond and press **Return** to enter edit mode. The selected diamond turns **amber** and a yellow `● EDITING` badge appears in the ruler area.
+
+While in edit mode:
+- The timeline **pauses** at the keyframe's time.
+- The viewport switches to **Object mode** (or **Camera mode** for the camera lane) automatically.
+- Use all normal viewport mouse and keyboard controls to adjust the pose.
+- Mouse interactions in the Timeline Editor are blocked while editing.
+
+Press **Return** again to commit — the keyframe is updated with the current pose.  
+Press **Escape** to cancel — the original pose is restored exactly.
 
 ### Insert Workflow
 

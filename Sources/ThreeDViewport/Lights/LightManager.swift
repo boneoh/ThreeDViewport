@@ -11,6 +11,10 @@ final class LightManager: ObservableObject {
     // element mutation because Array is a value type (copy-on-write).
     @Published var lights: [LightConfig] = []
 
+    // One keyframe track per light slot (parallel array to `lights`).
+    // nil = no animation for that light.
+    var keyframeTracks: [LightKeyframeTrack?] = []
+
     // Index of the light that keyboard arrows control.
     @Published var selectedIndex: Int = 0
 
@@ -21,7 +25,8 @@ final class LightManager: ObservableObject {
     // MARK: - Init
 
     init() {
-        lights = [.defaultDirectional]
+        lights         = [.defaultDirectional]
+        keyframeTracks = [nil]
         print("[DEBUG] LightManager: initialized — 1 directional light")
     }
 
@@ -50,6 +55,7 @@ final class LightManager: ObservableObject {
             return
         }
         lights.append(light)
+        keyframeTracks.append(nil)   // no track for the new light yet
         selectedIndex = lights.count - 1
         print("[DEBUG] LightManager: added " + light.type.displayName
             + " total=" + String(lights.count))
@@ -61,6 +67,7 @@ final class LightManager: ObservableObject {
             return
         }
         lights.remove(at: index)
+        if index < keyframeTracks.count { keyframeTracks.remove(at: index) }
         if selectedIndex >= lights.count { selectedIndex = lights.count - 1 }
         print("[DEBUG] LightManager: removed light at index " + String(index))
     }

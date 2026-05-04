@@ -2,10 +2,12 @@ import AppKit
 import simd
 
 // MARK: - Track reference
+// Internal so AppDelegate can pattern-match in edit-mode callbacks.
 
-private enum TrackRef: Equatable {
+enum TrackRef: Equatable {
     case camera
     case object(Int)   // index into sceneManager.objects
+    case light(Int)    // index into LightManager.lights
 }
 
 // MARK: - Safe array subscript (file-private)
@@ -28,6 +30,7 @@ final class TimelineEditorView: NSView {
     weak var timeline:     Timeline?
     weak var sceneManager: SceneManager?
     weak var camera:       CameraController?
+    weak var lightManager: LightManager?
 
     // ── Insert callbacks (set by AppDelegate) ─────────────────────────────────
 
@@ -37,6 +40,22 @@ final class TimelineEditorView: NSView {
 
     /// Called when the user presses Insert with the Camera lane selected.
     var onInsertCameraKeyframe: (() -> Void)?
+
+    /// Called when the user presses Insert with a light lane selected.
+    /// The argument is the light's index in LightManager.lights.
+    var onInsertLightKeyframe: ((Int) -> Void)?
+
+    // ── Edit-mode callbacks (set by AppDelegate) ──────────────────────────────
+
+    /// Called when the user presses Return on a selected diamond to enter edit mode.
+    /// Arguments: the TrackRef for the lane and the keyframe's exact time.
+    var onEnterEditMode: ((TrackRef, Double) -> Void)?
+
+    /// Called when the user presses Return while already in edit mode (commit the new pose).
+    var onCommitEdit: (() -> Void)?
+
+    /// Called when the user presses Escape while in edit mode (discard changes).
+    var onCancelEdit: (() -> Void)?
 
     // ── Layout constants ──────────────────────────────────────────────────────
 
@@ -70,6 +89,14 @@ final class TimelineEditorView: NSView {
     private var dragMouseStartX: CGFloat = 0
     private var dragTimeStart:   Double  = 0
 
+    // ── Edit-mode state ───────────────────────────────────────────────────────
+
+    /// True while the user is live-editing a selected keyframe's pose in the viewport.
+    private(set) var isEditingKeyframe: Bool = false
+
+    /// The time of the keyframe currently being edited (only valid when isEditingKeyframe).
+    private var editKFTime: Double = 0
+
     // ── Refresh timer ─────────────────────────────────────────────────────────
 
     private var refreshTimer: Timer?
@@ -102,11 +129,14 @@ final class TimelineEditorView: NSView {
 
     private typealias TrackList = [(name: String, ref: TrackRef)]
 
-    /// Ordered track list: Camera first, then scene objects.
+    /// Ordered track list: Camera first, then scene objects, then lights.
     private func buildTracks() -> TrackList {
         var result: TrackList = [("Camera", .camera)]
         for (i, obj) in (sceneManager?.objects ?? []).enumerated() {
             result.append((obj.name, .object(i)))
+        }
+        for i in 0..<(lightManager?.lights.count ?? 0) {
+            result.append(("Light \(i + 1)", .light(i)))
         }
         return result
     }
@@ -118,6 +148,9 @@ final class TimelineEditorView: NSView {
             return camera?.keyframeTrack?.keyframes.map { $0.time } ?? []
         case .object(let i):
             return sceneManager?.objects[safe: i]?.keyframeTrack?.keyframes.map { $0.time } ?? []
+        case .light(let i):
+            guard let lm = lightManager, i < lm.keyframeTracks.count else { return [] }
+            return lm.keyframeTracks[i]?.keyframes.map { $0.time } ?? []
         }
     }
 
@@ -191,7 +224,11 @@ final class TimelineEditorView: NSView {
             let rowRect = NSRect(x: labelWidth, y: laneTop(i),
                                  width: w - labelWidth, height: laneHeight)
             if i == selectedTrackIndex {
-                NSColor(white: 0.27, alpha: 1).setFill()
+                // Amber tint while editing, blue-grey otherwise
+                let bg = isEditingKeyframe
+                    ? NSColor(red: 0.30, green: 0.22, blue: 0.08, alpha: 1)
+                    : NSColor(white: 0.27, alpha: 1)
+                bg.setFill()
             } else {
                 NSColor(white: i % 2 == 0 ? 0.18 : 0.21, alpha: 1).setFill()
             }
@@ -272,19 +309,33 @@ final class TimelineEditorView: NSView {
                 guard cx >= labelWidth - hs && cx <= w + hs else { continue }
 
                 let isSelected = (ti == selectedTrackIndex && ki == selectedKFIndex)
-                let diamond    = NSBezierPath()
+
+                // Colour: amber while actively editing this diamond, accent when selected, grey otherwise
+                let fillColor: NSColor
+                if isSelected && isEditingKeyframe {
+                    // Pulsing amber to signal live-edit mode
+                    fillColor = NSColor(red: 1.0, green: 0.65, blue: 0.15, alpha: 1)
+                } else if isSelected {
+                    fillColor = NSColor.controlAccentColor
+                } else {
+                    fillColor = NSColor(white: 0.72, alpha: 1)
+                }
+
+                let strokeColor: NSColor = isSelected
+                    ? NSColor.white.withAlphaComponent(0.9)
+                    : NSColor(white: 0.38, alpha: 1)
+
+                let diamond = NSBezierPath()
                 diamond.move(to: NSPoint(x: cx,      y: cy - hs))
                 diamond.line(to: NSPoint(x: cx + hs, y: cy))
                 diamond.line(to: NSPoint(x: cx,      y: cy + hs))
                 diamond.line(to: NSPoint(x: cx - hs, y: cy))
                 diamond.close()
 
-                (isSelected ? NSColor.controlAccentColor
-                            : NSColor(white: 0.72, alpha: 1)).setFill()
+                fillColor.setFill()
                 diamond.fill()
 
-                (isSelected ? NSColor.white.withAlphaComponent(0.9)
-                            : NSColor(white: 0.38, alpha: 1)).setStroke()
+                strokeColor.setStroke()
                 diamond.lineWidth = isSelected ? 1.5 : 0.8
                 diamond.stroke()
             }
@@ -314,11 +365,28 @@ final class TimelineEditorView: NSView {
         // ── Ruler bottom border ───────────────────────────────────────────────
         NSColor(white: 0.10, alpha: 1).setFill()
         NSBezierPath.fill(NSRect(x: 0, y: rulerHeight - 1, width: w, height: 1))
+
+        // ── Edit-mode badge ───────────────────────────────────────────────────
+        if isEditingKeyframe {
+            let badge = "● EDITING — Return to commit  ·  Esc to cancel" as NSString
+            let badgeAttrs: [NSAttributedString.Key: Any] = [
+                .font:            NSFont.systemFont(ofSize: 10, weight: .semibold),
+                .foregroundColor: NSColor(red: 1.0, green: 0.75, blue: 0.20, alpha: 1)
+            ]
+            let badgeSize = badge.size(withAttributes: badgeAttrs)
+            badge.draw(
+                at: NSPoint(x: labelWidth + 8, y: (rulerHeight - badgeSize.height) / 2),
+                withAttributes: badgeAttrs
+            )
+        }
     }
 
     // MARK: - Mouse input
 
     override func mouseDown(with event: NSEvent) {
+        // Block all mouse interaction while a keyframe is being edited.
+        guard !isEditingKeyframe else { return }
+
         window?.makeFirstResponder(self)
         let pt     = convert(event.locationInWindow, from: nil)
         let tracks = buildTracks()
@@ -350,6 +418,8 @@ final class TimelineEditorView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        guard !isEditingKeyframe else { return }
+
         let pt     = convert(event.locationInWindow, from: nil)
         let tracks = buildTracks()
 
@@ -399,20 +469,90 @@ final class TimelineEditorView: NSView {
         let tracks = buildTracks()
         switch event.keyCode {
 
+        case 36:        // Return / Enter
+            handleReturnKey(tracks: tracks)
+
+        case 53:        // Escape
+            handleEscapeKey()
+
         case 51, 117:   // Backspace / Forward Delete → remove selected diamond
+            guard !isEditingKeyframe else { return }
             deleteSelectedKeyframe(tracks: tracks)
 
         case 114:       // Insert / Help → stamp keyframe at current time in selected lane
+            guard !isEditingKeyframe else { return }
             insertKeyframeInSelectedLane(tracks: tracks)
 
         case 123:       // Left arrow → nudge one frame earlier
+            guard !isEditingKeyframe else { super.keyDown(with: event); return }
             nudgeSelected(by: -1.0 / 30.0, tracks: tracks)
 
         case 124:       // Right arrow → nudge one frame later
+            guard !isEditingKeyframe else { super.keyDown(with: event); return }
             nudgeSelected(by:  1.0 / 30.0, tracks: tracks)
 
         default:
             super.keyDown(with: event)
+        }
+    }
+
+    // MARK: - Edit-mode key handlers
+
+    /// Commits the active keyframe edit and exits edit mode.
+    /// Called either by pressing Return in the Timeline Editor or by pressing
+    /// Return in the main viewport (wired via AppDelegate).
+    func commitEditIfActive() {
+        guard isEditingKeyframe else { return }
+        print("[DEBUG] TimelineEditorView: commitEditIfActive — committing at t="
+            + String(format: "%.3f", editKFTime))
+        onCommitEdit?()
+        isEditingKeyframe  = false
+        selectedTrackIndex = nil
+        selectedKFIndex    = nil
+        needsDisplay       = true
+    }
+
+    private func handleReturnKey(tracks: TrackList) {
+        if isEditingKeyframe {
+            // ── Commit ─────────────────────────────────────────────────────────
+            print("[DEBUG] TimelineEditorView: committing keyframe edit at t="
+                + String(format: "%.3f", editKFTime))
+            onCommitEdit?()
+            isEditingKeyframe  = false
+            selectedTrackIndex = nil
+            selectedKFIndex    = nil
+            needsDisplay       = true
+        } else {
+            // ── Enter edit mode ────────────────────────────────────────────────
+            guard let ti = selectedTrackIndex, let ki = selectedKFIndex else { return }
+            let ref   = tracks[ti].ref
+            let times = keyframeTimes(for: ref)
+            guard ki < times.count else { return }
+
+            editKFTime        = times[ki]
+            isEditingKeyframe = true
+            needsDisplay      = true
+
+            print("[DEBUG] TimelineEditorView: entering edit mode lane=\(ti)"
+                + " kf=\(ki) t=" + String(format: "%.3f", editKFTime))
+
+            onEnterEditMode?(ref, editKFTime)
+        }
+    }
+
+    private func handleEscapeKey() {
+        if isEditingKeyframe {
+            // ── Cancel ─────────────────────────────────────────────────────────
+            print("[DEBUG] TimelineEditorView: cancelling keyframe edit at t="
+                + String(format: "%.3f", editKFTime))
+            onCancelEdit?()
+            isEditingKeyframe  = false
+            selectedTrackIndex = nil
+            selectedKFIndex    = nil
+            needsDisplay       = true
+        } else {
+            // If not editing, Esc deselects everything
+            select(trackIndex: nil, kfIndex: nil)
         }
     }
 
@@ -444,6 +584,14 @@ final class TimelineEditorView: NSView {
                   let idx   = track.keyframes.firstIndex(where: { abs($0.time - fromTime) < 0.0005 })
             else { return }
             track.retimeKeyframe(at: idx, to: toTime)
+
+        case .light(let i):
+            guard let lm    = lightManager,
+                  i < lm.keyframeTracks.count,
+                  let track = lm.keyframeTracks[i],
+                  let idx   = track.keyframes.firstIndex(where: { abs($0.time - fromTime) < 0.0005 })
+            else { return }
+            track.retimeKeyframe(at: idx, to: toTime)
         }
     }
 
@@ -455,6 +603,9 @@ final class TimelineEditorView: NSView {
             camera?.keyframeTrack?.removeKeyframe(at: ki)
         case .object(let i):
             sceneManager?.objects[safe: i]?.keyframeTrack?.removeKeyframe(at: ki)
+        case .light(let i):
+            guard let lm = lightManager, i < lm.keyframeTracks.count else { break }
+            lm.keyframeTracks[i]?.removeKeyframe(at: ki)
         }
         selectedKFIndex = nil
         needsDisplay    = true
@@ -467,6 +618,7 @@ final class TimelineEditorView: NSView {
         switch ref {
         case .camera:        onInsertCameraKeyframe?()
         case .object(let i): onInsertObjectKeyframe?(i)
+        case .light(let i):  onInsertLightKeyframe?(i)
         }
         // Re-select the newly stamped diamond (callbacks are synchronous)
         let t            = timeline?.currentTime ?? 0

@@ -31,6 +31,8 @@ final class KeyframeTrack {
     }
 
     func addKeyframe(_ kf: TransformKeyframe) {
+        // Replace any existing keyframe within 1 ms of the same time (matches CameraKeyframeTrack)
+        keyframes.removeAll { abs($0.time - kf.time) < 0.001 }
         keyframes.append(kf)
         keyframes.sort { $0.time < $1.time }
         print("[DEBUG] KeyframeTrack: added keyframe at t=" + String(format: "%.3f", kf.time)

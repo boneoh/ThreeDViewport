@@ -143,16 +143,34 @@ final class ProjectFile {
             length:    fs.length
         )
 
+        // ── Light keyframe tracks (v6) ────────────────────────────────────────
+        // Serialize only as many slots as exist; empty inner arrays are included
+        // so index correspondence is preserved on reload.
+        let lm = vp.lightManager
+        let lightKfData: [[LightKeyframeData]] = lm.keyframeTracks.map { track in
+            guard let track = track else { return [] }
+            return track.keyframes.map { kf in
+                LightKeyframeData(
+                    time:      kf.time,
+                    intensity: kf.intensity,
+                    r: kf.color.x, g: kf.color.y, b: kf.color.z,
+                    dx: kf.direction.x, dy: kf.direction.y, dz: kf.direction.z,
+                    px: kf.position.x,  py: kf.position.y,  pz: kf.position.z
+                )
+            }
+        }
+
         return ProjectData(
-            version:         5,
-            modelPath:       nil,           // v3+ uses modelPaths instead
-            modelPaths:      modelPaths,
-            timeline:        timelineData,
-            camera:          cameraData,
-            objects:         objectsData,
-            cameraKeyframes: cameraKfData,
-            isColorMode:     vp.renderSettings.isColorMode,
-            feedback:        feedbackData
+            version:             6,
+            modelPath:           nil,           // v3+ uses modelPaths instead
+            modelPaths:          modelPaths,
+            timeline:            timelineData,
+            camera:              cameraData,
+            objects:             objectsData,
+            cameraKeyframes:     cameraKfData,
+            isColorMode:         vp.renderSettings.isColorMode,
+            feedback:            feedbackData,
+            lightKeyframeTracks: lightKfData
         )
     }
 
@@ -241,8 +259,16 @@ final class ProjectFile {
             + " pitch=" + String(format: "%.3f", c.pitch)
             + " dist="  + String(format: "%.3f", c.distance))
 
+        // ── Light keyframe tracks (v6) ────────────────────────────────────────
+        applyLightKeyframes(data.lightKeyframeTracks, to: vp)
+
         // Sync HUD with restored scene.
         vp.syncOverlayState()
+
+        // Force the Renderer to re-evaluate keyframes on the next draw.
+        // Without this, lastAnimatedTime == currentTime (both 0) so applyAnimation()
+        // never fires and objects appear at their base transform instead of the t=0 pose.
+        vp.renderer?.invalidateAnimationCache()
     }
 
     // MARK: - Apply keyframes + base transforms
@@ -283,6 +309,41 @@ final class ProjectFile {
 
             print("[DEBUG] ProjectFile: restored " + String(saved.keyframes.count)
                 + " keyframes for '" + obj.name + "'")
+        }
+    }
+
+    // MARK: - Apply light keyframe tracks (v6)
+
+    private static func applyLightKeyframes(_ tracksData: [[LightKeyframeData]],
+                                             to vp: ViewportView) {
+        let lm = vp.lightManager
+
+        // Ensure the keyframeTracks array is long enough to hold all slots.
+        while lm.keyframeTracks.count < lm.lights.count {
+            lm.keyframeTracks.append(nil)
+        }
+
+        // Clear existing tracks before restoring.
+        for i in 0..<lm.keyframeTracks.count { lm.keyframeTracks[i] = nil }
+
+        for (i, kfDataArray) in tracksData.enumerated() {
+            guard !kfDataArray.isEmpty else { continue }
+            // Only restore if the corresponding light slot still exists.
+            guard i < lm.lights.count else { continue }
+
+            let track = LightKeyframeTrack()
+            for kf in kfDataArray {
+                track.addKeyframe(LightKeyframe(
+                    time:      kf.time,
+                    intensity: kf.intensity,
+                    color:     SIMD3<Float>(kf.r, kf.g, kf.b),
+                    direction: simd_normalize(SIMD3<Float>(kf.dx, kf.dy, kf.dz)),
+                    position:  SIMD3<Float>(kf.px, kf.py, kf.pz)
+                ))
+            }
+            lm.keyframeTracks[i] = track
+            print("[DEBUG] ProjectFile: restored \(kfDataArray.count)"
+                + " light keyframes for slot \(i)")
         }
     }
 

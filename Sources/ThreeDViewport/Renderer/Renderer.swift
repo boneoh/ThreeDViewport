@@ -363,7 +363,17 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     // MARK: - Animation evaluation
 
+    /// Forces `applyAnimation()` to run on the very next draw call, regardless of
+    /// whether `currentTime` has changed.  Call this after restoring keyframe tracks
+    /// from a project file — without it, the t=0 pose may not be applied because
+    /// `lastAnimatedTime` already equals `currentTime` (both are 0).
+    func invalidateAnimationCache() {
+        lastAnimatedTime = -1.0
+        print("[DEBUG] Renderer: animation cache invalidated — will re-evaluate on next draw")
+    }
+
     private func applyAnimation() {
+        // ── Object transforms ─────────────────────────────────────────────────
         for object in sceneManager.objects {
             guard let track = object.keyframeTrack,
                   !track.keyframes.isEmpty else { continue }
@@ -372,12 +382,26 @@ final class Renderer: NSObject, MTKViewDelegate {
             }
         }
 
+        // ── Camera ────────────────────────────────────────────────────────────
         if let camTrack = camera.keyframeTrack, !camTrack.keyframes.isEmpty {
             if let state = camTrack.evaluate(at: timeline.currentTime) {
                 camera.yaw      = state.yaw
                 camera.pitch    = state.pitch
                 camera.distance = state.distance
                 camera.target   = state.target
+            }
+        }
+
+        // ── Lights ────────────────────────────────────────────────────────────
+        for i in 0..<lightManager.lights.count {
+            guard i < lightManager.keyframeTracks.count,
+                  let track = lightManager.keyframeTracks[i],
+                  !track.keyframes.isEmpty else { continue }
+            if let state = track.evaluate(at: timeline.currentTime) {
+                lightManager.lights[i].intensity  = state.intensity
+                lightManager.lights[i].color      = state.color
+                lightManager.lights[i].direction  = state.direction
+                lightManager.lights[i].position   = state.position
             }
         }
     }

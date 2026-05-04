@@ -10,16 +10,18 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
 
     // MARK: - Init
 
-    init(timeline: Timeline, sceneManager: SceneManager, camera: CameraController) {
+    init(timeline: Timeline, sceneManager: SceneManager,
+         camera: CameraController, lightManager: LightManager) {
 
-        let numTracks     = 1 + sceneManager.objects.count   // camera + objects
+        let numTracks     = 1 + sceneManager.objects.count + lightManager.lights.count
         let contentH      = Self.contentHeight(for: numTracks)
         let contentRect   = NSRect(x: 0, y: 0, width: 1000, height: contentH)
 
         let editor = TimelineEditorView(frame: contentRect)
-        editor.timeline     = timeline
-        editor.sceneManager = sceneManager
-        editor.camera       = camera
+        editor.timeline      = timeline
+        editor.sceneManager  = sceneManager
+        editor.camera        = camera
+        editor.lightManager  = lightManager
         editorView = editor
 
         let panel = NSPanel(
