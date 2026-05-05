@@ -1,6 +1,6 @@
 # ThreeDViewport
 
-A macOS Metal-based 3D animation viewer and exporter. Load `.glb` models, position and animate them with keyframes, configure lighting and backgrounds, apply a video feedback delay-line effect, and export to ProRes `.mov`.
+A macOS Metal-based 3D animation viewer and exporter. Load `.glb` / `.gltf` models, position and animate them with keyframes, configure lighting and backgrounds, apply a video feedback delay-line effect, and export to ProRes `.mov`.
 
 ---
 
@@ -86,12 +86,17 @@ The Lights & Background and Feedback panels are utility windows that do not stea
 | Item | Shortcut | Description |
 |------|----------|-------------|
 | New Project | ⌘N | Clear the scene and reset to defaults. Prompts for confirmation if models are loaded. |
-| Open Model… | ⌘O | Load a `.glb` file, replacing the entire current scene. The camera fits to the loaded model. |
-| Add Model to Scene… | ⌘⇧O | Append a `.glb` to the existing scene without clearing it. |
+| Open Model… | ⌘O | Load a `.glb` or `.gltf` file, replacing the entire current scene. The camera fits to the loaded model. |
+| Add Model to Scene… | ⌘⇧O | Append a `.glb` or `.gltf` to the existing scene without clearing it. |
 | Open Project… | — | Open a `.3dvp` project file, restoring all models, keyframes, camera, lighting, and feedback settings. |
 | Save Project | ⌘S | Save to the current project file. Falls back to Save As… on first save. |
 | Save Project As… | ⌘⇧S | Save to a new `.3dvp` file (prompts for location). |
 | Export ProRes Video… | ⌘E | Export the animation to a `.mov` file at 1920 × 1080. |
+
+### Edit Menu
+| Item | Shortcut | Description |
+|------|----------|-------------|
+| Remove › *Object Name* | — | Dynamically lists all objects in the scene. Selecting one shows a confirmation prompt before removing that object. If the scene is empty the submenu shows "No Objects". |
 
 ### View Menu
 | Item | Shortcut | Description |
@@ -99,6 +104,9 @@ The Lights & Background and Feedback panels are utility windows that do not stea
 | Lights & Background… | ⌘L | Toggle the Lights & Background inspector panel. |
 | Feedback… | ⌘F | Toggle the Feedback delay-line panel. |
 | Color Rendering | ⌘T | Toggle between colour and greyscale rendering (checkmark shows current state). Also toggled by the **T** key in the viewport. |
+| Wireframe | — | Toggle wireframe display. Also toggled by the **G** key in the viewport. |
+| Show Axes Gizmo | — | Toggle the XYZ orientation gizmo overlay in the viewport corner. |
+| Loop Playback | — | When checked, playback loops continuously; when unchecked, the timeline stops at the end. |
 
 ### Window Menu
 | Item | Shortcut | Description |
@@ -179,9 +187,10 @@ Arrow keys only affect the selected object when playback is **paused**.
 | **+** / **=** | Translate along the Z axis (towards camera) |
 | **−** / **_** | Translate along the Z axis (away from camera) |
 
-### Viewport Toggles
+### Viewport Toggles & Transport
 | Key | Action |
 |-----|--------|
+| **P** | Toggle Play / Pause playback |
 | **T** | Toggle colour / greyscale rendering |
 | **G** | Toggle wireframe display |
 | **Space** (hold) | While held, left-drag **orbits** the camera around its target |
@@ -205,7 +214,7 @@ The panel across the bottom of the window contains:
 | Control | Description |
 |---------|-------------|
 | ⏹ Stop | Rewind to t = 0:00:00 and stop |
-| ▶ / ⏸ Play / Pause | Start or pause playback |
+| ▶ / ⏸ Play / Pause | Start or pause playback (also **P** key) |
 | Time display | Current playhead position in MM:SS:FF format |
 | Scrubber | Drag to scrub through the animation |
 | Duration label | Current timeline length in MM:SS:FF. **Click** to open a popover where you can type a new duration in seconds or pick a preset (5 s, 10 s, 15 s, 30 s, 60 s, 120 s). |
@@ -227,7 +236,7 @@ ThreeDViewport uses a **keyframe + delta** system:
 4. **Scrub** the timeline to the desired time.
 5. **Click Add Key** in the Timeline Panel (or press **Insert** in the Timeline Editor with the object's lane selected) to record the current pose as a keyframe.
 6. Repeat for as many poses and time points as needed.
-7. **Play** the timeline to preview the animation.
+7. **Play** the timeline to preview the animation (**P** key).
 
 ### How Deltas Work
 
@@ -320,6 +329,17 @@ Up to four lights are supported. Each light has:
 
 Lights can also be adjusted with arrow keys after pressing **L** to enter light mode. Press **L** again to cycle to the next light.
 
+### Laser Lights
+
+When a light is set to **Laser** type, an additional **Beam** section appears:
+
+| Control | Range | Description |
+|---------|-------|-------------|
+| Thickness | 1 – 30 | Controls the rendered beam width. **1** draws a hairline; values **≥ 2** render a camera-facing billboard beam with a soft Gaussian glow profile. |
+| Exclude from feedback | on / off | When checked, the laser beam is composited *after* the feedback pass so it does not get captured into the feedback buffer or smear with the echo effect. Useful for keeping a clean, sharp beam while still allowing the lit scene to feedback. |
+
+Laser lights have **no distance attenuation** — intensity remains constant regardless of how far the beam travels. The visible beam is depth-occluded by scene geometry.
+
 ### Background
 
 | Control | Description |
@@ -342,6 +362,8 @@ The feedback system blends the current frame with a delayed copy from a ring buf
 | Interval | 1 – 60 frames | How many rendered frames between feedback ticks |
 | Decay | 0.0 – 1.0 | Blend weight between current scene (0.0) and feedback tap (1.0). ~0.5 gives an equal mix. |
 | Length | 1 – 60 frames | Number of delayed frames stored in the ring buffer. Larger values mean a longer echo. |
+| Blend Mode | Normal / Additive / … | How the feedback tap is composited over the current frame |
+| Swap Layers | on / off | Reverses the blend order — composites the current frame over the feedback tap instead of the other way around |
 | **Clear Queue** | — | Flush the ring buffer and re-prime from scratch |
 
 **Status indicator:**
@@ -351,6 +373,7 @@ The feedback system blends the current frame with a delayed copy from a ring buf
 **Behaviour notes:**
 - Feedback only runs during **playback**. While paused or at the end of the animation, the last blended frame is held on screen.
 - The queue is automatically cleared when playback starts so each play-through begins fresh.
+- Laser beams with **Exclude from feedback** enabled are drawn after the feedback composite and are never captured into the buffer.
 - Feedback settings are saved in the project file.
 
 ---
@@ -364,7 +387,7 @@ The feedback system blends the current frame with a delayed copy from a ring buf
 | ProRes 4444 | Full quality with alpha channel — largest file, highest fidelity |
 | ProRes 422 HQ | High quality without alpha — smaller file |
 
-The export renders every frame offline at the timeline's frame rate. Feedback (if enabled) is applied during export using an independent processor initialised from the saved feedback settings. The viewport stays live during export and playback is suspended until it completes.
+The export renders every frame offline at the timeline's frame rate. Feedback (if enabled) is applied during export using an independent processor initialised from the saved feedback settings. Camera keyframe animation is fully evaluated during export. The viewport stays live during export and playback is suspended until it completes.
 
 ---
 
@@ -375,17 +398,23 @@ Projects are saved as `.3dvp` files (JSON). They store:
 - Timeline duration
 - Camera position and keyframe track
 - All loaded model paths (absolute) and per-object keyframes / base transforms
-- Lighting configuration
+- Lighting configuration including per-light beam thickness and feedback-exclusion flag
+- Light keyframe tracks
 - Background configuration
 - Colour / greyscale mode
-- Feedback settings
+- Wireframe and axes gizmo display state
+- Loop playback setting
+- Feedback settings (interval, decay, length, blend mode, swap layers)
 
-Model files (`.glb`) are referenced by absolute path and must remain accessible at their original location for the project to reload them.
+Model files (`.glb` / `.gltf`) are referenced by absolute path and must remain accessible at their original location for the project to reload them.
 
 ---
 
-## Supported Model Format
+## Supported Model Formats
 
-- **glTF 2.0 Binary (`.glb`)** — including PBR materials (base colour, normal, metallic/roughness, emissive textures), embedded meshes, and node transforms.
+- **glTF 2.0 Binary (`.glb`)** — single self-contained file with embedded meshes and textures.
+- **glTF 2.0 JSON (`.gltf` + `.bin`)** — JSON descriptor alongside one or more external binary buffer files. The `.bin` file(s) must remain in the same folder as the `.gltf` when the project is reloaded.
+
+Both formats support PBR materials (base colour, normal, metallic/roughness, emissive textures), embedded or external meshes, and node transforms.
 
 Models are auto-normalised on load: scaled so their bounding sphere fits within a 1-unit radius and centred at the world origin.
