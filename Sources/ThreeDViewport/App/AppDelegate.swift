@@ -3,7 +3,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 import simd
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     var window: NSWindow?
     var viewportView: ViewportView?
@@ -14,6 +14,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // Feedback delay-line panel.
     private var feedbackPanel: NSPanel?
+
+    // Edit > Remove submenu — repopulated dynamically by NSMenuDelegate.
+    private var removeSubmenu: NSMenu?
 
     // Timeline editor (AppKit canvas panel).
     private var timelineEditorWC: TimelineEditorWindowController?
@@ -223,6 +226,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         exportItem.target = self
         fileMenu.addItem(exportItem)
 
+        // ── Edit menu ─────────────────────────────────────────────────────────
+        let editItem = NSMenuItem()
+        mainMenu.addItem(editItem)
+        let editMenu = NSMenu(title: "Edit")
+        editItem.submenu = editMenu
+
+        let removeItem = NSMenuItem(title: "Remove", action: nil, keyEquivalent: "")
+        let sub = NSMenu(title: "Remove")
+        sub.delegate = self
+        removeItem.submenu = sub
+        removeSubmenu = sub
+        editMenu.addItem(removeItem)
+
         // ── View menu — rendering toggles only ───────────────────────────────
         let viewItem = NSMenuItem()
         mainMenu.addItem(viewItem)
@@ -388,10 +404,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.canChooseFiles          = true
         panel.title = "Open Model (replaces scene)"
 
-        if let glbType = UTType(filenameExtension: "glb") {
-            panel.allowedContentTypes = [glbType]
-        } else {
-            print("[DEBUG] AppDelegate: UTType for glb not found, showing all files")
+        let modelTypes = [UTType(filenameExtension: "glb"), UTType(filenameExtension: "gltf")]
+            .compactMap { $0 }
+        if !modelTypes.isEmpty {
+            panel.allowedContentTypes = modelTypes
         }
 
         panel.beginSheetModal(for: window) { [weak self] response in
@@ -418,8 +434,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.canChooseFiles          = true
         panel.title = "Add Model to Scene"
 
-        if let glbType = UTType(filenameExtension: "glb") {
-            panel.allowedContentTypes = [glbType]
+        let modelTypes = [UTType(filenameExtension: "glb"), UTType(filenameExtension: "gltf")]
+            .compactMap { $0 }
+        if !modelTypes.isEmpty {
+            panel.allowedContentTypes = modelTypes
         }
 
         panel.beginSheetModal(for: window) { [weak self] response in
@@ -940,7 +958,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard viewportView?.sceneManager.primaryObject != nil else {
             let alert = NSAlert()
             alert.messageText     = "No Model Loaded"
-            alert.informativeText = "Open a .glb model before exporting."
+            alert.informativeText = "Open a .glb or .gltf model before exporting."
             alert.alertStyle      = .warning
             alert.beginSheetModal(for: window)
             return
@@ -997,5 +1015,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         print("[DEBUG] AppDelegate: codec accessory view created")
         return (stack, popup)
+    }
+
+    // MARK: - Edit > Remove
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === removeSubmenu else { return }
+        menu.removeAllItems()
+        guard let scene = viewportView?.sceneManager else { return }
+        if scene.objects.isEmpty {
+            let empty = NSMenuItem(title: "No Objects", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            menu.addItem(empty)
+        } else {
+            for (index, obj) in scene.objects.enumerated() {
+                let item = NSMenuItem(
+                    title: obj.name,
+                    action: #selector(confirmRemoveObject(_:)),
+                    keyEquivalent: ""
+                )
+                item.target = self
+                item.tag = index
+                menu.addItem(item)
+            }
+        }
+    }
+
+    @objc private func confirmRemoveObject(_ sender: NSMenuItem) {
+        guard let scene = viewportView?.sceneManager else { return }
+        let index = sender.tag
+        guard index >= 0, index < scene.objects.count else { return }
+        let name = scene.objects[index].name
+
+        let alert = NSAlert()
+        alert.messageText = "Remove \"\(name)\"?"
+        alert.informativeText = "Are you sure you want to remove \(name) from the project?"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Remove")
+        alert.addButton(withTitle: "Cancel")
+
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            scene.remove(at: index)
+        }
     }
 }

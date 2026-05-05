@@ -148,8 +148,14 @@ static bool sampleLight(ShaderLight light,
     if (dist >= range) return false;
 
     L = normalize(toLight);
-    float normDist = dist / range;
-    attenuation    = pow(max(0.0, 1.0 - normDist * normDist), 2.0);
+
+    // Laser: constant intensity — no distance falloff along the beam.
+    if (lightType == LIGHT_LASER) {
+        attenuation = 1.0;
+    } else {
+        float normDist = dist / range;
+        attenuation    = pow(max(0.0, 1.0 - normDist * normDist), 2.0);
+    }
 
     if (lightType == LIGHT_SPOT || lightType == LIGHT_LASER) {
         float3 surfaceDir = normalize(worldPos - light.position.xyz);

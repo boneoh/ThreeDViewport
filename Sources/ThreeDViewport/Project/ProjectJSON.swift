@@ -13,6 +13,7 @@ import Foundation
 //   7 — Phase 11: added isLooping (loop playback toggle).
 //   8 — Added background (mode, solid colour, gradient colours) and isWireframe.
 //   9 — Added blendMode and swapLayers to FeedbackData.
+//  10 — Added lightConfigs array (per-light static config incl. beamThickness, excludeBeamFromFeedback).
 //
 // Design rules:
 //   • No binary data inline — .glb files are referenced by absolute path.
@@ -24,7 +25,7 @@ import Foundation
 //     All new fields have defaults so older files load without error.
 
 struct ProjectData: Codable {
-    var version:             Int     = 9
+    var version:             Int     = 10
     var modelPath:           String? = nil   // v1/v2 compat; ignored when modelPaths non-empty.
     var modelPaths:          [String] = []   // v3 — ordered list of absolute .glb paths.
     var timeline:            TimelineData
@@ -39,10 +40,11 @@ struct ProjectData: Codable {
     var background:          BackgroundData = BackgroundData()  // v8; background colour/gradient.
     var isWireframe:         Bool = false               // v8; wireframe rendering toggle.
     var showAxesGizmo:       Bool = false               // v8; XYZ orientation gizmo.
+    var lightConfigs:        [LightConfigData] = []    // v10; per-light static config.
 
     // MARK: - Memberwise init (required because we define init(from:) below)
 
-    init(version:             Int                    = 8,
+    init(version:             Int                    = 10,
          modelPath:           String?                = nil,
          modelPaths:          [String]               = [],
          timeline:            TimelineData,
@@ -55,7 +57,8 @@ struct ProjectData: Codable {
          isLooping:           Bool                   = false,
          background:          BackgroundData         = BackgroundData(),
          isWireframe:         Bool                   = false,
-         showAxesGizmo:       Bool                   = false) {
+         showAxesGizmo:       Bool                   = false,
+         lightConfigs:        [LightConfigData]      = []) {
         self.version             = version
         self.modelPath           = modelPath
         self.modelPaths          = modelPaths
@@ -70,6 +73,7 @@ struct ProjectData: Codable {
         self.background          = background
         self.isWireframe         = isWireframe
         self.showAxesGizmo       = showAxesGizmo
+        self.lightConfigs        = lightConfigs
     }
 
     // MARK: - Custom decoder
@@ -96,6 +100,7 @@ struct ProjectData: Codable {
         background          = (try? c.decode(BackgroundData.self,        forKey: .background))          ?? BackgroundData()
         isWireframe         = (try? c.decode(Bool.self,                  forKey: .isWireframe))         ?? false
         showAxesGizmo       = (try? c.decode(Bool.self,                  forKey: .showAxesGizmo))       ?? false
+        lightConfigs        = (try? c.decode([LightConfigData].self,     forKey: .lightConfigs))        ?? []
     }
 }
 
@@ -198,6 +203,28 @@ struct CameraKeyframeData: Codable {
     var targetX:  Float
     var targetY:  Float
     var targetZ:  Float
+}
+
+// v10: Static per-light configuration.  All fields have sensible defaults so
+// files saved before v10 (missing lightConfigs key) reload cleanly.
+struct LightConfigData: Codable {
+    var type:                    Int   = 1      // LightType.rawValue  (1 = directional)
+    var isEnabled:               Bool  = true
+    var colorR:                  Float = 1.0
+    var colorG:                  Float = 1.0
+    var colorB:                  Float = 1.0
+    var intensity:               Float = 1.0
+    var posX:                    Float = 0.0
+    var posY:                    Float = 3.0
+    var posZ:                    Float = 3.0
+    var dirX:                    Float = 0.5
+    var dirY:                    Float = -1.2
+    var dirZ:                    Float = -0.8
+    var innerConeAngle:          Float = 0.3927  // π/8
+    var outerConeAngle:          Float = 0.5236  // π/6
+    var range:                   Float = 15.0
+    var beamThickness:           Float = 1.0
+    var excludeBeamFromFeedback: Bool  = false
 }
 
 // v6: One saved light keyframe — intensity, colour, direction, position.

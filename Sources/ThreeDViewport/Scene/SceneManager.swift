@@ -76,4 +76,15 @@ final class SceneManager {
         print("[DEBUG] SceneManager: object[" + String(index) + "] '"
             + objects[index].name + "' isVisible=" + String(objects[index].isVisible))
     }
+
+    // Remove the object at `index` from the scene.
+    func remove(at index: Int) {
+        guard index >= 0, index < objects.count else {
+            print("[DEBUG] SceneManager: remove — index " + String(index) + " out of range")
+            return
+        }
+        let name = objects[index].name
+        objects.remove(at: index)
+        print("[DEBUG] SceneManager: removed object '" + name + "', remaining count = " + String(objects.count))
+    }
 }

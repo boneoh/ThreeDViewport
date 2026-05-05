@@ -646,6 +646,7 @@ final class ViewportView: MTKView {
         static let c:        UInt16 = 8    // camera mode
         static let l:        UInt16 = 37   // light mode
         static let o:        UInt16 = 31   // object mode / cycle
+        static let p:        UInt16 = 35   // play / pause
         // Regular arrow keys
         static let left:     UInt16 = 123
         static let right:    UInt16 = 124
@@ -731,6 +732,10 @@ final class ViewportView: MTKView {
             switch kc {
             case KC.space:
                 isSpaceDown = true
+                return
+
+            case KC.p:
+                timeline.togglePlayPause()
                 return
 
             case KC.g:

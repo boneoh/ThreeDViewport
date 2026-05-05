@@ -165,6 +165,29 @@ final class ProjectFile {
             }
         }
 
+        // ── Per-light static config (v10) ─────────────────────────────────────
+        let lightConfigsData: [LightConfigData] = lm.lights.map { l in
+            LightConfigData(
+                type:                    l.type.rawValue,
+                isEnabled:               l.isEnabled,
+                colorR:                  l.color.x,
+                colorG:                  l.color.y,
+                colorB:                  l.color.z,
+                intensity:               l.intensity,
+                posX:                    l.position.x,
+                posY:                    l.position.y,
+                posZ:                    l.position.z,
+                dirX:                    l.direction.x,
+                dirY:                    l.direction.y,
+                dirZ:                    l.direction.z,
+                innerConeAngle:          l.innerConeAngle,
+                outerConeAngle:          l.outerConeAngle,
+                range:                   l.range,
+                beamThickness:           l.beamThickness,
+                excludeBeamFromFeedback: l.excludeBeamFromFeedback
+            )
+        }
+
         // ── Background settings (v8) ──────────────────────────────────────────
         let bg = vp.backgroundConfig
         let backgroundData = BackgroundData(
@@ -181,7 +204,7 @@ final class ProjectFile {
         )
 
         return ProjectData(
-            version:             9,
+            version:             10,
             modelPath:           nil,           // v3+ uses modelPaths instead
             modelPaths:          modelPaths,
             timeline:            timelineData,
@@ -194,7 +217,8 @@ final class ProjectFile {
             isLooping:           vp.timeline.isLooping,
             background:          backgroundData,
             isWireframe:         vp.renderer?.isWireframe ?? false,
-            showAxesGizmo:       vp.renderSettings.showAxesGizmo
+            showAxesGizmo:       vp.renderSettings.showAxesGizmo,
+            lightConfigs:        lightConfigsData
         )
     }
 
@@ -291,6 +315,32 @@ final class ProjectFile {
         vp.renderSettings.showAxesGizmo   = data.showAxesGizmo
         print("[DEBUG] ProjectFile: isWireframe=\(data.isWireframe)"
             + " showAxesGizmo=\(data.showAxesGizmo)")
+
+        // ── Per-light static config (v10) ─────────────────────────────────────
+        if !data.lightConfigs.isEmpty {
+            let lm = vp.lightManager
+            // Replace existing lights with saved configs (preserving count)
+            lm.lights = data.lightConfigs.compactMap { lcd -> LightConfig? in
+                guard let lightType = LightType(rawValue: lcd.type) else { return nil }
+                var l = LightConfig()
+                l.type                    = lightType
+                l.isEnabled               = lcd.isEnabled
+                l.color                   = SIMD3<Float>(lcd.colorR, lcd.colorG, lcd.colorB)
+                l.intensity               = lcd.intensity
+                l.position                = SIMD3<Float>(lcd.posX, lcd.posY, lcd.posZ)
+                l.direction               = SIMD3<Float>(lcd.dirX, lcd.dirY, lcd.dirZ)
+                l.innerConeAngle          = lcd.innerConeAngle
+                l.outerConeAngle          = lcd.outerConeAngle
+                l.range                   = lcd.range
+                l.beamThickness           = lcd.beamThickness
+                l.excludeBeamFromFeedback = lcd.excludeBeamFromFeedback
+                return l
+            }
+            // Pad keyframe tracks array to match new light count
+            while lm.keyframeTracks.count < lm.lights.count { lm.keyframeTracks.append(nil) }
+            lm.selectedIndex = min(lm.selectedIndex, max(0, lm.lights.count - 1))
+            print("[DEBUG] ProjectFile: restored \(lm.lights.count) light configs")
+        }
 
         // Replace demo animations with saved keyframes; restore base transforms.
         applyKeyframes(data.objects, to: vp)

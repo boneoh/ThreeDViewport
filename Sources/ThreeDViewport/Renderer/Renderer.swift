@@ -42,6 +42,10 @@ final class Renderer: NSObject, MTKViewDelegate {
     // Gizmo pipeline (no depth attachment, alpha-blended 2-D overlay)
     private var gizmoPipelineState: MTLRenderPipelineState?
 
+    // Laser beam pipeline (additive RGB blend, depth test without write)
+    private var laserBeamPipelineState: MTLRenderPipelineState?
+    private var laserBeamDepthState:    MTLDepthStencilState?
+
     // MARK: - Feedback (optional — set by ViewportView after init)
 
     var feedbackProcessor: FeedbackProcessor?
@@ -167,6 +171,39 @@ final class Renderer: NSObject, MTKViewDelegate {
         } catch {
             print("[DEBUG] Renderer: gizmo pipeline failed — " + error.localizedDescription)
         }
+
+        // ── Laser beam billboard pipeline ─────────────────────────────────────
+        guard let laserVertFn = library.makeFunction(name: "laser_beam_vertex"),
+              let laserFragFn = library.makeFunction(name: "laser_beam_fragment") else {
+            print("[DEBUG] Renderer: laser beam shaders not found")
+            return
+        }
+        let laserDesc = MTLRenderPipelineDescriptor()
+        laserDesc.label                           = "LaserBeam"
+        laserDesc.vertexFunction                  = laserVertFn
+        laserDesc.fragmentFunction                = laserFragFn
+        laserDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
+        laserDesc.depthAttachmentPixelFormat      = .depth32Float
+        // Additive RGB blend — beam brightens the scene; destination alpha preserved
+        let laserCA = laserDesc.colorAttachments[0]!
+        laserCA.isBlendingEnabled           = true
+        laserCA.sourceRGBBlendFactor        = .one
+        laserCA.destinationRGBBlendFactor   = .one
+        laserCA.rgbBlendOperation           = .add
+        laserCA.sourceAlphaBlendFactor      = .zero     // preserve dest alpha
+        laserCA.destinationAlphaBlendFactor = .one
+        laserCA.alphaBlendOperation         = .add
+        do {
+            laserBeamPipelineState = try device.makeRenderPipelineState(descriptor: laserDesc)
+            print("[DEBUG] Renderer: laser beam pipeline created")
+        } catch {
+            print("[DEBUG] Renderer: laser beam pipeline failed — " + error.localizedDescription)
+        }
+
+        let laserDepthDesc = MTLDepthStencilDescriptor()
+        laserDepthDesc.depthCompareFunction = .lessEqual
+        laserDepthDesc.isDepthWriteEnabled  = false   // read-only depth test
+        laserBeamDepthState = device.makeDepthStencilState(descriptor: laserDepthDesc)
     }
 
     private func buildDummyBuffers() {
@@ -244,7 +281,8 @@ final class Renderer: NSObject, MTKViewDelegate {
                 red: bc.red, green: bc.green, blue: bc.blue, alpha: 0.0)
             desc.depthAttachment.texture         = depthTex
             desc.depthAttachment.loadAction      = .clear
-            desc.depthAttachment.storeAction     = .dontCare
+            // Store depth so the excluded-laser post-pass can depth-test against it.
+            desc.depthAttachment.storeAction     = .store
             desc.depthAttachment.clearDepth      = 1.0
             passDescriptor = desc
         } else {
@@ -337,6 +375,18 @@ final class Renderer: NSObject, MTKViewDelegate {
             }
         }
 
+        // ── Laser beam visuals (included in feedback, or all when feedback is off) ─
+        let screenSize = SIMD2<Float>(Float(view.drawableSize.width),
+                                      Float(view.drawableSize.height))
+        drawLaserBeamsInEncoder(encoder, screenSize: screenSize,
+                                excludedOnly: false)
+        // When feedback is not active "excludeBeamFromFeedback" is meaningless —
+        // draw those beams here too so they always appear.
+        if !feedbackActive {
+            drawLaserBeamsInEncoder(encoder, screenSize: screenSize,
+                                    excludedOnly: true)
+        }
+
         encoder.endEncoding()
 
         // Feedback composite + blit to drawable.
@@ -351,6 +401,14 @@ final class Renderer: NSObject, MTKViewDelegate {
             } else {
                 fp.blitLastOutput(commandBuffer: commandBuffer, dest: drawable.texture)
             }
+        }
+
+        // ── Excluded laser beams — drawn after feedback so no trails ─────────
+        if feedbackActive, let fp = feedbackProcessor, let depthTex = fp.depthTexture {
+            drawExcludedLaserBeams(commandBuffer: commandBuffer,
+                                   dest:          drawable.texture,
+                                   depthTex:      depthTex,
+                                   screenSize:    screenSize)
         }
 
         // Axes gizmo overlay — drawn on top of everything (no depth test).
@@ -434,6 +492,87 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
         for i in 0..<axisData.count {
             enc.drawPrimitives(type: .triangleStrip, vertexStart: i * 4, vertexCount: 4)
+        }
+        enc.endEncoding()
+    }
+
+    // MARK: - Laser beam helpers
+
+    /// Draws laser beams into an already-open render command encoder (scene pass).
+    /// `excludedOnly` — false: draw beams with `excludeBeamFromFeedback == false`;
+    ///                  true:  draw beams with `excludeBeamFromFeedback == true`.
+    private func drawLaserBeamsInEncoder(_ encoder:    MTLRenderCommandEncoder,
+                                         screenSize:   SIMD2<Float>,
+                                         excludedOnly: Bool) {
+        guard let pipeline = laserBeamPipelineState else { return }
+        let beams = lightManager.lights.filter {
+            $0.type == .laser && $0.isEnabled &&
+            $0.excludeBeamFromFeedback == excludedOnly
+        }
+        guard !beams.isEmpty else { return }
+
+        encoder.setRenderPipelineState(pipeline)
+        if let ds = laserBeamDepthState { encoder.setDepthStencilState(ds) }
+        encoder.setCullMode(.none)
+
+        let vp = camera.viewProjectionMatrix
+        for laser in beams {
+            let start = laser.position
+            let end   = start + simd_normalize(laser.direction) * laser.range
+            var u = LaserBeamUniforms(
+                viewProjectionMatrix: vp,
+                startWorld: SIMD4<Float>(start, 1),
+                endWorld:   SIMD4<Float>(end,   1),
+                color:      SIMD4<Float>(laser.color, 1),
+                screenSize: screenSize,
+                thickness:  max(1.0, laser.beamThickness),
+                pad:        0
+            )
+            encoder.setVertexBytes(&u, length: MemoryLayout<LaserBeamUniforms>.stride, index: 0)
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        }
+    }
+
+    /// Draws excluded laser beams in a separate pass after the feedback composite.
+    /// Uses the preserved scene depth texture so geometry still occludes the beam.
+    private func drawExcludedLaserBeams(commandBuffer: MTLCommandBuffer,
+                                         dest:          MTLTexture,
+                                         depthTex:      MTLTexture,
+                                         screenSize:    SIMD2<Float>) {
+        guard let pipeline = laserBeamPipelineState else { return }
+        let beams = lightManager.lights.filter {
+            $0.type == .laser && $0.isEnabled && $0.excludeBeamFromFeedback
+        }
+        guard !beams.isEmpty else { return }
+
+        let passDesc = MTLRenderPassDescriptor()
+        passDesc.colorAttachments[0].texture     = dest
+        passDesc.colorAttachments[0].loadAction  = .load
+        passDesc.colorAttachments[0].storeAction = .store
+        passDesc.depthAttachment.texture         = depthTex
+        passDesc.depthAttachment.loadAction      = .load
+        passDesc.depthAttachment.storeAction     = .dontCare   // read-only
+
+        guard let enc = commandBuffer.makeRenderCommandEncoder(descriptor: passDesc) else { return }
+        enc.setRenderPipelineState(pipeline)
+        if let ds = laserBeamDepthState { enc.setDepthStencilState(ds) }
+        enc.setCullMode(.none)
+
+        let vp = camera.viewProjectionMatrix
+        for laser in beams {
+            let start = laser.position
+            let end   = start + simd_normalize(laser.direction) * laser.range
+            var u = LaserBeamUniforms(
+                viewProjectionMatrix: vp,
+                startWorld: SIMD4<Float>(start, 1),
+                endWorld:   SIMD4<Float>(end,   1),
+                color:      SIMD4<Float>(laser.color, 1),
+                screenSize: screenSize,
+                thickness:  max(1.0, laser.beamThickness),
+                pad:        0
+            )
+            enc.setVertexBytes(&u, length: MemoryLayout<LaserBeamUniforms>.stride, index: 0)
+            enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         }
         enc.endEncoding()
     }

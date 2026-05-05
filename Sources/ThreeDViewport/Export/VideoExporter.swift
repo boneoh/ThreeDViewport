@@ -85,6 +85,10 @@ final class VideoExporter {
     // Gizmo pipeline — built lazily from the same Metal library as the scene pipeline
     private var gizmoPipelineState: MTLRenderPipelineState?
 
+    // Laser beam billboard pipeline (additive blend, depth test without write)
+    private var laserBeamPipelineState: MTLRenderPipelineState?
+    private var laserBeamDepthState:    MTLDepthStencilState?
+
     // MARK: - Init
 
     init?(device:            MTLDevice,
@@ -167,6 +171,33 @@ final class VideoExporter {
             }
         } else {
             print("[DEBUG] VideoExporter: gizmo shaders not found in bundle")
+        }
+
+        // Laser beam billboard pipeline
+        if let library  = try? device.makeDefaultLibrary(bundle: Bundle.module),
+           let laserV   = library.makeFunction(name: "laser_beam_vertex"),
+           let laserF   = library.makeFunction(name: "laser_beam_fragment") {
+            let laserDesc = MTLRenderPipelineDescriptor()
+            laserDesc.label                           = "LaserBeamExport"
+            laserDesc.vertexFunction                  = laserV
+            laserDesc.fragmentFunction                = laserF
+            laserDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
+            laserDesc.depthAttachmentPixelFormat      = .depth32Float
+            let laserCA = laserDesc.colorAttachments[0]!
+            laserCA.isBlendingEnabled           = true
+            laserCA.sourceRGBBlendFactor        = .one
+            laserCA.destinationRGBBlendFactor   = .one
+            laserCA.rgbBlendOperation           = .add
+            laserCA.sourceAlphaBlendFactor      = .zero
+            laserCA.destinationAlphaBlendFactor = .one
+            laserCA.alphaBlendOperation         = .add
+            laserBeamPipelineState = try? device.makeRenderPipelineState(descriptor: laserDesc)
+            let laserDepthDesc = MTLDepthStencilDescriptor()
+            laserDepthDesc.depthCompareFunction = .lessEqual
+            laserDepthDesc.isDepthWriteEnabled  = false
+            laserBeamDepthState = device.makeDepthStencilState(descriptor: laserDepthDesc)
+            print("[DEBUG] VideoExporter: laser beam pipeline "
+                + (laserBeamPipelineState != nil ? "created" : "FAILED"))
         }
 
         print("[DEBUG] VideoExporter: initialized — duration="
@@ -431,7 +462,7 @@ final class VideoExporter {
             : bc
         passDesc.depthAttachment.texture          = renderDepth
         passDesc.depthAttachment.loadAction       = .clear
-        passDesc.depthAttachment.storeAction      = .dontCare
+        passDesc.depthAttachment.storeAction      = .store   // preserved for excluded-laser post-pass
         passDesc.depthAttachment.clearDepth       = 1.0
 
         if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: passDesc) {
@@ -513,12 +544,32 @@ final class VideoExporter {
                     type: .triangle, indexCount: object.indexCount,
                     indexType: .uint32, indexBuffer: idxBuffer, indexBufferOffset: 0)
             }
+            // ── Laser beam visuals ────────────────────────────────────────────
+            let exportSize = SIMD2<Float>(Float(width), Float(height))
+            drawLaserBeamsInEncoder(encoder,
+                                    screenSize:   exportSize,
+                                    excludedOnly: false)
+            if !feedbackActive {
+                drawLaserBeamsInEncoder(encoder,
+                                        screenSize:   exportSize,
+                                        excludedOnly: true)
+            }
+
             encoder.endEncoding()
         }
 
         // ── Feedback composite → colorTex ─────────────────────────────────────
         if feedbackActive, let fp = feedbackProc, let fs = feedbackSettings {
             fp.process(commandBuffer: commandBuffer, dest: colorTex, settings: fs)
+        }
+
+        // ── Excluded laser beams (after feedback, no trails) ──────────────────
+        if feedbackActive, let fp = feedbackProc, let depthTex = fp.depthTexture {
+            let exportSize = SIMD2<Float>(Float(width), Float(height))
+            drawExcludedLaserBeams(commandBuffer: commandBuffer,
+                                   dest:          colorTex,
+                                   depthTex:      depthTex,
+                                   screenSize:    exportSize)
         }
 
         // ── Axes gizmo overlay (bottom-right corner) ──────────────────────────
@@ -537,6 +588,82 @@ final class VideoExporter {
 
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()  // must finish before getBytes
+    }
+
+    // MARK: - Laser beam draw helpers (mirror Renderer's implementations)
+
+    private func drawLaserBeamsInEncoder(_ encoder:    MTLRenderCommandEncoder,
+                                          screenSize:   SIMD2<Float>,
+                                          excludedOnly: Bool) {
+        guard let pipeline = laserBeamPipelineState else { return }
+        let beams = lightManager.lights.filter {
+            $0.type == .laser && $0.isEnabled &&
+            $0.excludeBeamFromFeedback == excludedOnly
+        }
+        guard !beams.isEmpty else { return }
+
+        encoder.setRenderPipelineState(pipeline)
+        if let ds = laserBeamDepthState { encoder.setDepthStencilState(ds) }
+        encoder.setCullMode(.none)
+
+        let vp = camera.viewProjectionMatrix
+        for laser in beams {
+            let start = laser.position
+            let end   = start + simd_normalize(laser.direction) * laser.range
+            var u = LaserBeamUniforms(
+                viewProjectionMatrix: vp,
+                startWorld: SIMD4<Float>(start, 1),
+                endWorld:   SIMD4<Float>(end,   1),
+                color:      SIMD4<Float>(laser.color, 1),
+                screenSize: screenSize,
+                thickness:  max(1.0, laser.beamThickness),
+                pad:        0
+            )
+            encoder.setVertexBytes(&u, length: MemoryLayout<LaserBeamUniforms>.stride, index: 0)
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        }
+    }
+
+    private func drawExcludedLaserBeams(commandBuffer: MTLCommandBuffer,
+                                          dest:          MTLTexture,
+                                          depthTex:      MTLTexture,
+                                          screenSize:    SIMD2<Float>) {
+        guard let pipeline = laserBeamPipelineState else { return }
+        let beams = lightManager.lights.filter {
+            $0.type == .laser && $0.isEnabled && $0.excludeBeamFromFeedback
+        }
+        guard !beams.isEmpty else { return }
+
+        let passDesc = MTLRenderPassDescriptor()
+        passDesc.colorAttachments[0].texture     = dest
+        passDesc.colorAttachments[0].loadAction  = .load
+        passDesc.colorAttachments[0].storeAction = .store
+        passDesc.depthAttachment.texture         = depthTex
+        passDesc.depthAttachment.loadAction      = .load
+        passDesc.depthAttachment.storeAction     = .dontCare
+
+        guard let enc = commandBuffer.makeRenderCommandEncoder(descriptor: passDesc) else { return }
+        enc.setRenderPipelineState(pipeline)
+        if let ds = laserBeamDepthState { enc.setDepthStencilState(ds) }
+        enc.setCullMode(.none)
+
+        let vp = camera.viewProjectionMatrix
+        for laser in beams {
+            let start = laser.position
+            let end   = start + simd_normalize(laser.direction) * laser.range
+            var u = LaserBeamUniforms(
+                viewProjectionMatrix: vp,
+                startWorld: SIMD4<Float>(start, 1),
+                endWorld:   SIMD4<Float>(end,   1),
+                color:      SIMD4<Float>(laser.color, 1),
+                screenSize: screenSize,
+                thickness:  max(1.0, laser.beamThickness),
+                pad:        0
+            )
+            enc.setVertexBytes(&u, length: MemoryLayout<LaserBeamUniforms>.stride, index: 0)
+            enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        }
+        enc.endEncoding()
     }
 
     // MARK: - Axes gizmo (mirrors Renderer.drawGizmoPass exactly)
@@ -670,6 +797,7 @@ final class VideoExporter {
     // Evaluates keyframes at the given time and writes directly to object.transform.
     // Does NOT modify timeline.currentTime — the live UI is unaffected during export.
     private func applyAnimation(at time: Double) {
+        // ── Object transforms ─────────────────────────────────────────────────
         for object in sceneManager.objects {
             guard let track = object.keyframeTrack,
                   !track.keyframes.isEmpty else { continue }
@@ -677,6 +805,26 @@ final class VideoExporter {
                 object.transform = object.baseTransform * delta
             }
         }
+
+        // ── Camera ────────────────────────────────────────────────────────────
+        // Evaluated here so the gizmo and view/projection matrices track the
+        // animation correctly.  CameraController is NOT ObservableObject, so
+        // writing its properties from the export background queue is safe.
+        if let camTrack = camera.keyframeTrack, !camTrack.keyframes.isEmpty {
+            if let state = camTrack.evaluate(at: time) {
+                camera.yaw      = state.yaw
+                camera.pitch    = state.pitch
+                camera.distance = state.distance
+                camera.target   = state.target
+            }
+        }
+
+        // NOTE: Light keyframes are intentionally NOT evaluated here.
+        // LightManager.lights is @Published; writing it from a background thread
+        // fires Combine notifications off the main thread, which corrupts the
+        // light state read by buildLightUniforms() on the same queue.
+        // The live renderer handles light animation; export uses the light state
+        // that was current when export started.
     }
 
     // MARK: - Errors

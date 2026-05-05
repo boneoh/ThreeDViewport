@@ -120,3 +120,25 @@ struct BackgroundUniforms {
     var colorTop:    SIMD4<Float>
     var colorBottom: SIMD4<Float>
 }
+
+// ── Laser beam billboard uniforms (buffer index 0 in laser beam pass) ────────
+// Must match `struct LaserBeamUniforms` in LaserBeamShaders.metal exactly.
+// Layout:
+//   viewProjectionMatrix  float4x4   64
+//   startWorld            float4     16   xyz = beam origin (w = 1)
+//   endWorld              float4     16   xyz = beam tip    (w = 1)
+//   color                 float4     16   xyz = linear RGB  (w = unused)
+//   screenSize            float2      8   drawable pixels
+//   thickness             float       4   beam width in pixels
+//   pad                   float       4
+//   ─────────────────────────────────────
+//   Total                            128
+struct LaserBeamUniforms {
+    var viewProjectionMatrix: matrix_float4x4
+    var startWorld: SIMD4<Float>
+    var endWorld:   SIMD4<Float>
+    var color:      SIMD4<Float>
+    var screenSize: SIMD2<Float>
+    var thickness:  Float
+    var pad:        Float
+}

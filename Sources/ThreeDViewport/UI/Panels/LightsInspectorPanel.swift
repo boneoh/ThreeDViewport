@@ -319,6 +319,26 @@ struct LightsInspectorPanel: View {
                               set: { lightManager.lights[i].range = $0 }),
                           range: 0...50, format: "%.1f")
             }
+
+            // Laser beam visuals
+            if light.type == .laser {
+                Divider()
+                GroupBox("Beam") {
+                    VStack(spacing: 6) {
+                        SliderRow(label: "Thickness",
+                                  value: Binding<Float>(
+                                      get: { lightManager.lights[i].beamThickness },
+                                      set: { lightManager.lights[i].beamThickness = $0 }),
+                                  range: 1...30, format: "%.0f")
+                        Toggle("Exclude from feedback",
+                               isOn: Binding<Bool>(
+                                   get: { lightManager.lights[i].excludeBeamFromFeedback },
+                                   set: { lightManager.lights[i].excludeBeamFromFeedback = $0 }))
+                            .font(.caption)
+                            .toggleStyle(.checkbox)
+                    }
+                }
+            }
         }
     }
 

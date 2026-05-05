@@ -52,6 +52,13 @@ struct LightConfig {
     // ── Point / spot / laser ──────────────────────────────────────────────────
     var range: Float             = 15.0
 
+    // ── Laser beam visuals ────────────────────────────────────────────────────
+    /// Visible beam width in pixels.  1 = single-pixel line; ≥2 = billboard quad.
+    var beamThickness: Float     = 1.0
+    /// When true the beam is drawn after the feedback composite pass so it is
+    /// never captured in the delay-line ring buffer (no trailing copies).
+    var excludeBeamFromFeedback: Bool = false
+
     // MARK: - Shader accessors
 
     // position xyz + w = light type
@@ -128,14 +135,16 @@ struct LightConfig {
 
     static var defaultLaser: LightConfig {
         var l = LightConfig()
-        l.type           = .laser
-        l.color          = SIMD3<Float>(0.15, 0.8, 1.0)   // cyan-blue
-        l.intensity      = 10.0
-        l.position       = SIMD3<Float>(0, 3, 3)
-        l.direction      = simd_normalize(SIMD3<Float>(0, -0.4, -1))
-        l.innerConeAngle = 0.013               // ≈ 0.75° — hard pencil beam
-        l.outerConeAngle = 0.026               // ≈ 1.5°
-        l.range          = 30.0
+        l.type                    = .laser
+        l.color                   = SIMD3<Float>(0.15, 0.8, 1.0)   // cyan-blue
+        l.intensity               = 10.0
+        l.position                = SIMD3<Float>(0, 3, 3)
+        l.direction               = simd_normalize(SIMD3<Float>(0, -0.4, -1))
+        l.innerConeAngle          = 0.013               // ≈ 0.75° — hard pencil beam
+        l.outerConeAngle          = 0.026               // ≈ 1.5°
+        l.range                   = 30.0
+        l.beamThickness           = 3.0
+        l.excludeBeamFromFeedback = false
         return l
     }
 }
