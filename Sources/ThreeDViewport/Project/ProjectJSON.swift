@@ -1,6 +1,6 @@
 import Foundation
 
-// Phase 4/5/6/8/9/10/11: Codable structs that define the .3dvp project file format (JSON).
+// Phase 4/5/6/8/9/10/11/12: Codable structs that define the .3dvp project file format (JSON).
 // Version history:
 //   1 — initial: model path, camera, timeline, per-object keyframe tracks.
 //   2 — Phase 5: added cameraKeyframes array.
@@ -15,6 +15,7 @@ import Foundation
 //   9 — Added blendMode and swapLayers to FeedbackData.
 //  10 — Added lightConfigs array (per-light static config incl. beamThickness, excludeBeamFromFeedback).
 //  11 — Added easingMode (Int) per ObjectData for per-track keyframe interpolation style.
+//  12 — Added colorGrade (brightness Float, contrast Float).
 //
 // Design rules:
 //   • No binary data inline — .glb files are referenced by absolute path.
@@ -26,7 +27,7 @@ import Foundation
 //     All new fields have defaults so older files load without error.
 
 struct ProjectData: Codable {
-    var version:             Int     = 11
+    var version:             Int     = 13
     var modelPath:           String? = nil   // v1/v2 compat; ignored when modelPaths non-empty.
     var modelPaths:          [String] = []   // v3 — ordered list of absolute .glb paths.
     var timeline:            TimelineData
@@ -43,10 +44,11 @@ struct ProjectData: Codable {
     var showAxesGizmo:       Bool = false               // v8; XYZ orientation gizmo.
     var lightConfigs:        [LightConfigData] = []    // v10; per-light static config.
     var windowLayout:        WindowLayoutData  = WindowLayoutData()  // v11; panel positions.
+    var colorGrade:          ColorGradeData   = ColorGradeData()    // v12; B/C post-process.
 
     // MARK: - Memberwise init (required because we define init(from:) below)
 
-    init(version:             Int                    = 11,
+    init(version:             Int                    = 13,
          modelPath:           String?                = nil,
          modelPaths:          [String]               = [],
          timeline:            TimelineData,
@@ -61,7 +63,8 @@ struct ProjectData: Codable {
          isWireframe:         Bool                   = false,
          showAxesGizmo:       Bool                   = false,
          lightConfigs:        [LightConfigData]      = [],
-         windowLayout:        WindowLayoutData       = WindowLayoutData()) {
+         windowLayout:        WindowLayoutData       = WindowLayoutData(),
+         colorGrade:          ColorGradeData         = ColorGradeData()) {
         self.version             = version
         self.modelPath           = modelPath
         self.modelPaths          = modelPaths
@@ -78,6 +81,7 @@ struct ProjectData: Codable {
         self.showAxesGizmo       = showAxesGizmo
         self.lightConfigs        = lightConfigs
         self.windowLayout        = windowLayout
+        self.colorGrade          = colorGrade
     }
 
     // MARK: - Custom decoder
@@ -106,6 +110,30 @@ struct ProjectData: Codable {
         showAxesGizmo       = (try? c.decode(Bool.self,                  forKey: .showAxesGizmo))       ?? false
         lightConfigs        = (try? c.decode([LightConfigData].self,     forKey: .lightConfigs))        ?? []
         windowLayout        = (try? c.decode(WindowLayoutData.self,      forKey: .windowLayout))        ?? WindowLayoutData()
+        colorGrade          = (try? c.decode(ColorGradeData.self,        forKey: .colorGrade))          ?? ColorGradeData()
+    }
+}
+
+// v12: Brightness / contrast post-process.
+// v13: Added gamma (Float, identity = 1.0).
+// Defaults are identity so older project files load with no color grading applied.
+struct ColorGradeData: Codable {
+    var brightness: Float = 0.0   // identity = 0
+    var contrast:   Float = 1.0   // identity = 1
+    var gamma:      Float = 1.0   // identity = 1; v13 — absent in v12 files, falls back to 1.0
+
+    // Custom decoder so v12 files (missing gamma) decode cleanly using the default.
+    init(from decoder: Decoder) throws {
+        let c  = try decoder.container(keyedBy: CodingKeys.self)
+        brightness = (try? c.decode(Float.self, forKey: .brightness)) ?? 0.0
+        contrast   = (try? c.decode(Float.self, forKey: .contrast))   ?? 1.0
+        gamma      = (try? c.decode(Float.self, forKey: .gamma))      ?? 1.0
+    }
+
+    init(brightness: Float = 0.0, contrast: Float = 1.0, gamma: Float = 1.0) {
+        self.brightness = brightness
+        self.contrast   = contrast
+        self.gamma      = gamma
     }
 }
 
@@ -180,6 +208,7 @@ struct WindowLayoutData: Codable {
     var timelineEditor: WindowFrameData? = nil                // nil = was closed
     var lightsPanel:    WindowFrameData? = nil
     var feedbackPanel:  WindowFrameData? = nil
+    var colorGradePanel: WindowFrameData? = nil
 }
 
 struct TimelineData: Codable {

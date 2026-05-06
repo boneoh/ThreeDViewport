@@ -95,22 +95,42 @@ final class KeyframeTrack {
                     scale:       Interpolation.lerp(from:  a.scale,       to: b.scale,       t: rawT)
                 ))
 
-            case .snap:
-                let t = EasingMode.snapT(rawT)
-                return makeMatrix(from: TransformKeyframe(
-                    time:        time,
-                    translation: Interpolation.lerp(from:  a.translation, to: b.translation, t: t),
-                    rotation:    Interpolation.slerp(from: a.rotation,    to: b.rotation,    t: t),
-                    scale:       Interpolation.lerp(from:  a.scale,       to: b.scale,       t: t)
-                ))
+            case .splineS, .splineM, .splineL:
+                // Tension values: position uses Hermite tangent scale,
+                // rotation uses squad inner-point scale.
+                //   S → subtle arc  (pos τ=0.25, rot τ=0.5)
+                //   M → medium arc  (pos τ=0.50, rot τ=1.0)  ← same math as .smooth
+                //   L → wide arc    (pos τ=1.00, rot τ=2.0)
+                let posTension: Float
+                let rotTension: Float
+                switch easingMode {
+                case .splineS: posTension = 0.25; rotTension = 0.5
+                case .splineM: posTension = 0.5;  rotTension = 1.0
+                default:       posTension = 1.0;  rotTension = 2.0  // .splineL
+                }
 
-            case .elastic:
-                let t = EasingMode.elasticT(rawT)
+                let prev = i > 0
+                    ? keyframes[i - 1]
+                    : mirrorKeyframe(b, around: a)
+                let next = i + 2 < keyframes.count
+                    ? keyframes[i + 2]
+                    : mirrorKeyframe(a, around: b)
+
+                let translation = EasingMode.catmullRomTensioned(
+                    prev.translation, a.translation, b.translation, next.translation,
+                    t: rawT, tension: posTension)
+                let scale = EasingMode.catmullRomTensioned(
+                    prev.scale, a.scale, b.scale, next.scale,
+                    t: rawT, tension: posTension)
+                let rotation = EasingMode.squadTensioned(
+                    prev.rotation, a.rotation, b.rotation, next.rotation,
+                    t: rawT, tension: rotTension)
+
                 return makeMatrix(from: TransformKeyframe(
                     time:        time,
-                    translation: Interpolation.lerp(from:  a.translation, to: b.translation, t: t),
-                    rotation:    Interpolation.slerp(from: a.rotation,    to: b.rotation,    t: t),
-                    scale:       Interpolation.lerp(from:  a.scale,       to: b.scale,       t: t)
+                    translation: translation,
+                    rotation:    rotation,
+                    scale:       scale
                 ))
 
             case .smooth:

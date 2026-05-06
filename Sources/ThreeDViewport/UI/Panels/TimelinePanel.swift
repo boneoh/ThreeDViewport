@@ -45,7 +45,7 @@ struct TimelinePanel: View {
                 // ── Time display ──────────────────────────────────────────────
                 Text(timeString(timeline.currentTime))
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundColor(Color(NSColor.labelColor))
+                    .foregroundColor(Color(white: 0.90))
                     .frame(width: 70, alignment: .leading)
 
                 // ── Scrubber ──────────────────────────────────────────────────
@@ -67,7 +67,7 @@ struct TimelinePanel: View {
                 } label: {
                     Text(timeString(timeline.duration))
                         .font(.system(size: 12, weight: .regular, design: .monospaced))
-                        .foregroundColor(Color(NSColor.secondaryLabelColor))
+                        .foregroundColor(Color(white: 0.65))
                         .frame(width: 70, alignment: .trailing)
                         .help("Click to set timeline duration")
                 }
@@ -142,6 +142,7 @@ struct TimelinePanel: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
         }
+        .environment(\.colorScheme, .dark)  // ensure all child controls resolve in dark mode
     }
 
     // MARK: - Duration popover
@@ -219,7 +220,7 @@ struct TimelinePanel: View {
                 .frame(width: 28, height: 28)
                 .foregroundColor(isActive
                     ? Color(NSColor.controlAccentColor)
-                    : Color(NSColor.labelColor))
+                    : Color(white: 0.90))
         }
         .buttonStyle(.borderless)
         .help(tooltip)

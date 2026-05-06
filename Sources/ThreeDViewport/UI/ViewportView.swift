@@ -39,8 +39,9 @@ final class ViewportView: MTKView {
     private var loopRevCancellable:     AnyCancellable?
 
     // Feedback delay-line system
-    let feedbackSettings  = FeedbackSettings()
-    let feedbackProcessor: FeedbackProcessor   // created after Metal device is ready
+    let feedbackSettings    = FeedbackSettings()
+    let feedbackProcessor:   FeedbackProcessor   // created after Metal device is ready
+    let colorGradeSettings = ColorGradeSettings()
     private var playbackCancellable: AnyCancellable?
 
     // Phase 6: HUD observable state — AppDelegate embeds the SwiftUI overlay using this.
@@ -58,6 +59,15 @@ final class ViewportView: MTKView {
     // Input state
     private var lastMouseLocation: NSPoint = .zero
     private var isSpaceDown: Bool = false
+
+    // Right-drag axis lock (object mode).
+    // We accumulate displacement until one axis clearly dominates, then lock
+    // for the rest of the gesture so the user can't accidentally rotate diagonally.
+    private enum DragAxis { case none, horizontal, vertical }
+    private var dragLockAxis:      DragAxis = .none
+    private var dragAccumX:        Float    = 0   // total pixels since rightMouseDown
+    private var dragAccumY:        Float    = 0
+    private let dragLockThreshold: Float    = 8   // pixels before axis is committed
 
     // Holds the VideoExporter alive for the duration of an export.
     private var activeExporter: VideoExporter?
@@ -119,8 +129,9 @@ final class ViewportView: MTKView {
         delegate = renderer
 
         // Wire feedback processor + settings into renderer
-        renderer?.feedbackProcessor = feedbackProcessor
-        renderer?.feedbackSettings  = feedbackSettings
+        renderer?.feedbackProcessor   = feedbackProcessor
+        renderer?.feedbackSettings    = feedbackSettings
+        renderer?.colorGradeSettings  = colorGradeSettings
 
         // Sync renderSettings → renderer whenever toggles change
         colorModeCancellable = renderSettings.$isColorMode.sink { [weak self] value in
@@ -200,7 +211,10 @@ final class ViewportView: MTKView {
 
             print("[DEBUG] ViewportView: loadModel complete — objects=" + String(sceneManager.objects.count))
         } else {
-            print("[DEBUG] ViewportView: GLTFLoader returned nil for " + url.lastPathComponent)
+            let filename = url.lastPathComponent
+            let reason   = loader.lastError ?? "The file could not be read."
+            print("[DEBUG] ViewportView: GLTFLoader returned nil for " + filename)
+            showLoadError(filename: filename, reason: reason)
         }
     }
 
@@ -235,7 +249,10 @@ final class ViewportView: MTKView {
 
             print("[DEBUG] ViewportView: addModelToScene complete — total objects=" + String(sceneManager.objects.count))
         } else {
-            print("[DEBUG] ViewportView: GLTFLoader returned nil for " + url.lastPathComponent)
+            let filename = url.lastPathComponent
+            let reason   = loader.lastError ?? "The file could not be read."
+            print("[DEBUG] ViewportView: GLTFLoader returned nil for " + filename)
+            showLoadError(filename: filename, reason: reason)
         }
     }
 
@@ -268,6 +285,60 @@ final class ViewportView: MTKView {
                 ? sceneManager.objects[idx].name : ""
         case .light:
             overlayState.selectedItemName = "Light \(lightManager.selectedIndex + 1)"
+        }
+    }
+
+    // MARK: - Orientation reset
+
+    /// Resets `obj`'s rotation to its base-transform orientation while keeping
+    /// the current world-space position and scale unchanged.
+    ///
+    /// The base-transform stores the rotation as baked into the 3×3 columns
+    /// (each column = rotation_axis × scale_factor).  We extract the pure
+    /// rotation by normalising those columns, then re-apply the current scale.
+    func resetObjectOrientation(_ obj: SceneObject) {
+        // Current scale = length of each 3×3 column vector
+        let s0 = simd_length(SIMD3<Float>(obj.transform.columns.0.x,
+                                           obj.transform.columns.0.y,
+                                           obj.transform.columns.0.z))
+        let s1 = simd_length(SIMD3<Float>(obj.transform.columns.1.x,
+                                           obj.transform.columns.1.y,
+                                           obj.transform.columns.1.z))
+        let s2 = simd_length(SIMD3<Float>(obj.transform.columns.2.x,
+                                           obj.transform.columns.2.y,
+                                           obj.transform.columns.2.z))
+
+        // Base rotation = normalised columns of the base transform's 3×3 block
+        let b0 = simd_normalize(SIMD3<Float>(obj.baseTransform.columns.0.x,
+                                              obj.baseTransform.columns.0.y,
+                                              obj.baseTransform.columns.0.z))
+        let b1 = simd_normalize(SIMD3<Float>(obj.baseTransform.columns.1.x,
+                                              obj.baseTransform.columns.1.y,
+                                              obj.baseTransform.columns.1.z))
+        let b2 = simd_normalize(SIMD3<Float>(obj.baseTransform.columns.2.x,
+                                              obj.baseTransform.columns.2.y,
+                                              obj.baseTransform.columns.2.z))
+
+        // Write rotation×scale back, keep the translation column unchanged
+        obj.transform.columns.0 = SIMD4<Float>(b0 * s0, 0)
+        obj.transform.columns.1 = SIMD4<Float>(b1 * s1, 0)
+        obj.transform.columns.2 = SIMD4<Float>(b2 * s2, 0)
+
+        print("[DEBUG] ViewportView: resetObjectOrientation — " + obj.name)
+    }
+
+    // MARK: - Load error alert
+
+    private func showLoadError(filename: String, reason: String) {
+        let alert = NSAlert()
+        alert.alertStyle     = .warning
+        alert.messageText    = "Could not open \"\(filename)\""
+        alert.informativeText = reason
+        alert.addButton(withTitle: "OK")
+        if let window = window {
+            alert.beginSheetModal(for: window)
+        } else {
+            alert.runModal()
         }
     }
 
@@ -476,10 +547,11 @@ final class ViewportView: MTKView {
             return
         }
 
-        exporter.isColorMode      = renderSettings.isColorMode
-        exporter.isWireframe      = renderer?.isWireframe      ?? false
-        exporter.showAxesGizmo    = renderSettings.showAxesGizmo
-        exporter.feedbackSettings = feedbackSettings
+        exporter.isColorMode        = renderSettings.isColorMode
+        exporter.isWireframe        = renderer?.isWireframe      ?? false
+        exporter.showAxesGizmo      = renderSettings.showAxesGizmo
+        exporter.feedbackSettings   = feedbackSettings
+        exporter.colorGradeSettings = colorGradeSettings
         feedbackProcessor.reset()   // clear live queue; exporter has its own processor
         timeline.pause()
         isPaused = true
@@ -558,6 +630,9 @@ final class ViewportView: MTKView {
 
     override func rightMouseDown(with event: NSEvent) {
         lastMouseLocation = convert(event.locationInWindow, from: nil)
+        dragLockAxis = .none
+        dragAccumX   = 0
+        dragAccumY   = 0
     }
 
     override func rightMouseDragged(with event: NSEvent) {
@@ -572,23 +647,45 @@ final class ViewportView: MTKView {
             guard !timeline.isPlaying,
                   let obj = sceneManager.selectedObject ?? sceneManager.primaryObject
             else { return }
-            // Right drag in object mode: spin around the object's visual centre.
-            //   Horizontal drag → world-Y yaw  (natural left/right spin)
-            //   Vertical drag   → camera-right pitch (screen-relative tilt)
-            //
-            // Pivot = local AABB midpoint transformed to world space.
+
+            // ── Axis lock ─────────────────────────────────────────────────────
+            // Accumulate displacement until one screen axis clearly dominates,
+            // then commit for the rest of the gesture.  This prevents diagonal
+            // drift and makes single-axis spins easy to execute.
+            if dragLockAxis == .none {
+                dragAccumX += dx
+                dragAccumY += dy
+                let dist = (dragAccumX * dragAccumX + dragAccumY * dragAccumY).squareRoot()
+                guard dist >= dragLockThreshold else { return }
+                dragLockAxis = abs(dragAccumX) >= abs(dragAccumY) ? .horizontal : .vertical
+            }
+
+            // Apply only the locked-axis component of this frame's delta.
+            // Camera-space axes:
+            //   Horizontal drag → spin around camera.upVector    (screen left/right)
+            //   Vertical drag   → tilt around camera.rightVector (screen up/down)
+            let rotAxis: SIMD3<Float>
+            let angle:   Float
+            switch dragLockAxis {
+            case .horizontal:
+                rotAxis = camera.upVector
+                angle   =  dx * sensitivity
+            case .vertical:
+                rotAxis = camera.rightVector
+                angle   = -dy * sensitivity
+            case .none:
+                return
+            }
+            let rot = rotationMatrix4x4(simd_quatf(angle: angle, axis: rotAxis))
+
+            // Pivot = local AABB midpoint in world space (invariant under rotation).
             // boundingMin/boundingMax are always in local space (set by GLTFLoader
-            // and never modified). boundingCenter is not used here because
-            // autoNormalize converts it to world space and it goes stale after moves.
+            // and never modified after load).
             let localCentre = (obj.boundingMin + obj.boundingMax) * 0.5
             let wc4   = obj.transform * SIMD4<Float>(localCentre, 1)
             let pivot = SIMD3<Float>(wc4.x, wc4.y, wc4.z)
 
-            let yaw   = simd_quatf(angle:  dx * sensitivity, axis: SIMD3<Float>(0, 1, 0))
-            let pitch = simd_quatf(angle: -dy * sensitivity, axis: camera.rightVector)
-            let rot   = rotationMatrix4x4(simd_normalize(pitch * yaw))
-
-            // Rotate the 3×3 orientation block
+            // Rotate the 3×3 orientation block.
             let c0 = rot * SIMD4<Float>(obj.transform.columns.0.x,
                                          obj.transform.columns.0.y,
                                          obj.transform.columns.0.z, 0)
@@ -603,9 +700,7 @@ final class ViewportView: MTKView {
             obj.transform.columns.2 = SIMD4<Float>(c2.x, c2.y, c2.z, 0)
 
             // Recompute translation so `pivot` stays fixed in world space.
-            // After the 3×3 is updated, obj.transform * (localCentre, 0) gives
-            // M_new · localCentre (w=0 ignores the translation column), so:
-            // t_new = pivot − M_new · localCentre
+            // t_new = pivot − M_new · localCentre  (w=0 skips the old translation)
             let mc4    = obj.transform * SIMD4<Float>(localCentre, 0)
             let newPos = pivot - SIMD3<Float>(mc4.x, mc4.y, mc4.z)
             obj.transform.columns.3 = SIMD4<Float>(newPos.x, newPos.y, newPos.z, 1)
@@ -714,6 +809,7 @@ final class ViewportView: MTKView {
         static let l:        UInt16 = 37   // light mode
         static let o:        UInt16 = 31   // object mode / cycle
         static let p:        UInt16 = 35   // play / pause
+        static let r:        UInt16 = 15   // reset object orientation to base
         // Regular arrow keys
         static let left:     UInt16 = 123
         static let right:    UInt16 = 124
@@ -854,6 +950,15 @@ final class ViewportView: MTKView {
                     syncOverlayState()
                 }
                 onControlModeChanged?(.object(sceneManager.selectedIndex))
+                return
+
+            case KC.r:
+                // R — reset the selected object's rotation to its original loaded orientation.
+                // Position and scale are preserved; only the rotation is replaced.
+                if controlMode == .object,
+                   let obj = sceneManager.selectedObject ?? sceneManager.primaryObject {
+                    resetObjectOrientation(obj)
+                }
                 return
 
             default:

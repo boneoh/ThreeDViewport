@@ -210,8 +210,16 @@ final class ProjectFile {
             gradBottomB: bg.gradientBottom.z
         )
 
+        // ── Color grade (v12) ─────────────────────────────────────────────────
+        let cg = vp.colorGradeSettings
+        let colorGradeData = ColorGradeData(
+            brightness: cg.brightness,
+            contrast:   cg.contrast,
+            gamma:      cg.gamma
+        )
+
         return ProjectData(
-            version:             11,
+            version:             13,
             modelPath:           nil,           // v3+ uses modelPaths instead
             modelPaths:          modelPaths,
             timeline:            timelineData,
@@ -226,7 +234,8 @@ final class ProjectFile {
             isWireframe:         vp.renderer?.isWireframe ?? false,
             showAxesGizmo:       vp.renderSettings.showAxesGizmo,
             lightConfigs:        lightConfigsData,
-            windowLayout:        windowLayout
+            windowLayout:        windowLayout,
+            colorGrade:          colorGradeData
         )
     }
 
@@ -368,6 +377,14 @@ final class ProjectFile {
 
         // Sync HUD with restored scene.
         vp.syncOverlayState()
+
+        // ── Color grade (v12) ─────────────────────────────────────────────────
+        vp.colorGradeSettings.brightness = data.colorGrade.brightness
+        vp.colorGradeSettings.contrast   = data.colorGrade.contrast
+        vp.colorGradeSettings.gamma      = data.colorGrade.gamma
+        print("[DEBUG] ProjectFile: colorGrade brightness=\(data.colorGrade.brightness)"
+            + " contrast=\(data.colorGrade.contrast)"
+            + " gamma=\(data.colorGrade.gamma)")
 
         // Force the Renderer to re-evaluate keyframes on the next draw.
         // Without this, lastAnimatedTime == currentTime (both 0) so applyAnimation()

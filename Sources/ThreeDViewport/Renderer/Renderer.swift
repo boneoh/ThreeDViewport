@@ -57,6 +57,12 @@ final class Renderer: NSObject, MTKViewDelegate {
     var feedbackProcessor: FeedbackProcessor?
     var feedbackSettings:  FeedbackSettings?
 
+    // MARK: - Color grade (optional — set by ViewportView after init)
+
+    var colorGradeSettings:    ColorGradeSettings?
+    private var colorGradePipeline: MTLRenderPipelineState?
+    private var gradeTexture:  MTLTexture?   // intermediate; rebuilt on size change
+
     // MARK: - Laser hit effect
 
     private var laserHitSystem:   LaserHitSystem   = LaserHitSystem()
@@ -270,6 +276,25 @@ final class Renderer: NSObject, MTKViewDelegate {
         } catch {
             print("[DEBUG] Renderer: spark pipeline failed — " + error.localizedDescription)
         }
+
+        // ── Color grade pipeline (fullscreen pass, no depth) ──────────────────
+        guard let gradeVertFn = library.makeFunction(name: "color_grade_vertex"),
+              let gradeFragFn = library.makeFunction(name: "color_grade_fragment") else {
+            print("[DEBUG] Renderer: color_grade shaders not found")
+            return
+        }
+        let gradeDesc = MTLRenderPipelineDescriptor()
+        gradeDesc.label                             = "ColorGrade"
+        gradeDesc.vertexFunction                    = gradeVertFn
+        gradeDesc.fragmentFunction                  = gradeFragFn
+        gradeDesc.colorAttachments[0].pixelFormat   = .bgra8Unorm
+        // No depth attachment, no blending — every pixel is overwritten
+        do {
+            colorGradePipeline = try device.makeRenderPipelineState(descriptor: gradeDesc)
+            print("[DEBUG] Renderer: color grade pipeline created")
+        } catch {
+            print("[DEBUG] Renderer: color grade pipeline failed — " + error.localizedDescription)
+        }
     }
 
     private func buildDummyBuffers() {
@@ -292,6 +317,18 @@ final class Renderer: NSObject, MTKViewDelegate {
         let fh = min(Int(size.height), 1080)
         feedbackProcessor?.resize(width: fw, height: fh,
                                   length: feedbackSettings?.length ?? 10)
+        // Rebuild grade intermediate texture at the new drawable size.
+        rebuildGradeTexture(width: Int(size.width), height: Int(size.height))
+    }
+
+    private func rebuildGradeTexture(width: Int, height: Int) {
+        guard width > 0, height > 0 else { return }
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
+        desc.usage       = [.shaderRead, .renderTarget]
+        desc.storageMode = .private
+        gradeTexture = device.makeTexture(descriptor: desc)
+        print("[DEBUG] Renderer: gradeTexture rebuilt \(width)×\(height)")
     }
 
     func draw(in view: MTKView) {
@@ -505,8 +542,45 @@ final class Renderer: NSObject, MTKViewDelegate {
                           height:        Int(view.drawableSize.height))
         }
 
+        // ── Color grade (brightness / contrast) — very last pass ─────────────
+        if let settings = colorGradeSettings, !settings.isIdentity,
+           let gradeTex = gradeTexture {
+            if let blit = commandBuffer.makeBlitCommandEncoder() {
+                blit.copy(from: drawable.texture, to: gradeTex)
+                blit.endEncoding()
+            }
+            applyColorGrade(commandBuffer: commandBuffer,
+                            source: gradeTex,
+                            dest:   drawable.texture,
+                            settings: settings)
+        }
+
         commandBuffer.present(drawable)
         commandBuffer.commit()
+    }
+
+    // MARK: - Color grade helper
+
+    func applyColorGrade(commandBuffer: MTLCommandBuffer,
+                         source:        MTLTexture,
+                         dest:          MTLTexture,
+                         settings:      ColorGradeSettings) {
+        guard let pipeline = colorGradePipeline else { return }
+        let passDesc = MTLRenderPassDescriptor()
+        passDesc.colorAttachments[0].texture     = dest
+        passDesc.colorAttachments[0].loadAction  = .dontCare   // every pixel overwritten
+        passDesc.colorAttachments[0].storeAction = .store
+        guard let enc = commandBuffer.makeRenderCommandEncoder(descriptor: passDesc) else { return }
+        enc.setRenderPipelineState(pipeline)
+        enc.setCullMode(.none)
+        enc.setFragmentTexture(source, index: 0)
+        // z = 1/gamma: precompute reciprocal so the shader avoids per-pixel division.
+        // Clamp gamma to avoid division by zero; identity when gamma==1 → z==1.
+        let gammaExp = 1.0 / max(settings.gamma, 0.01)
+        var params = SIMD3<Float>(settings.brightness, settings.contrast, gammaExp)
+        enc.setFragmentBytes(&params, length: MemoryLayout<SIMD3<Float>>.stride, index: 0)
+        enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        enc.endEncoding()
     }
 
     // MARK: - Axes gizmo

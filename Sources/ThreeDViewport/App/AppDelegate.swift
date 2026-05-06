@@ -4,7 +4,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 import simd
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
 
     var window: NSWindow?
     var viewportView: ViewportView?
@@ -15,6 +15,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // Feedback delay-line panel.
     private var feedbackPanel: NSPanel?
+
+    // Brightness / contrast color grade panel.
+    private var colorGradePanel: NSPanel?
 
     // Edit > Remove submenu — repopulated dynamically by NSMenuDelegate.
     private var removeSubmenu: NSMenu?
@@ -33,6 +36,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                    savedDirection: SIMD3<Float>, savedPosition: SIMD3<Float>, kfTime: Double)
     }
     private var kfEditSnapshot: KFEditSnapshot? = nil
+
+    // Tracks which secondary windows were hidden when the main window miniaturized.
+    private var panelsHiddenByMiniaturize: Set<String> = []
 
     // Tracks the last saved/opened project URL for ⌘S "save in place".
     private var currentProjectURL: URL?
@@ -66,7 +72,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             defer: false
         )
         window = w
-        w.title = "ThreeDViewport"
+        w.title    = "ThreeDViewport"
+        w.delegate = self
         w.center()
 
         // ── Container ─────────────────────────────────────────────────────────
@@ -201,6 +208,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             layout.feedbackPanel = WindowFrameData(x: f.origin.x, y: f.origin.y,
                                                    w: f.size.width, h: f.size.height)
         }
+        if let panel = colorGradePanel, panel.isVisible {
+            let f = panel.frame
+            layout.colorGradePanel = WindowFrameData(x: f.origin.x, y: f.origin.y,
+                                                     w: f.size.width, h: f.size.height)
+        }
         return layout
     }
 
@@ -230,6 +242,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             feedbackPanel?.setFrame(
                 NSRect(x: ff.x, y: ff.y, width: ff.w, height: ff.h), display: true)
         }
+
+        // Color grade panel — open and position if it was visible
+        if let gf = layout.colorGradePanel {
+            if colorGradePanel == nil { showColorGradePanel(self) }
+            colorGradePanel?.setFrame(
+                NSRect(x: gf.x, y: gf.y, width: gf.w, height: gf.h), display: true)
+        }
     }
 
     // MARK: - Dirty tracking
@@ -249,6 +268,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             .sink { [weak self] in self?.markDirty() }
             .store(in: &settingsCancellables)
 
+        // Resize the timeline editor whenever the light count changes.
+        // objectWillChange fires BEFORE the mutation, so dispatch async to read
+        // the committed new count on the next run-loop turn.
+        viewport.lightManager.objectWillChange
+            .sink { [weak self] in
+                DispatchQueue.main.async { [weak self] in
+                    self?.timelineEditorWC?.updateWindowHeight()
+                }
+            }
+            .store(in: &settingsCancellables)
+
         // FeedbackSettings covers all feedback panel controls.
         viewport.feedbackSettings.objectWillChange
             .sink { [weak self] in self?.markDirty() }
@@ -261,6 +291,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         // BackgroundConfig covers mode, solid colour, gradient colours.
         viewport.backgroundConfig.objectWillChange
+            .sink { [weak self] in self?.markDirty() }
+            .store(in: &settingsCancellables)
+
+        // ColorGradeSettings covers brightness and contrast.
+        viewport.colorGradeSettings.objectWillChange
             .sink { [weak self] in self?.markDirty() }
             .store(in: &settingsCancellables)
 
@@ -298,7 +333,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let fileMenu = NSMenu(title: "File")
         fileItem.submenu = fileMenu
 
-        // Open Model — replaces entire scene (⌘O)
+        // Open Model — adds to scene (⌘O); use New Project to start fresh
         let openModelItem = NSMenuItem(
             title: "Open Model...",
             action: #selector(openModel(_:)),
@@ -306,15 +341,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         )
         openModelItem.target = self
         fileMenu.addItem(openModelItem)
-
-        // Add Model to Scene — appends without clearing (⌘⇧O)
-        let addModelItem = NSMenuItem(
-            title: "Add Model to Scene...",
-            action: #selector(addModelToScene(_:)),
-            keyEquivalent: "O"   // uppercase letter → ⌘⇧O
-        )
-        addModelItem.target = self
-        fileMenu.addItem(addModelItem)
 
         fileMenu.addItem(.separator())
 
@@ -374,6 +400,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         removeSubmenu = sub
         editMenu.addItem(removeItem)
 
+        let removeAllItem = NSMenuItem(
+            title: "Remove All",
+            action: #selector(confirmRemoveAll(_:)),
+            keyEquivalent: ""
+        )
+        removeAllItem.target = self
+        editMenu.addItem(removeAllItem)
+
         // ── View menu — rendering toggles only ───────────────────────────────
         let viewItem = NSMenuItem()
         mainMenu.addItem(viewItem)
@@ -424,6 +458,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let windowMenu = NSMenu(title: "Window")
         windowItem.submenu = windowMenu
 
+        // Show Main Window — deminiaturizes and restores secondary windows
+        let showMainItem = NSMenuItem(
+            title: "Show Main Window",
+            action: #selector(showMainWindow(_:)),
+            keyEquivalent: ""
+        )
+        showMainItem.target = self
+        windowMenu.addItem(showMainItem)
+
+        windowMenu.addItem(.separator())
+
         // Standard macOS window management
         windowMenu.addItem(NSMenuItem(
             title: "Minimize",
@@ -462,6 +507,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         )
         feedbackItem.target = self
         windowMenu.addItem(feedbackItem)
+
+        let colorGradeItem = NSMenuItem(
+            title: "Color Grade…",
+            action: #selector(showColorGradePanel(_:)),
+            keyEquivalent: "g"
+        )
+        colorGradeItem.target = self
+        windowMenu.addItem(colorGradeItem)
 
         let timelineEditorItem = NSMenuItem(
             title: "Timeline Editor",
@@ -525,7 +578,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         print("[DEBUG] AppDelegate: new project")
     }
 
-    // MARK: - Open Model (replaces scene)
+    // MARK: - Open Model (adds to scene; use New Project to start fresh)
 
     @objc private func openModel(_ sender: Any) {
         guard let window = window else {
@@ -537,7 +590,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories    = false
         panel.canChooseFiles          = true
-        panel.title = "Open Model (replaces scene)"
+        panel.title = "Open Model"
 
         let modelTypes = [UTType(filenameExtension: "glb"), UTType(filenameExtension: "gltf")]
             .compactMap { $0 }
@@ -551,8 +604,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 return
             }
             print("[DEBUG] AppDelegate: openModel — " + url.lastPathComponent)
-            self?.viewportView?.loadModel(url: url)
+            self?.viewportView?.addModelToScene(url: url)
             self?.markDirty()
+            self?.timelineEditorWC?.updateWindowHeight()
         }
     }
 
@@ -675,6 +729,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    // MARK: - NSWindowDelegate — main window miniaturize tracking
+
+    func windowWillMiniaturize(_ notification: Notification) {
+        panelsHiddenByMiniaturize.removeAll()
+        if let p = lightsPanel, p.isVisible {
+            p.orderOut(nil)
+            panelsHiddenByMiniaturize.insert("lights")
+        }
+        if let p = feedbackPanel, p.isVisible {
+            p.orderOut(nil)
+            panelsHiddenByMiniaturize.insert("feedback")
+        }
+        if let p = colorGradePanel, p.isVisible {
+            p.orderOut(nil)
+            panelsHiddenByMiniaturize.insert("colorGrade")
+        }
+        if let wc = timelineEditorWC, wc.window?.isVisible == true {
+            wc.window?.orderOut(nil)
+            panelsHiddenByMiniaturize.insert("timeline")
+        }
+        print("[DEBUG] AppDelegate: main window miniaturizing — hid: "
+            + panelsHiddenByMiniaturize.sorted().joined(separator: ", "))
+    }
+
+    func windowDidDeminiaturize(_ notification: Notification) {
+        restoreHiddenPanels()
+    }
+
+    private func restoreHiddenPanels() {
+        if panelsHiddenByMiniaturize.contains("lights")     { lightsPanel?.makeKeyAndOrderFront(nil) }
+        if panelsHiddenByMiniaturize.contains("feedback")   { feedbackPanel?.makeKeyAndOrderFront(nil) }
+        if panelsHiddenByMiniaturize.contains("colorGrade") { colorGradePanel?.makeKeyAndOrderFront(nil) }
+        if panelsHiddenByMiniaturize.contains("timeline")   { timelineEditorWC?.showWindow(nil) }
+        if !panelsHiddenByMiniaturize.isEmpty {
+            print("[DEBUG] AppDelegate: restored panels: "
+                + panelsHiddenByMiniaturize.sorted().joined(separator: ", "))
+        }
+        panelsHiddenByMiniaturize.removeAll()
+    }
+
+    // MARK: - Show Main Window
+
+    @objc private func showMainWindow(_ sender: Any) {
+        if let w = window {
+            if w.isMiniaturized { w.deminiaturize(nil) }
+            w.makeKeyAndOrderFront(nil)
+        }
+        // Restore any secondary windows that were hidden by the miniaturize
+        if !panelsHiddenByMiniaturize.isEmpty {
+            restoreHiddenPanels()
+        }
+    }
+
     // MARK: - Error helper
 
     private func showErrorAlert(message: String, detail: String) {
@@ -754,7 +861,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 296, height: 720),
-            styleMask:   [.titled, .closable, .resizable, .utilityWindow, .nonactivatingPanel],
+            styleMask:   [.titled, .closable, .miniaturizable, .resizable, .utilityWindow, .nonactivatingPanel],
             backing:     .buffered,
             defer:       false
         )
@@ -800,7 +907,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 296, height: 280),
-            styleMask:   [.titled, .closable, .resizable, .utilityWindow, .nonactivatingPanel],
+            styleMask:   [.titled, .closable, .miniaturizable, .resizable, .utilityWindow, .nonactivatingPanel],
             backing:     .buffered,
             defer:       false
         )
@@ -828,6 +935,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         feedbackPanel = panel
         panel.makeKeyAndOrderFront(nil)
         print("[DEBUG] AppDelegate: feedback panel opened")
+    }
+
+    // MARK: - Color Grade Panel
+
+    @objc private func showColorGradePanel(_ sender: Any) {
+        if let panel = colorGradePanel {
+            panel.isVisible ? panel.orderOut(nil) : panel.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        guard let viewport = viewportView else { return }
+
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 296, height: 200),
+            styleMask:   [.titled, .closable, .miniaturizable, .resizable, .utilityWindow, .nonactivatingPanel],
+            backing:     .buffered,
+            defer:       false
+        )
+        panel.title              = "Color Grade"
+        panel.isFloatingPanel    = true
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.hidesOnDeactivate  = false
+
+        let gradeView = ColorGradePanel(settings: viewport.colorGradeSettings)
+        panel.contentView = NSHostingView(rootView: gradeView)
+
+        if let win = window {
+            let winFrame  = win.frame
+            let panelSize = panel.frame.size
+            let originX   = winFrame.maxX - panelSize.width - 20
+            // Position below lights panel (~720 tall) and feedback panel (~280 tall)
+            let originY   = winFrame.maxY - panelSize.height - 40 - 740 - 300
+            panel.setFrameOrigin(NSPoint(x: originX, y: max(originY, 40)))
+        } else {
+            panel.center()
+        }
+
+        colorGradePanel = panel
+        panel.makeKeyAndOrderFront(nil)
+        print("[DEBUG] AppDelegate: color grade panel opened")
     }
 
     // MARK: - Timeline Editor
@@ -1214,6 +1361,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let response = alert.runModal()
         if response == .alertFirstButtonReturn {
             scene.remove(at: index)
+            markDirty()
+            timelineEditorWC?.updateWindowHeight()
+        }
+    }
+
+    @objc private func confirmRemoveAll(_ sender: Any) {
+        guard let scene = viewportView?.sceneManager,
+              !scene.objects.isEmpty else { return }
+
+        let alert = NSAlert()
+        alert.messageText     = "Remove All Objects?"
+        alert.informativeText = "This will remove all \(scene.objects.count) object(s) from the scene."
+        alert.alertStyle      = .warning
+        alert.addButton(withTitle: "Remove All")
+        alert.addButton(withTitle: "Cancel")
+
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            scene.clear()
+            markDirty()
+            timelineEditorWC?.updateWindowHeight()
+            print("[DEBUG] AppDelegate: removed all objects")
         }
     }
 }

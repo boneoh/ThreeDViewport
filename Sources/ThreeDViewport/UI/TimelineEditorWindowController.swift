@@ -26,7 +26,7 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
 
         let panel = NSPanel(
             contentRect: contentRect,
-            styleMask:   [.titled, .closable, .resizable, .utilityWindow],
+            styleMask:   [.titled, .closable, .miniaturizable, .resizable, .utilityWindow],
             backing:     .buffered,
             defer:       false
         )

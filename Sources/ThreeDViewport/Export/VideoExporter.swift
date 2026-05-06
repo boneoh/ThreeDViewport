@@ -78,6 +78,9 @@ final class VideoExporter {
     // Feedback settings — nil means no feedback during export
     var feedbackSettings: FeedbackSettings?
 
+    // Color grade settings — nil or identity = no grade pass during export
+    var colorGradeSettings: ColorGradeSettings?
+
     // Fallback buffers for objects without UVs / tangents
     private var dummyUVBuffer:      MTLBuffer?
     private var dummyTangentBuffer: MTLBuffer?
@@ -94,6 +97,9 @@ final class VideoExporter {
 
     // Spark particle pipeline (additive, instanced billboards)
     private var sparkPipelineState:     MTLRenderPipelineState?
+
+    // Color grade pipeline (fullscreen B/C post-process)
+    private var colorGradePipelineState: MTLRenderPipelineState?
 
     // Laser hit system — independent of the live renderer, reset per export
     private var laserHitSystem: LaserHitSystem = LaserHitSystem()
@@ -255,6 +261,20 @@ final class VideoExporter {
                 + (sparkPipelineState != nil ? "created" : "FAILED"))
         }
 
+        // Color grade pipeline (no depth, no blend — overwrites every pixel)
+        if let library    = try? device.makeDefaultLibrary(bundle: Bundle.module),
+           let gradeVertFn = library.makeFunction(name: "color_grade_vertex"),
+           let gradeFragFn = library.makeFunction(name: "color_grade_fragment") {
+            let gradeDesc = MTLRenderPipelineDescriptor()
+            gradeDesc.label                           = "ColorGradeExport"
+            gradeDesc.vertexFunction                  = gradeVertFn
+            gradeDesc.fragmentFunction                = gradeFragFn
+            gradeDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
+            colorGradePipelineState = try? device.makeRenderPipelineState(descriptor: gradeDesc)
+            print("[DEBUG] VideoExporter: color grade pipeline "
+                + (colorGradePipelineState != nil ? "created" : "FAILED"))
+        }
+
         print("[DEBUG] VideoExporter: initialized — duration="
             + String(format: "%.1f", timeline.duration)
             + "s frameRate=" + String(format: "%.0f", timeline.frameRate)
@@ -289,6 +309,15 @@ final class VideoExporter {
             DispatchQueue.main.async { completion(ExportError.textureCreationFailed) }
             return
         }
+        // Grade intermediate — same size as colorTex; only allocated when needed
+        let gradeTex: MTLTexture? = {
+            guard let settings = colorGradeSettings, !settings.isIdentity else { return nil }
+            let desc = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
+            desc.usage       = [.shaderRead, .renderTarget]
+            desc.storageMode = .private
+            return device.makeTexture(descriptor: desc)
+        }()
 
         // ── Feedback processor (independent of the live viewport) ─────────────
         // Created here so export feedback is isolated; always resets from scratch.
@@ -408,6 +437,7 @@ final class VideoExporter {
                 self.renderFrame(colorTex:        colorTex,
                                  stagingTex:       stagingTex,
                                  depthTex:         depthTex,
+                                 gradeTex:         gradeTex,
                                  feedbackProc:     exportFeedback,
                                  feedbackSettings: self.feedbackSettings,
                                  hitEffectTime:    frameHitTime,
@@ -501,6 +531,7 @@ final class VideoExporter {
     private func renderFrame(colorTex:        MTLTexture,
                              stagingTex:       MTLTexture,
                              depthTex:         MTLTexture,
+                             gradeTex:         MTLTexture?        = nil,
                              feedbackProc:     FeedbackProcessor? = nil,
                              feedbackSettings: FeedbackSettings?  = nil,
                              hitEffectTime:    Float              = 0,
@@ -652,6 +683,33 @@ final class VideoExporter {
             drawGizmoPass(commandBuffer: commandBuffer, dest: colorTex)
         }
 
+        // ── Color grade (brightness / contrast) ──────────────────────────────
+        if let settings = colorGradeSettings, !settings.isIdentity,
+           let gTex     = gradeTex,
+           let pipeline = colorGradePipelineState {
+            // Blit the rendered frame into the intermediate grade texture so the
+            // fragment shader can sample it while writing back to colorTex.
+            if let blit = commandBuffer.makeBlitCommandEncoder() {
+                blit.copy(from: colorTex, to: gTex)
+                blit.endEncoding()
+            }
+            let gradePass = MTLRenderPassDescriptor()
+            gradePass.colorAttachments[0].texture     = colorTex
+            gradePass.colorAttachments[0].loadAction  = .dontCare
+            gradePass.colorAttachments[0].storeAction = .store
+            if let enc = commandBuffer.makeRenderCommandEncoder(descriptor: gradePass) {
+                enc.setRenderPipelineState(pipeline)
+                enc.setFragmentTexture(gTex, index: 0)
+                let gammaExp = 1.0 / max(settings.gamma, 0.01)
+                var params = SIMD3<Float>(settings.brightness, settings.contrast, gammaExp)
+                enc.setFragmentBytes(&params,
+                                     length: MemoryLayout<SIMD3<Float>>.stride,
+                                     index: 0)
+                enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                enc.endEncoding()
+            }
+        }
+
         // ── Blit color → staging; synchronize if needed for CPU readback ──────
         if let blit = commandBuffer.makeBlitCommandEncoder() {
             blit.copy(from: colorTex, to: stagingTex)
@@ -708,10 +766,9 @@ final class VideoExporter {
                                           screenSize:    SIMD2<Float>,
                                           hitEffectTime: Float,
                                           sparkGPUData:  [SparkParticleGPU]) {
-        let excludedBeams = lightManager.lights.filter {
+        let hasBeams  = lightManager.lights.contains {
             $0.type == .laser && $0.isEnabled && $0.excludeBeamFromFeedback
         }
-        let hasBeams  = !excludedBeams.isEmpty
         let hasHits   = lightManager.lights.enumerated().contains {
             $0.element.type == .laser && $0.element.isEnabled
                 && $0.element.excludeBeamFromFeedback
@@ -735,9 +792,16 @@ final class VideoExporter {
             if let ds = laserBeamDepthState { enc.setDepthStencilState(ds) }
             enc.setCullMode(.none)
             let vp = camera.viewProjectionMatrix
-            for laser in excludedBeams {
+            let indexedExcluded = lightManager.lights.enumerated().filter {
+                $0.element.type == .laser && $0.element.isEnabled
+                    && $0.element.excludeBeamFromFeedback
+            }
+            for (slotIndex, laser) in indexedExcluded {
                 let start = laser.position
-                let end   = start + simd_normalize(laser.direction) * laser.range
+                let effectiveRange = laserHitSystem.hits[slotIndex].map {
+                    min(laser.range, $0.distance)
+                } ?? laser.range
+                let end = start + simd_normalize(laser.direction) * effectiveRange
                 var u = LaserBeamUniforms(
                     viewProjectionMatrix: vp,
                     startWorld: SIMD4<Float>(start, 1),

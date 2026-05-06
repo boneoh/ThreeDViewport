@@ -11,20 +11,28 @@ final class GLTFLoader {
 
     let device: MTLDevice
 
+    /// Set to a human-readable sentence whenever `load` returns nil.
+    /// Cleared to nil at the start of each load call.
+    private(set) var lastError: String? = nil
+
     init(device: MTLDevice) {
         self.device = device
         print("[DEBUG] GLTFLoader: initialized")
     }
 
     // Returns the first SceneObject found, or nil on failure.
+    // On failure `lastError` contains a user-facing description of the problem.
     func load(url: URL) -> SceneObject? {
+        lastError = nil
         print("[DEBUG] GLTFLoader: loading " + url.lastPathComponent)
 
         let asset: GLTFAsset
         do {
             asset = try GLTFAsset(url: url)
         } catch {
-            print("[DEBUG] GLTFLoader: GLTFAsset threw — " + error.localizedDescription)
+            let msg = error.localizedDescription
+            print("[DEBUG] GLTFLoader: GLTFAsset threw — " + msg)
+            lastError = msg
             return nil
         }
 
@@ -44,6 +52,7 @@ final class GLTFLoader {
 
         if rootNodes.isEmpty {
             print("[DEBUG] GLTFLoader: rootNodes is empty")
+            lastError = "The file contains no scene nodes."
             return nil
         }
 
@@ -54,6 +63,7 @@ final class GLTFLoader {
         }
 
         print("[DEBUG] GLTFLoader: no mesh found")
+        lastError = "The file contains no mesh geometry."
         return nil
     }
 
