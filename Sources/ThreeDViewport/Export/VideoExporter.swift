@@ -89,6 +89,15 @@ final class VideoExporter {
     private var laserBeamPipelineState: MTLRenderPipelineState?
     private var laserBeamDepthState:    MTLDepthStencilState?
 
+    // Laser hit effect pipeline
+    private var laserHitPipelineState:  MTLRenderPipelineState?
+
+    // Spark particle pipeline (additive, instanced billboards)
+    private var sparkPipelineState:     MTLRenderPipelineState?
+
+    // Laser hit system — independent of the live renderer, reset per export
+    private var laserHitSystem: LaserHitSystem = LaserHitSystem()
+
     // MARK: - Init
 
     init?(device:            MTLDevice,
@@ -198,6 +207,52 @@ final class VideoExporter {
             laserBeamDepthState = device.makeDepthStencilState(descriptor: laserDepthDesc)
             print("[DEBUG] VideoExporter: laser beam pipeline "
                 + (laserBeamPipelineState != nil ? "created" : "FAILED"))
+        }
+
+        // Laser hit effect pipeline
+        if let library = try? device.makeDefaultLibrary(bundle: Bundle.module),
+           let hitV    = library.makeFunction(name: "laser_hit_vertex"),
+           let hitF    = library.makeFunction(name: "laser_hit_fragment") {
+            let hitDesc = MTLRenderPipelineDescriptor()
+            hitDesc.label            = "LaserHitExport"
+            hitDesc.vertexFunction   = hitV
+            hitDesc.fragmentFunction = hitF
+            hitDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
+            hitDesc.depthAttachmentPixelFormat      = .depth32Float
+            let hitCA = hitDesc.colorAttachments[0]!
+            hitCA.isBlendingEnabled           = true
+            hitCA.sourceRGBBlendFactor        = .one
+            hitCA.destinationRGBBlendFactor   = .one
+            hitCA.rgbBlendOperation           = .add
+            hitCA.sourceAlphaBlendFactor      = .zero
+            hitCA.destinationAlphaBlendFactor = .one
+            hitCA.alphaBlendOperation         = .add
+            laserHitPipelineState = try? device.makeRenderPipelineState(descriptor: hitDesc)
+            print("[DEBUG] VideoExporter: laser hit pipeline "
+                + (laserHitPipelineState != nil ? "created" : "FAILED"))
+        }
+
+        // Spark particle pipeline
+        if let library  = try? device.makeDefaultLibrary(bundle: Bundle.module),
+           let sparkV   = library.makeFunction(name: "spark_vertex"),
+           let sparkF   = library.makeFunction(name: "spark_fragment") {
+            let sparkDesc = MTLRenderPipelineDescriptor()
+            sparkDesc.label            = "SparkExport"
+            sparkDesc.vertexFunction   = sparkV
+            sparkDesc.fragmentFunction = sparkF
+            sparkDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
+            sparkDesc.depthAttachmentPixelFormat      = .depth32Float
+            let sparkCA = sparkDesc.colorAttachments[0]!
+            sparkCA.isBlendingEnabled           = true
+            sparkCA.sourceRGBBlendFactor        = .one
+            sparkCA.destinationRGBBlendFactor   = .one
+            sparkCA.rgbBlendOperation           = .add
+            sparkCA.sourceAlphaBlendFactor      = .zero
+            sparkCA.destinationAlphaBlendFactor = .one
+            sparkCA.alphaBlendOperation         = .add
+            sparkPipelineState = try? device.makeRenderPipelineState(descriptor: sparkDesc)
+            print("[DEBUG] VideoExporter: spark pipeline "
+                + (sparkPipelineState != nil ? "created" : "FAILED"))
         }
 
         print("[DEBUG] VideoExporter: initialized — duration="
@@ -340,12 +395,23 @@ final class VideoExporter {
                 // Evaluate animation at this exact time — does NOT touch Timeline.currentTime
                 self.applyAnimation(at: t)
 
+                // Laser hit detection + particle simulation (deterministic, uses frame time)
+                let frameDt     = Float(1.0 / self.frameRate)
+                let frameHitTime = Float(t)
+                let visibleObjs  = self.sceneManager.objects.filter { $0.isVisible }
+                self.laserHitSystem.updateHits(lights: self.lightManager.lights,
+                                               objects: visibleObjs)
+                self.laserHitSystem.updateParticles(dt: frameDt)
+                let sparkGPUData = self.laserHitSystem.buildSparkGPUData()
+
                 // Render to offscreen texture (via feedback if enabled) and blit to staging
                 self.renderFrame(colorTex:        colorTex,
                                  stagingTex:       stagingTex,
                                  depthTex:         depthTex,
                                  feedbackProc:     exportFeedback,
-                                 feedbackSettings: self.feedbackSettings)
+                                 feedbackSettings: self.feedbackSettings,
+                                 hitEffectTime:    frameHitTime,
+                                 sparkGPUData:     sparkGPUData)
 
                 // Copy staging texture → CVPixelBuffer (luma-alpha applied for 4444)
                 guard let pb = self.pixelBufferFrom(stagingTex,
@@ -436,7 +502,9 @@ final class VideoExporter {
                              stagingTex:       MTLTexture,
                              depthTex:         MTLTexture,
                              feedbackProc:     FeedbackProcessor? = nil,
-                             feedbackSettings: FeedbackSettings?  = nil) {
+                             feedbackSettings: FeedbackSettings?  = nil,
+                             hitEffectTime:    Float              = 0,
+                             sparkGPUData:     [SparkParticleGPU] = []) {
         guard let commandBuffer = commandQueue.makeCommandBuffer() else {
             print("[DEBUG] VideoExporter: renderFrame — makeCommandBuffer nil")
             return
@@ -544,15 +612,20 @@ final class VideoExporter {
                     type: .triangle, indexCount: object.indexCount,
                     indexType: .uint32, indexBuffer: idxBuffer, indexBufferOffset: 0)
             }
-            // ── Laser beam visuals ────────────────────────────────────────────
+            // ── Laser beam visuals + hit effects ──────────────────────────────
             let exportSize = SIMD2<Float>(Float(width), Float(height))
             drawLaserBeamsInEncoder(encoder,
                                     screenSize:   exportSize,
                                     excludedOnly: false)
+            drawLaserHitsInEncoder(encoder, screenSize: exportSize,
+                                   hitEffectTime: hitEffectTime, excludedOnly: false)
             if !feedbackActive {
                 drawLaserBeamsInEncoder(encoder,
                                         screenSize:   exportSize,
                                         excludedOnly: true)
+                drawLaserHitsInEncoder(encoder, screenSize: exportSize,
+                                       hitEffectTime: hitEffectTime, excludedOnly: true)
+                drawSparksInEncoder(encoder, sparkGPUData: sparkGPUData)
             }
 
             encoder.endEncoding()
@@ -563,13 +636,15 @@ final class VideoExporter {
             fp.process(commandBuffer: commandBuffer, dest: colorTex, settings: fs)
         }
 
-        // ── Excluded laser beams (after feedback, no trails) ──────────────────
+        // ── Excluded beams + hit effects + all sparks (after feedback, no trails) ──
         if feedbackActive, let fp = feedbackProc, let depthTex = fp.depthTexture {
             let exportSize = SIMD2<Float>(Float(width), Float(height))
             drawExcludedLaserBeams(commandBuffer: commandBuffer,
                                    dest:          colorTex,
                                    depthTex:      depthTex,
-                                   screenSize:    exportSize)
+                                   screenSize:    exportSize,
+                                   hitEffectTime: hitEffectTime,
+                                   sparkGPUData:  sparkGPUData)
         }
 
         // ── Axes gizmo overlay (bottom-right corner) ──────────────────────────
@@ -596,20 +671,23 @@ final class VideoExporter {
                                           screenSize:   SIMD2<Float>,
                                           excludedOnly: Bool) {
         guard let pipeline = laserBeamPipelineState else { return }
-        let beams = lightManager.lights.filter {
-            $0.type == .laser && $0.isEnabled &&
-            $0.excludeBeamFromFeedback == excludedOnly
+        let indexedBeams = lightManager.lights.enumerated().filter {
+            $0.element.type == .laser && $0.element.isEnabled &&
+            $0.element.excludeBeamFromFeedback == excludedOnly
         }
-        guard !beams.isEmpty else { return }
+        guard !indexedBeams.isEmpty else { return }
 
         encoder.setRenderPipelineState(pipeline)
         if let ds = laserBeamDepthState { encoder.setDepthStencilState(ds) }
         encoder.setCullMode(.none)
 
         let vp = camera.viewProjectionMatrix
-        for laser in beams {
+        for (slotIndex, laser) in indexedBeams {
             let start = laser.position
-            let end   = start + simd_normalize(laser.direction) * laser.range
+            let effectiveRange = laserHitSystem.hits[slotIndex].map {
+                min(laser.range, $0.distance)
+            } ?? laser.range
+            let end   = start + simd_normalize(laser.direction) * effectiveRange
             var u = LaserBeamUniforms(
                 viewProjectionMatrix: vp,
                 startWorld: SIMD4<Float>(start, 1),
@@ -627,12 +705,20 @@ final class VideoExporter {
     private func drawExcludedLaserBeams(commandBuffer: MTLCommandBuffer,
                                           dest:          MTLTexture,
                                           depthTex:      MTLTexture,
-                                          screenSize:    SIMD2<Float>) {
-        guard let pipeline = laserBeamPipelineState else { return }
-        let beams = lightManager.lights.filter {
+                                          screenSize:    SIMD2<Float>,
+                                          hitEffectTime: Float,
+                                          sparkGPUData:  [SparkParticleGPU]) {
+        let excludedBeams = lightManager.lights.filter {
             $0.type == .laser && $0.isEnabled && $0.excludeBeamFromFeedback
         }
-        guard !beams.isEmpty else { return }
+        let hasBeams  = !excludedBeams.isEmpty
+        let hasHits   = lightManager.lights.enumerated().contains {
+            $0.element.type == .laser && $0.element.isEnabled
+                && $0.element.excludeBeamFromFeedback
+                && laserHitSystem.hits[$0.offset] != nil
+        }
+        let hasSparks = !sparkGPUData.isEmpty
+        guard hasBeams || hasHits || hasSparks else { return }
 
         let passDesc = MTLRenderPassDescriptor()
         passDesc.colorAttachments[0].texture     = dest
@@ -643,27 +729,91 @@ final class VideoExporter {
         passDesc.depthAttachment.storeAction     = .dontCare
 
         guard let enc = commandBuffer.makeRenderCommandEncoder(descriptor: passDesc) else { return }
-        enc.setRenderPipelineState(pipeline)
-        if let ds = laserBeamDepthState { enc.setDepthStencilState(ds) }
-        enc.setCullMode(.none)
 
-        let vp = camera.viewProjectionMatrix
-        for laser in beams {
-            let start = laser.position
-            let end   = start + simd_normalize(laser.direction) * laser.range
-            var u = LaserBeamUniforms(
-                viewProjectionMatrix: vp,
-                startWorld: SIMD4<Float>(start, 1),
-                endWorld:   SIMD4<Float>(end,   1),
-                color:      SIMD4<Float>(laser.color, 1),
-                screenSize: screenSize,
-                thickness:  max(1.0, laser.beamThickness),
-                pad:        0
-            )
-            enc.setVertexBytes(&u, length: MemoryLayout<LaserBeamUniforms>.stride, index: 0)
-            enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        if hasBeams, let pipeline = laserBeamPipelineState {
+            enc.setRenderPipelineState(pipeline)
+            if let ds = laserBeamDepthState { enc.setDepthStencilState(ds) }
+            enc.setCullMode(.none)
+            let vp = camera.viewProjectionMatrix
+            for laser in excludedBeams {
+                let start = laser.position
+                let end   = start + simd_normalize(laser.direction) * laser.range
+                var u = LaserBeamUniforms(
+                    viewProjectionMatrix: vp,
+                    startWorld: SIMD4<Float>(start, 1),
+                    endWorld:   SIMD4<Float>(end,   1),
+                    color:      SIMD4<Float>(laser.color, 1),
+                    screenSize: screenSize,
+                    thickness:  max(1.0, laser.beamThickness),
+                    pad:        0
+                )
+                enc.setVertexBytes(&u, length: MemoryLayout<LaserBeamUniforms>.stride, index: 0)
+                enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+            }
         }
+
+        drawLaserHitsInEncoder(enc, screenSize: screenSize,
+                               hitEffectTime: hitEffectTime, excludedOnly: true)
+        drawSparksInEncoder(enc, sparkGPUData: sparkGPUData)
+
         enc.endEncoding()
+    }
+
+    private func drawLaserHitsInEncoder(_ encoder:     MTLRenderCommandEncoder,
+                                         screenSize:    SIMD2<Float>,
+                                         hitEffectTime: Float,
+                                         excludedOnly:  Bool) {
+        guard let pipeline = laserHitPipelineState else { return }
+        let vp = camera.viewProjectionMatrix
+        var pipelineSet = false
+
+        for (i, laser) in lightManager.lights.enumerated() {
+            guard laser.type == .laser, laser.isEnabled,
+                  laser.excludeBeamFromFeedback == excludedOnly,
+                  let hit = laserHitSystem.hits[i] else { continue }
+
+            if !pipelineSet {
+                encoder.setRenderPipelineState(pipeline)
+                if let ds = laserBeamDepthState { encoder.setDepthStencilState(ds) }
+                encoder.setCullMode(.none)
+                pipelineSet = true
+            }
+
+            var u = LaserHitUniforms(
+                viewProjectionMatrix: vp,
+                hitPoint:   SIMD4<Float>(hit.point, 1),
+                color:      SIMD4<Float>(hit.color,  1),
+                screenSize: screenSize,
+                hitRadius:  60.0,
+                time:       hitEffectTime
+            )
+            encoder.setVertexBytes(&u, length: MemoryLayout<LaserHitUniforms>.stride, index: 0)
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        }
+    }
+
+    private func drawSparksInEncoder(_ encoder:    MTLRenderCommandEncoder,
+                                      sparkGPUData: [SparkParticleGPU]) {
+        guard let pipeline = sparkPipelineState, !sparkGPUData.isEmpty else { return }
+
+        let byteCount = sparkGPUData.count * MemoryLayout<SparkParticleGPU>.stride
+        guard let sparkBuf = device.makeBuffer(bytes: sparkGPUData,
+                                               length: byteCount,
+                                               options: .storageModeShared) else { return }
+
+        encoder.setRenderPipelineState(pipeline)
+        if let ds = laserBeamDepthState { encoder.setDepthStencilState(ds) }
+        encoder.setCullMode(.none)
+
+        var su = SparkUniforms(
+            viewProjectionMatrix: camera.viewProjectionMatrix,
+            cameraRight: SIMD4<Float>(camera.rightVector, 0),
+            cameraUp:    SIMD4<Float>(camera.upVector,    0)
+        )
+        encoder.setVertexBuffer(sparkBuf, offset: 0, index: 0)
+        encoder.setVertexBytes(&su, length: MemoryLayout<SparkUniforms>.stride, index: 1)
+        encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0,
+                               vertexCount: 4, instanceCount: sparkGPUData.count)
     }
 
     // MARK: - Axes gizmo (mirrors Renderer.drawGizmoPass exactly)
@@ -819,12 +969,24 @@ final class VideoExporter {
             }
         }
 
-        // NOTE: Light keyframes are intentionally NOT evaluated here.
-        // LightManager.lights is @Published; writing it from a background thread
-        // fires Combine notifications off the main thread, which corrupts the
-        // light state read by buildLightUniforms() on the same queue.
-        // The live renderer handles light animation; export uses the light state
-        // that was current when export started.
+        // ── Lights ────────────────────────────────────────────────────────────
+        // During export the MTKView is paused and all rendering happens on the
+        // dedicated export serial queue, so writing lightManager.lights here is
+        // safe — there is no concurrent reader and Combine notifications fired
+        // from this queue will be ignored (no UI is observing during export).
+        for i in 0..<lightManager.lights.count {
+            guard i < lightManager.keyframeTracks.count,
+                  let track = lightManager.keyframeTracks[i],
+                  !track.keyframes.isEmpty else { continue }
+            if let state = track.evaluate(at: time) {
+                lightManager.lights[i].intensity     = state.intensity
+                lightManager.lights[i].color         = state.color
+                lightManager.lights[i].direction     = state.direction
+                lightManager.lights[i].position      = state.position
+                lightManager.lights[i].range         = state.range
+                lightManager.lights[i].beamThickness = state.beamThickness
+            }
+        }
     }
 
     // MARK: - Errors

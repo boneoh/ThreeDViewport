@@ -408,11 +408,13 @@ final class ViewportView: MTKView {
         }
 
         let kf = LightKeyframe(
-            time:      timeline.currentTime,
-            intensity: light.intensity,
-            color:     light.color,
-            direction: light.direction,
-            position:  light.position
+            time:          timeline.currentTime,
+            intensity:     light.intensity,
+            color:         light.color,
+            direction:     light.direction,
+            position:      light.position,
+            range:         light.range,
+            beamThickness: light.beamThickness
         )
         lightManager.keyframeTracks[index]?.addKeyframe(kf)
 
@@ -529,10 +531,15 @@ final class ViewportView: MTKView {
             // Space+drag: orbit camera around target (available in all modes).
             camera.orbit(deltaX: dx, deltaY: dy)
 
-        } else if controlMode == .object,
-                  !timeline.isPlaying,
-                  let obj = sceneManager.selectedObject ?? sceneManager.primaryObject {
-            // Object mode + paused: translate in the camera's view plane.
+        } else if controlMode == .object {
+            // Object mode: translate selected object — or do nothing if conditions
+            // aren't met (timeline playing, no object).  Never fall through to
+            // camera pan here; that asymmetry was the cause of the "all objects
+            // move" bug (left-drag was panning the camera instead of doing nothing).
+            guard !timeline.isPlaying,
+                  let obj = sceneManager.selectedObject ?? sceneManager.primaryObject
+            else { return }
+            // Translate in the camera's view plane.
             // Scale with distance so the feel is consistent at any zoom level.
             let scale = camera.distance * 0.001
             let move  = camera.rightVector * (dx * scale)
@@ -542,7 +549,7 @@ final class ViewportView: MTKView {
             obj.transform.columns.3.z += move.z
 
         } else {
-            // Camera / Light mode (or playing): pan the camera.
+            // Camera / Light mode: pan the camera.
             camera.pan(deltaX: dx, deltaY: dy)
         }
     }
@@ -565,10 +572,43 @@ final class ViewportView: MTKView {
             guard !timeline.isPlaying,
                   let obj = sceneManager.selectedObject ?? sceneManager.primaryObject
             else { return }
-            // Right drag on object: rotate (yaw + pitch around world axes).
+            // Right drag in object mode: spin around the object's visual centre.
+            //   Horizontal drag → world-Y yaw  (natural left/right spin)
+            //   Vertical drag   → camera-right pitch (screen-relative tilt)
+            //
+            // Pivot = local AABB midpoint transformed to world space.
+            // boundingMin/boundingMax are always in local space (set by GLTFLoader
+            // and never modified). boundingCenter is not used here because
+            // autoNormalize converts it to world space and it goes stale after moves.
+            let localCentre = (obj.boundingMin + obj.boundingMax) * 0.5
+            let wc4   = obj.transform * SIMD4<Float>(localCentre, 1)
+            let pivot = SIMD3<Float>(wc4.x, wc4.y, wc4.z)
+
             let yaw   = simd_quatf(angle:  dx * sensitivity, axis: SIMD3<Float>(0, 1, 0))
-            let pitch = simd_quatf(angle: -dy * sensitivity, axis: SIMD3<Float>(1, 0, 0))
-            obj.transform = rotationMatrix4x4(simd_normalize(pitch * yaw)) * obj.transform
+            let pitch = simd_quatf(angle: -dy * sensitivity, axis: camera.rightVector)
+            let rot   = rotationMatrix4x4(simd_normalize(pitch * yaw))
+
+            // Rotate the 3×3 orientation block
+            let c0 = rot * SIMD4<Float>(obj.transform.columns.0.x,
+                                         obj.transform.columns.0.y,
+                                         obj.transform.columns.0.z, 0)
+            let c1 = rot * SIMD4<Float>(obj.transform.columns.1.x,
+                                         obj.transform.columns.1.y,
+                                         obj.transform.columns.1.z, 0)
+            let c2 = rot * SIMD4<Float>(obj.transform.columns.2.x,
+                                         obj.transform.columns.2.y,
+                                         obj.transform.columns.2.z, 0)
+            obj.transform.columns.0 = SIMD4<Float>(c0.x, c0.y, c0.z, 0)
+            obj.transform.columns.1 = SIMD4<Float>(c1.x, c1.y, c1.z, 0)
+            obj.transform.columns.2 = SIMD4<Float>(c2.x, c2.y, c2.z, 0)
+
+            // Recompute translation so `pivot` stays fixed in world space.
+            // After the 3×3 is updated, obj.transform * (localCentre, 0) gives
+            // M_new · localCentre (w=0 ignores the translation column), so:
+            // t_new = pivot − M_new · localCentre
+            let mc4    = obj.transform * SIMD4<Float>(localCentre, 0)
+            let newPos = pivot - SIMD3<Float>(mc4.x, mc4.y, mc4.z)
+            obj.transform.columns.3 = SIMD4<Float>(newPos.x, newPos.y, newPos.z, 1)
 
         case .camera, .light:
             // Right drag in camera / light mode: free-look.
@@ -590,18 +630,45 @@ final class ViewportView: MTKView {
 
     override func scrollWheel(with event: NSEvent) {
         let delta = Float(event.scrollingDeltaY)
-        if controlMode == .object,
-           !timeline.isPlaying,
-           let obj = sceneManager.selectedObject ?? sceneManager.primaryObject {
-            // Object mode: scroll translates the object along the camera forward axis.
-            // Same sensitivity formula as camera zoom so the feel is equivalent.
+
+        guard controlMode == .object,
+              !timeline.isPlaying,
+              let obj = sceneManager.selectedObject ?? sceneManager.primaryObject
+        else {
+            camera.zoom(delta: delta)
+            return
+        }
+
+        if event.modifierFlags.contains(.option) {
+            // ⌥ + scroll → uniform scale around the object's visual centre.
+            // exp() keeps the factor strictly positive and gives symmetric
+            // feel: the same delta undoes a previous equal-and-opposite delta.
+            let factor = exp(delta * 0.02)
+
+            // Pivot = world-space AABB centre (same reliable source as rotation)
+            let localCentre = (obj.boundingMin + obj.boundingMax) * 0.5
+            let wc4   = obj.transform * SIMD4<Float>(localCentre, 1)
+            let pivot = SIMD3<Float>(wc4.x, wc4.y, wc4.z)
+
+            // Scale the 3×3 orientation+scale columns uniformly.
+            // w=0 on each column, so 0 * factor = 0 — w stays clean.
+            obj.transform.columns.0 *= factor
+            obj.transform.columns.1 *= factor
+            obj.transform.columns.2 *= factor
+
+            // Recompute translation so the visual centre stays at `pivot`.
+            // t_new = pivot − M_new · localCentre  (w=0 isolates the 3×3)
+            let mc4    = obj.transform * SIMD4<Float>(localCentre, 0)
+            let newPos = pivot - SIMD3<Float>(mc4.x, mc4.y, mc4.z)
+            obj.transform.columns.3 = SIMD4<Float>(newPos.x, newPos.y, newPos.z, 1)
+
+        } else {
+            // Plain scroll → translate along the camera forward axis (depth push/pull)
             let move = delta * camera.distance * 0.05
             let fwd  = camera.forwardVector
             obj.transform.columns.3.x += fwd.x * move
             obj.transform.columns.3.y += fwd.y * move
             obj.transform.columns.3.z += fwd.z * move
-        } else {
-            camera.zoom(delta: delta)
         }
     }
 
@@ -667,8 +734,9 @@ final class ViewportView: MTKView {
         static let rightBracket: UInt16 = 30   // ] and }
         // Commit / dismiss
         static let returnKey:    UInt16 = 36   // Return / Enter
-        // Keyframe insertion
+        // Keyframe insertion / deletion shortcuts
         static let insert:       UInt16 = 114  // Insert / Help key
+        static let i:            UInt16 = 34   // I — alias for Insert (add keyframe)
         // Playhead navigation
         static let home:         UInt16 = 115  // Home
         static let end:          UInt16 = 119  // End
@@ -736,6 +804,18 @@ final class ViewportView: MTKView {
 
             case KC.p:
                 timeline.togglePlayPause()
+                return
+
+            case KC.i:
+                // I — add keyframe at current time (alias for Insert key)
+                switch controlMode {
+                case .camera:
+                    addCameraKeyframeAtCurrentTime()
+                case .object:
+                    addKeyframeAtCurrentTime()
+                case .light:
+                    addLightKeyframeAtCurrentTime(forLightAt: lightManager.selectedIndex)
+                }
                 return
 
             case KC.g:

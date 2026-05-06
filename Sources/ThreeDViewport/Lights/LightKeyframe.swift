@@ -3,15 +3,18 @@ import simd
 // MARK: - LightKeyframe
 
 /// One keyframe for a single light. Stores the properties that can be animated:
-/// intensity, colour, direction (normalised; directional/spot/laser), and
-/// position (point/spot/laser). Type, cone angles, and enabled state are not
-/// animated — change them statically in the Lights & Background inspector.
+/// intensity, colour, direction (normalised; directional/spot/laser), position
+/// (point/spot/laser), range (beam/spot length), and beamThickness (laser only).
+/// Type, cone angles, and enabled state are not animated — change them statically
+/// in the Lights & Background inspector.
 struct LightKeyframe {
-    var time:      Double
-    var intensity: Float
-    var color:     SIMD3<Float>
-    var direction: SIMD3<Float>   // always normalised
-    var position:  SIMD3<Float>
+    var time:          Double
+    var intensity:     Float
+    var color:         SIMD3<Float>
+    var direction:     SIMD3<Float>   // always normalised
+    var position:      SIMD3<Float>
+    var range:         Float
+    var beamThickness: Float
 }
 
 // MARK: - LightKeyframeTrack
@@ -75,13 +78,15 @@ final class LightKeyframeTrack {
 
             let blendedDir = a.direction + (b.direction - a.direction) * t
             return LightKeyframe(
-                time:      time,
-                intensity: a.intensity + (b.intensity - a.intensity) * t,
-                color:     a.color     + (b.color     - a.color)     * t,
-                direction: simd_length(blendedDir) > 0.0001
-                           ? simd_normalize(blendedDir)
-                           : a.direction,
-                position:  a.position  + (b.position  - a.position)  * t
+                time:          time,
+                intensity:     a.intensity     + (b.intensity     - a.intensity)     * t,
+                color:         a.color         + (b.color         - a.color)         * t,
+                direction:     simd_length(blendedDir) > 0.0001
+                               ? simd_normalize(blendedDir)
+                               : a.direction,
+                position:      a.position      + (b.position      - a.position)      * t,
+                range:         a.range         + (b.range         - a.range)         * t,
+                beamThickness: a.beamThickness + (b.beamThickness - a.beamThickness) * t
             )
         }
         return keyframes.last!

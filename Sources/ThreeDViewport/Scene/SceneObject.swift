@@ -38,9 +38,14 @@ final class SceneObject {
 
     var isVisible: Bool
 
-    // Bounding sphere (world space, set by GLTFLoader + autoNormalize)
+    // Bounding sphere (local space, set by GLTFLoader)
     var boundingCenter: SIMD3<Float>
     var boundingRadius: Float
+
+    // Axis-aligned bounding box in LOCAL object space (set by GLTFLoader).
+    // Used by LaserHitSystem for tighter ray-OBB intersection tests.
+    var boundingMin: SIMD3<Float>
+    var boundingMax: SIMD3<Float>
 
     init(name: String) {
         self.name          = name
@@ -50,6 +55,8 @@ final class SceneObject {
         self.isVisible     = true
         self.boundingCenter = SIMD3<Float>(0, 0, 0)
         self.boundingRadius = 1.0
+        self.boundingMin   = SIMD3<Float>(-1, -1, -1)
+        self.boundingMax   = SIMD3<Float>( 1,  1,  1)
 
         print("[DEBUG] SceneObject: created '" + name + "'")
     }

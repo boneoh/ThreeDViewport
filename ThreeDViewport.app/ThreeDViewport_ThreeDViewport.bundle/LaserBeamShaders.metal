@@ -94,3 +94,148 @@ fragment float4 laser_beam_fragment(LaserVOut in [[stage_in]]) {
     // Alpha = glow so the additive blend feathers naturally at edges
     return float4(col, glow);
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Laser hit effect — star flare + surface ring (additive, no depth write)
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// A single screen-space billboard quad is expanded in pixel space from the
+// projected hit point.  The fragment combines:
+//   • Tight Gaussian core + wider corona glow
+//   • 4-point star rays (fast pulse ≈11 Hz)
+//   • Smoothstep annulus ring (slow pulse ≈4.5 Hz)
+//
+// Depth bias (clip.z − 0.001·clip.w) lifts the billboard just above the
+// surface so the depth test passes without z-fighting.
+
+struct LaserHitUniforms {
+    float4x4 viewProjectionMatrix;   // 64
+    float4   hitPoint;               // 16  xyz = world pos, w = 1
+    float4   color;                  // 16  rgb = laser colour
+    float2   screenSize;             //  8  drawable pixels
+    float    hitRadius;              //  4  billboard half-size in pixels
+    float    time;                   //  4  seconds
+};  // total: 112
+
+struct LaserHitVOut {
+    float4 position [[position]];
+    float2 uv;      // −1…+1 from billboard centre
+    float3 color;
+    float  time;
+};
+
+vertex LaserHitVOut laser_hit_vertex(
+    uint                       vid [[vertex_id]],
+    constant LaserHitUniforms &u   [[buffer(0)]]
+) {
+    // Corner offsets: vid 0=(−1,−1)  1=(+1,−1)  2=(−1,+1)  3=(+1,+1)
+    float2 uv = float2((vid & 1u) ? 1.0f : -1.0f,
+                       (vid & 2u) ? 1.0f : -1.0f);
+
+    // Project hit point to clip space
+    float4 clip = u.viewProjectionMatrix * u.hitPoint;
+
+    // Depth bias: pull slightly toward camera to avoid z-fighting at surface
+    clip.z -= 0.001f * clip.w;
+
+    // Expand billboard in pixel space for stable size regardless of distance
+    float2 ndc = clip.xy / clip.w;
+    float2 px  = (ndc * 0.5f + 0.5f) * u.screenSize;
+    px  += uv * u.hitRadius;
+    ndc  = (px / u.screenSize) * 2.0f - 1.0f;
+
+    LaserHitVOut out;
+    out.position = float4(ndc * clip.w, clip.z, clip.w);
+    out.uv       = uv;
+    out.color    = u.color.rgb;
+    out.time     = u.time;
+    return out;
+}
+
+fragment float4 laser_hit_fragment(LaserHitVOut in [[stage_in]]) {
+    float2 uv = in.uv;
+    float  r  = length(uv);
+
+    // Clip to a circle — no square outline at quad corners
+    if (r > 1.0f) discard_fragment();
+
+    float angle = atan2(uv.y, uv.x);
+
+    // Pulse ≈11 Hz  (11 × 2π ≈ 69.115)
+    float pulse = 0.6f + 0.4f * sin(in.time * 69.115f);
+
+    // Tight Gaussian core
+    float core = exp(-12.0f * r * r);
+
+    // 4-point star rays
+    float star = pow(abs(cos(2.0f * angle)), 5.0f) * exp(-5.0f * r * r);
+
+    float total = saturate((core + 0.8f * star) * pulse);
+
+    // Discard near-zero pixels
+    if (total < 0.004f) discard_fragment();
+
+    // Gamma-encode to match bgra8Unorm render target
+    float3 col = pow(saturate(in.color * total), float3(1.0f / 2.2f));
+    return float4(col, total);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Spark particle billboards — instanced, one quad per particle
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// [[instance_id]] selects which particle from the buffer.
+// [[vertex_id]]   selects which of the four quad corners.
+// The billboard is built in world space using camera right/up vectors.
+
+struct SparkParticleGPU {
+    float4 position;   // 16  xyz = world pos
+    float4 color;      // 16  rgb = colour
+    float  size;       //  4  world-unit billboard half-extent
+    float  alpha;      //  4  0–1 fade
+    float2 pad;        //  8
+};  // total: 48
+
+struct SparkUniforms {
+    float4x4 viewProjectionMatrix;   // 64
+    float4   cameraRight;            // 16
+    float4   cameraUp;               // 16
+};  // total: 96
+
+struct SparkVOut {
+    float4 position [[position]];
+    float2 uv;
+    float3 color;
+    float  alpha;
+};
+
+vertex SparkVOut spark_vertex(
+    uint                       vid        [[vertex_id]],
+    uint                       iid        [[instance_id]],
+    constant SparkParticleGPU *particles  [[buffer(0)]],
+    constant SparkUniforms    &u          [[buffer(1)]]
+) {
+    float2 corner = float2((vid & 1u) ? 1.0f : -1.0f,
+                           (vid & 2u) ? 1.0f : -1.0f);
+
+    SparkParticleGPU p = particles[iid];
+
+    // Camera-facing billboard in world space
+    float3 worldPos = p.position.xyz
+                    + u.cameraRight.xyz * (corner.x * p.size)
+                    + u.cameraUp.xyz    * (corner.y * p.size);
+
+    SparkVOut out;
+    out.position = u.viewProjectionMatrix * float4(worldPos, 1.0f);
+    out.uv       = corner;
+    out.color    = p.color.rgb;
+    out.alpha    = p.alpha;
+    return out;
+}
+
+fragment float4 spark_fragment(SparkVOut in [[stage_in]]) {
+    float r    = length(in.uv);
+    float glow = exp(-5.0f * r * r) * in.alpha;
+    float3 col = pow(saturate(in.color * glow), float3(1.0f / 2.2f));
+    return float4(col, glow);
+}

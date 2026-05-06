@@ -24,7 +24,8 @@ struct TransformKeyframe {
 // in the renderer to get the final world transform.
 final class KeyframeTrack {
 
-    var keyframes: [TransformKeyframe] = []
+    var keyframes:  [TransformKeyframe] = []
+    var easingMode: EasingMode          = .linear
 
     init() {
         print("[DEBUG] KeyframeTrack: initialized, count=0")
@@ -82,18 +83,80 @@ final class KeyframeTrack {
             let span = b.time - a.time
             if span < 0.0001 { return makeMatrix(from: b) }
 
-            let t = Float((time - a.time) / span)
+            let rawT = Float((time - a.time) / span)
 
-            let blended = TransformKeyframe(
-                time: time,
-                translation: Interpolation.lerp(from: a.translation, to: b.translation, t: t),
-                rotation:    Interpolation.slerp(from: a.rotation,    to: b.rotation,    t: t),
-                scale:       Interpolation.lerp(from: a.scale,       to: b.scale,       t: t)
-            )
-            return makeMatrix(from: blended)
+            switch easingMode {
+
+            case .linear:
+                return makeMatrix(from: TransformKeyframe(
+                    time:        time,
+                    translation: Interpolation.lerp(from:  a.translation, to: b.translation, t: rawT),
+                    rotation:    Interpolation.slerp(from: a.rotation,    to: b.rotation,    t: rawT),
+                    scale:       Interpolation.lerp(from:  a.scale,       to: b.scale,       t: rawT)
+                ))
+
+            case .snap:
+                let t = EasingMode.snapT(rawT)
+                return makeMatrix(from: TransformKeyframe(
+                    time:        time,
+                    translation: Interpolation.lerp(from:  a.translation, to: b.translation, t: t),
+                    rotation:    Interpolation.slerp(from: a.rotation,    to: b.rotation,    t: t),
+                    scale:       Interpolation.lerp(from:  a.scale,       to: b.scale,       t: t)
+                ))
+
+            case .elastic:
+                let t = EasingMode.elasticT(rawT)
+                return makeMatrix(from: TransformKeyframe(
+                    time:        time,
+                    translation: Interpolation.lerp(from:  a.translation, to: b.translation, t: t),
+                    rotation:    Interpolation.slerp(from: a.rotation,    to: b.rotation,    t: t),
+                    scale:       Interpolation.lerp(from:  a.scale,       to: b.scale,       t: t)
+                ))
+
+            case .smooth:
+                // Catmull-Rom: virtual control points at endpoints mirror the
+                // first real segment so the curve has natural (zero-acceleration)
+                // boundary conditions rather than a sharp crease.
+                let prev = i > 0
+                    ? keyframes[i - 1]
+                    : mirrorKeyframe(b, around: a)
+                let next = i + 2 < keyframes.count
+                    ? keyframes[i + 2]
+                    : mirrorKeyframe(a, around: b)
+
+                let translation = EasingMode.catmullRom(
+                    prev.translation, a.translation, b.translation, next.translation, t: rawT)
+                let scale = EasingMode.catmullRom(
+                    prev.scale, a.scale, b.scale, next.scale, t: rawT)
+                // simd_spline performs spherical cubic spline interpolation on the
+                // unit quaternion sphere — the quaternion equivalent of Catmull-Rom.
+                let rotation = simd_spline(prev.rotation, a.rotation, b.rotation, next.rotation, rawT)
+
+                return makeMatrix(from: TransformKeyframe(
+                    time:        time,
+                    translation: translation,
+                    rotation:    rotation,
+                    scale:       scale
+                ))
+            }
         }
 
         return makeMatrix(from: keyframes.last!)
+    }
+
+    // MARK: - Catmull-Rom endpoint helper
+
+    // Creates a virtual control point by mirroring kf2 through kf1.
+    // Used to generate a smooth boundary tangent when kf1 is the first or last
+    // real keyframe (so there is no actual neighbour on one side).
+    private func mirrorKeyframe(_ kf2: TransformKeyframe,
+                                 around kf1: TransformKeyframe) -> TransformKeyframe {
+        TransformKeyframe(
+            time:        kf1.time - (kf2.time - kf1.time),
+            translation: 2.0 * kf1.translation - kf2.translation,
+            rotation:    simd_slerp(kf2.rotation, kf1.rotation, 2.0),
+            scale:       2.0 * kf1.scale - kf2.scale
+        )
     }
 
     // MARK: - Matrix construction

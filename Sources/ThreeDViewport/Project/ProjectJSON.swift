@@ -14,6 +14,7 @@ import Foundation
 //   8 — Added background (mode, solid colour, gradient colours) and isWireframe.
 //   9 — Added blendMode and swapLayers to FeedbackData.
 //  10 — Added lightConfigs array (per-light static config incl. beamThickness, excludeBeamFromFeedback).
+//  11 — Added easingMode (Int) per ObjectData for per-track keyframe interpolation style.
 //
 // Design rules:
 //   • No binary data inline — .glb files are referenced by absolute path.
@@ -25,7 +26,7 @@ import Foundation
 //     All new fields have defaults so older files load without error.
 
 struct ProjectData: Codable {
-    var version:             Int     = 10
+    var version:             Int     = 11
     var modelPath:           String? = nil   // v1/v2 compat; ignored when modelPaths non-empty.
     var modelPaths:          [String] = []   // v3 — ordered list of absolute .glb paths.
     var timeline:            TimelineData
@@ -41,10 +42,11 @@ struct ProjectData: Codable {
     var isWireframe:         Bool = false               // v8; wireframe rendering toggle.
     var showAxesGizmo:       Bool = false               // v8; XYZ orientation gizmo.
     var lightConfigs:        [LightConfigData] = []    // v10; per-light static config.
+    var windowLayout:        WindowLayoutData  = WindowLayoutData()  // v11; panel positions.
 
     // MARK: - Memberwise init (required because we define init(from:) below)
 
-    init(version:             Int                    = 10,
+    init(version:             Int                    = 11,
          modelPath:           String?                = nil,
          modelPaths:          [String]               = [],
          timeline:            TimelineData,
@@ -58,7 +60,8 @@ struct ProjectData: Codable {
          background:          BackgroundData         = BackgroundData(),
          isWireframe:         Bool                   = false,
          showAxesGizmo:       Bool                   = false,
-         lightConfigs:        [LightConfigData]      = []) {
+         lightConfigs:        [LightConfigData]      = [],
+         windowLayout:        WindowLayoutData       = WindowLayoutData()) {
         self.version             = version
         self.modelPath           = modelPath
         self.modelPaths          = modelPaths
@@ -74,6 +77,7 @@ struct ProjectData: Codable {
         self.isWireframe         = isWireframe
         self.showAxesGizmo       = showAxesGizmo
         self.lightConfigs        = lightConfigs
+        self.windowLayout        = windowLayout
     }
 
     // MARK: - Custom decoder
@@ -101,6 +105,7 @@ struct ProjectData: Codable {
         isWireframe         = (try? c.decode(Bool.self,                  forKey: .isWireframe))         ?? false
         showAxesGizmo       = (try? c.decode(Bool.self,                  forKey: .showAxesGizmo))       ?? false
         lightConfigs        = (try? c.decode([LightConfigData].self,     forKey: .lightConfigs))        ?? []
+        windowLayout        = (try? c.decode(WindowLayoutData.self,      forKey: .windowLayout))        ?? WindowLayoutData()
     }
 }
 
@@ -160,6 +165,23 @@ struct FeedbackData: Codable {
     }
 }
 
+// v11: Position and size of one window or floating panel.
+struct WindowFrameData: Codable {
+    var x: Double = 0
+    var y: Double = 0
+    var w: Double = 1920
+    var h: Double = 1160
+}
+
+// v11: Saved layout for all managed windows.
+// nil panel entries = that panel was closed; don't reopen on load.
+struct WindowLayoutData: Codable {
+    var mainWindow:     WindowFrameData  = WindowFrameData()  // always saved
+    var timelineEditor: WindowFrameData? = nil                // nil = was closed
+    var lightsPanel:    WindowFrameData? = nil
+    var feedbackPanel:  WindowFrameData? = nil
+}
+
 struct TimelineData: Codable {
     var duration:    Double
     var currentTime: Double
@@ -179,6 +201,27 @@ struct ObjectData: Codable {
     var keyframes: [KeyframeData]
     // v4: column-major 4×4 matrix (16 floats).  Empty array = use GLB default (v1–v3 compat).
     var baseTransformMatrix: [Float] = []
+    // v11: EasingMode.rawValue.  0 = .linear (default) — missing key in older files
+    //      is decoded as 0 so pre-v11 projects load with unchanged linear behaviour.
+    var easingMode: Int = 0
+
+    // Custom decoder so files without baseTransformMatrix (v1–v3) or easingMode (v1–v10)
+    // decode cleanly using the defaults above instead of throwing keyNotFound.
+    init(from decoder: Decoder) throws {
+        let c                = try decoder.container(keyedBy: CodingKeys.self)
+        name                 = try  c.decode(String.self,        forKey: .name)
+        keyframes            = try  c.decode([KeyframeData].self, forKey: .keyframes)
+        baseTransformMatrix  = (try? c.decode([Float].self,       forKey: .baseTransformMatrix)) ?? []
+        easingMode           = (try? c.decode(Int.self,           forKey: .easingMode))          ?? 0
+    }
+
+    init(name: String, keyframes: [KeyframeData],
+         baseTransformMatrix: [Float] = [], easingMode: Int = 0) {
+        self.name                = name
+        self.keyframes           = keyframes
+        self.baseTransformMatrix = baseTransformMatrix
+        self.easingMode          = easingMode
+    }
 }
 
 // One saved object keyframe — full TRS of the animation delta.
@@ -228,14 +271,18 @@ struct LightConfigData: Codable {
 }
 
 // v6: One saved light keyframe — intensity, colour, direction, position.
+// v11: Added range and beamThickness.
 // Type, cone angles, and enabled state are not animated; restore them from LightConfig.
 struct LightKeyframeData: Codable {
-    var time:      Double
-    var intensity: Float
+    var time:          Double
+    var intensity:     Float
     // Colour components
     var r: Float; var g: Float; var b: Float
     // Direction (normalised)
     var dx: Float; var dy: Float; var dz: Float
     // Position
     var px: Float; var py: Float; var pz: Float
+    // v11: beam properties (default to LightConfig defaults for older project files)
+    var range:         Float = 15.0
+    var beamThickness: Float = 1.0
 }

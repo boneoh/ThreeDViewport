@@ -193,6 +193,8 @@ Arrow keys only affect the selected object when playback is **paused**.
 | **P** | Toggle Play / Pause playback |
 | **T** | Toggle colour / greyscale rendering |
 | **G** | Toggle wireframe display |
+| **I** | Add a keyframe at the current playhead time (alias for Insert). Respects the active mode: Camera, Object, or Light. |
+| **D** | Delete the selected keyframe diamond in the Timeline Editor (alias for Delete / Backspace). Has no effect if no keyframe is selected. |
 | **Space** (hold) | While held, left-drag **orbits** the camera around its target |
 
 ---
@@ -279,8 +281,8 @@ Open with **Window › Timeline Editor**. The panel shows one horizontal lane pe
 | Click **outside all lanes** | Deselect everything |
 | **Drag** a selected diamond | Retime the keyframe in real time; playhead follows |
 | ← → arrow keys | Nudge the selected diamond ±1 frame (1/30 s) |
-| **Delete** | Remove the selected keyframe |
-| **Insert** | Stamp a new keyframe at the current playhead time for the selected lane, using the object's or camera's current live state |
+| **Delete** / **D** | Remove the selected keyframe |
+| **Insert** / **I** | Stamp a new keyframe at the current playhead time for the selected lane, using the object's or camera's current live state |
 | **Return** (on a selected diamond) | Enter **in-place edit mode** for that keyframe (see below) |
 | **Return** (while editing) | Commit the new pose — overwrites the keyframe |
 | **Escape** (while editing) | Cancel — restores the original pose |

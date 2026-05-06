@@ -24,8 +24,9 @@ final class ProjectFile {
     // MARK: - Save
 
     /// Serialises the current viewport state to a pretty-printed JSON file at `url`.
-    static func save(to url: URL, viewport: ViewportView) throws {
-        let data    = captureData(from: viewport)
+    static func save(to url: URL, viewport: ViewportView,
+                     windowLayout: WindowLayoutData = WindowLayoutData()) throws {
+        let data    = captureData(from: viewport, windowLayout: windowLayout)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
 
@@ -54,7 +55,8 @@ final class ProjectFile {
     /// Reads a .3dvp file at `url`, restores timeline, loads all models, restores
     /// keyframe tracks and camera state.  Camera is applied AFTER model loading so
     /// it overrides any fitToScene calls made during load.
-    static func load(from url: URL, into viewport: ViewportView) throws {
+    @discardableResult
+    static func load(from url: URL, into viewport: ViewportView) throws -> ProjectData {
         let json: Data
         do {
             json = try Data(contentsOf: url)
@@ -75,11 +77,13 @@ final class ProjectFile {
             + "  objects=" + String(data.objects.count))
 
         applyData(data, to: viewport)
+        return data
     }
 
     // MARK: - Capture live state → ProjectData
 
-    private static func captureData(from vp: ViewportView) -> ProjectData {
+    private static func captureData(from vp: ViewportView,
+                                    windowLayout: WindowLayoutData = WindowLayoutData()) -> ProjectData {
         let cam = vp.camera
         let tl  = vp.timeline
 
@@ -121,7 +125,8 @@ final class ProjectFile {
             let matrixToSave = hasKeyframes ? obj.baseTransform : obj.transform
             return ObjectData(name: obj.name,
                               keyframes: kfData,
-                              baseTransformMatrix: encodeMatrix(matrixToSave))
+                              baseTransformMatrix: encodeMatrix(matrixToSave),
+                              easingMode: (obj.keyframeTrack?.easingMode ?? .linear).rawValue)
         }
 
         // ── Camera keyframes (Phase 5) ────────────────────────────────────────
@@ -156,11 +161,13 @@ final class ProjectFile {
             guard let track = track else { return [] }
             return track.keyframes.map { kf in
                 LightKeyframeData(
-                    time:      kf.time,
-                    intensity: kf.intensity,
+                    time:          kf.time,
+                    intensity:     kf.intensity,
                     r: kf.color.x, g: kf.color.y, b: kf.color.z,
                     dx: kf.direction.x, dy: kf.direction.y, dz: kf.direction.z,
-                    px: kf.position.x,  py: kf.position.y,  pz: kf.position.z
+                    px: kf.position.x,  py: kf.position.y,  pz: kf.position.z,
+                    range:         kf.range,
+                    beamThickness: kf.beamThickness
                 )
             }
         }
@@ -204,7 +211,7 @@ final class ProjectFile {
         )
 
         return ProjectData(
-            version:             10,
+            version:             11,
             modelPath:           nil,           // v3+ uses modelPaths instead
             modelPaths:          modelPaths,
             timeline:            timelineData,
@@ -218,7 +225,8 @@ final class ProjectFile {
             background:          backgroundData,
             isWireframe:         vp.renderer?.isWireframe ?? false,
             showAxesGizmo:       vp.renderSettings.showAxesGizmo,
-            lightConfigs:        lightConfigsData
+            lightConfigs:        lightConfigsData,
+            windowLayout:        windowLayout
         )
     }
 
@@ -393,6 +401,7 @@ final class ProjectFile {
             }
 
             let track = KeyframeTrack()
+            track.easingMode = EasingMode(rawValue: saved.easingMode) ?? .linear
             for kf in saved.keyframes {
                 track.addKeyframe(TransformKeyframe(
                     time:        kf.time,
@@ -430,11 +439,13 @@ final class ProjectFile {
             let track = LightKeyframeTrack()
             for kf in kfDataArray {
                 track.addKeyframe(LightKeyframe(
-                    time:      kf.time,
-                    intensity: kf.intensity,
-                    color:     SIMD3<Float>(kf.r, kf.g, kf.b),
-                    direction: simd_normalize(SIMD3<Float>(kf.dx, kf.dy, kf.dz)),
-                    position:  SIMD3<Float>(kf.px, kf.py, kf.pz)
+                    time:          kf.time,
+                    intensity:     kf.intensity,
+                    color:         SIMD3<Float>(kf.r, kf.g, kf.b),
+                    direction:     simd_normalize(SIMD3<Float>(kf.dx, kf.dy, kf.dz)),
+                    position:      SIMD3<Float>(kf.px, kf.py, kf.pz),
+                    range:         kf.range,
+                    beamThickness: kf.beamThickness
                 ))
             }
             lm.keyframeTracks[i] = track

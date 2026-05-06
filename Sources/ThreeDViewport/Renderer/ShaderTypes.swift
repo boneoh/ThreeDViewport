@@ -142,3 +142,55 @@ struct LaserBeamUniforms {
     var thickness:  Float
     var pad:        Float
 }
+
+// ── Laser hit effect uniforms (buffer index 0 in laser hit pass) ──────────────
+// Must match `struct LaserHitUniforms` in LaserBeamShaders.metal exactly.
+// Layout:
+//   viewProjectionMatrix  float4x4   64
+//   hitPoint              float4     16   xyz = world pos, w = 1
+//   color                 float4     16   rgb = laser colour, w = 1
+//   screenSize            float2      8   drawable pixels
+//   hitRadius             float       4   billboard radius in pixels
+//   time                  float       4   wall-clock / anim seconds
+//   ─────────────────────────────────────
+//   Total                            112
+struct LaserHitUniforms {
+    var viewProjectionMatrix: matrix_float4x4
+    var hitPoint:   SIMD4<Float>
+    var color:      SIMD4<Float>
+    var screenSize: SIMD2<Float>
+    var hitRadius:  Float
+    var time:       Float
+}
+
+// ── Spark particle GPU data (per-element in the instanced spark buffer) ───────
+// Must match `struct SparkParticleGPU` in LaserBeamShaders.metal exactly.
+// Layout (16-byte aligned):
+//   position  float4  16   xyz = world pos, w unused
+//   color     float4  16   rgb = colour, w unused
+//   size      float    4   world-unit billboard half-extent
+//   alpha     float    4   0–1 fade
+//   pad       float2   8   alignment padding
+//   ─────────────────────────────────────
+//   Total               48
+struct SparkParticleGPU {
+    var position: SIMD4<Float>
+    var color:    SIMD4<Float>
+    var size:     Float
+    var alpha:    Float
+    var pad:      SIMD2<Float>
+}
+
+// ── Spark billboard uniforms (buffer index 1 in spark pass) ──────────────────
+// Must match `struct SparkUniforms` in LaserBeamShaders.metal exactly.
+// Layout:
+//   viewProjectionMatrix  float4x4   64
+//   cameraRight           float4     16
+//   cameraUp              float4     16
+//   ─────────────────────────────────────
+//   Total                             96
+struct SparkUniforms {
+    var viewProjectionMatrix: matrix_float4x4
+    var cameraRight: SIMD4<Float>
+    var cameraUp:    SIMD4<Float>
+}

@@ -154,8 +154,8 @@ final class GLTFLoader {
             tangents = [Float](repeating: 0, count: vertexCount * 4)
         }
 
-        // ── Bounding sphere ─────────────────────────────────────────────────
-        let (boundCenter, boundRadius) = computeBoundingSphere(positions: positions)
+        // ── Bounding sphere + AABB ─────────────────────────────────────────
+        let (boundCenter, boundRadius, boundMin, boundMax) = computeBoundingSphere(positions: positions)
 
         // ── Metal buffers ───────────────────────────────────────────────────
         let posBuffer  = makeBuffer(positions, label: "positions")
@@ -193,6 +193,8 @@ final class GLTFLoader {
         obj.indexCount     = indices.count
         obj.boundingCenter = boundCenter
         obj.boundingRadius = boundRadius
+        obj.boundingMin    = boundMin
+        obj.boundingMax    = boundMax
         obj.material       = material
 
         obj.validateBuffers()
@@ -708,9 +710,14 @@ final class GLTFLoader {
 
     // MARK: - Bounding Sphere
 
-    private func computeBoundingSphere(positions: [Float]) -> (SIMD3<Float>, Float) {
+    /// Returns (center, radius, aabbMin, aabbMax) — all in local object space.
+    private func computeBoundingSphere(positions: [Float])
+        -> (SIMD3<Float>, Float, SIMD3<Float>, SIMD3<Float>) {
         let vertexCount = positions.count / 3
-        guard vertexCount > 0 else { return (SIMD3<Float>(0,0,0), 1.0) }
+        guard vertexCount > 0 else {
+            return (SIMD3<Float>(0,0,0), 1.0,
+                    SIMD3<Float>(-1,-1,-1), SIMD3<Float>(1,1,1))
+        }
 
         var minV = SIMD3<Float>(repeating:  Float.infinity)
         var maxV = SIMD3<Float>(repeating: -Float.infinity)
@@ -728,7 +735,7 @@ final class GLTFLoader {
             maxDist = max(maxDist, simd_length(p - center))
         }
 
-        return (center, maxDist > 0 ? maxDist : 1.0)
+        return (center, maxDist > 0 ? maxDist : 1.0, minV, maxV)
     }
 
     // MARK: - Buffer creation helper

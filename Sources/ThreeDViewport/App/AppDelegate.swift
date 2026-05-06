@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 import simd
@@ -35,6 +36,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // Tracks the last saved/opened project URL for ⌘S "save in place".
     private var currentProjectURL: URL?
+
+    // True whenever the project has unsaved changes.
+    private var isDirty: Bool = false
+
+    // Combine subscriptions that set isDirty when any Observable setting changes.
+    private var settingsCancellables = Set<AnyCancellable>()
 
     private let timelinePanelHeight: CGFloat = 80
 
@@ -126,10 +133,138 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         print("[DEBUG] AppDelegate: window ready — viewport="
             + String(Int(windowWidth)) + "x" + String(Int(viewportHeight))
             + " timeline=" + String(Int(windowWidth)) + "x" + String(Int(timelinePanelHeight)))
+
+        subscribeToSettingsChanges(viewport)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return true
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard isDirty else { return .terminateNow }
+
+        let alert = NSAlert()
+        alert.messageText     = "Save project before quitting?"
+        alert.informativeText = "Your unsaved changes will be lost if you don't save."
+        alert.addButton(withTitle: "Save")        // first  (.alertFirstButtonReturn)
+        alert.addButton(withTitle: "Don't Save")  // second
+        alert.addButton(withTitle: "Cancel")      // third  (.alertThirdButtonReturn)
+
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            // Save in place if we have a URL; otherwise show Save As (cancels this quit)
+            if let url = currentProjectURL, let viewport = viewportView {
+                do {
+                    try ProjectFile.save(to: url, viewport: viewport,
+                                         windowLayout: currentWindowLayout())
+                    isDirty = false
+                    return .terminateNow
+                } catch {
+                    showErrorAlert(message: "Could not save project",
+                                   detail: error.localizedDescription)
+                    return .terminateCancel
+                }
+            } else {
+                // No URL yet — show Save As; user must re-quit after saving.
+                saveProjectAs(self)
+                return .terminateCancel
+            }
+        case .alertSecondButtonReturn:
+            return .terminateNow
+        default:
+            return .terminateCancel
+        }
+    }
+
+    // MARK: - Window layout helpers
+
+    /// Collects the current position and size of every managed window/panel.
+    private func currentWindowLayout() -> WindowLayoutData {
+        var layout = WindowLayoutData()
+        if let f = window?.frame {
+            layout.mainWindow = WindowFrameData(x: f.origin.x, y: f.origin.y,
+                                                w: f.size.width, h: f.size.height)
+        }
+        if let wc = timelineEditorWC, wc.window?.isVisible == true,
+           let f = wc.window?.frame {
+            layout.timelineEditor = WindowFrameData(x: f.origin.x, y: f.origin.y,
+                                                    w: f.size.width, h: f.size.height)
+        }
+        if let panel = lightsPanel, panel.isVisible {
+            let f = panel.frame
+            layout.lightsPanel = WindowFrameData(x: f.origin.x, y: f.origin.y,
+                                                 w: f.size.width, h: f.size.height)
+        }
+        if let panel = feedbackPanel, panel.isVisible {
+            let f = panel.frame
+            layout.feedbackPanel = WindowFrameData(x: f.origin.x, y: f.origin.y,
+                                                   w: f.size.width, h: f.size.height)
+        }
+        return layout
+    }
+
+    /// Restores window/panel positions from a saved layout.
+    private func applyWindowLayout(_ layout: WindowLayoutData) {
+        // Main window
+        let mf = layout.mainWindow
+        window?.setFrame(NSRect(x: mf.x, y: mf.y, width: mf.w, height: mf.h), display: true)
+
+        // Timeline editor — open and position if it was visible
+        if let tf = layout.timelineEditor {
+            if timelineEditorWC == nil { showTimelineEditor(self) }
+            timelineEditorWC?.window?.setFrame(
+                NSRect(x: tf.x, y: tf.y, width: tf.w, height: tf.h), display: true)
+        }
+
+        // Lights panel — open and position if it was visible
+        if let lf = layout.lightsPanel {
+            if lightsPanel == nil { showLightsInspector(self) }
+            lightsPanel?.setFrame(
+                NSRect(x: lf.x, y: lf.y, width: lf.w, height: lf.h), display: true)
+        }
+
+        // Feedback panel — open and position if it was visible
+        if let ff = layout.feedbackPanel {
+            if feedbackPanel == nil { showFeedbackPanel(self) }
+            feedbackPanel?.setFrame(
+                NSRect(x: ff.x, y: ff.y, width: ff.w, height: ff.h), display: true)
+        }
+    }
+
+    // MARK: - Dirty tracking
+
+    private func markDirty() { isDirty = true }
+
+    /// Subscribe to every ObservableObject that holds saveable state so that any
+    /// change made via the SwiftUI inspector panels automatically sets isDirty.
+    /// Uses synchronous delivery (no receive(on:)) so that subscriptions fire before
+    /// the loadProject isDirty=false line runs, not after it.
+    private func subscribeToSettingsChanges(_ viewport: ViewportView) {
+        settingsCancellables.removeAll()
+
+        // LightManager.lights covers intensity, colour, direction, position,
+        // range, beamThickness, type, isEnabled, cone angles — everything in LightConfig.
+        viewport.lightManager.objectWillChange
+            .sink { [weak self] in self?.markDirty() }
+            .store(in: &settingsCancellables)
+
+        // FeedbackSettings covers all feedback panel controls.
+        viewport.feedbackSettings.objectWillChange
+            .sink { [weak self] in self?.markDirty() }
+            .store(in: &settingsCancellables)
+
+        // RenderSettings covers colour mode and axes gizmo toggle.
+        viewport.renderSettings.objectWillChange
+            .sink { [weak self] in self?.markDirty() }
+            .store(in: &settingsCancellables)
+
+        // BackgroundConfig covers mode, solid colour, gradient colours.
+        viewport.backgroundConfig.objectWillChange
+            .sink { [weak self] in self?.markDirty() }
+            .store(in: &settingsCancellables)
+
+        print("[DEBUG] AppDelegate: subscribed to settings changes for dirty tracking")
     }
 
     // MARK: - Menu
@@ -417,6 +552,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             print("[DEBUG] AppDelegate: openModel — " + url.lastPathComponent)
             self?.viewportView?.loadModel(url: url)
+            self?.markDirty()
         }
     }
 
@@ -447,6 +583,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             print("[DEBUG] AppDelegate: addModelToScene — " + url.lastPathComponent)
             self?.viewportView?.addModelToScene(url: url)
+            self?.markDirty()
         }
     }
 
@@ -474,11 +611,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func loadProject(from url: URL) {
         guard let viewport = viewportView else { return }
         do {
-            try ProjectFile.load(from: url, into: viewport)
+            let data = try ProjectFile.load(from: url, into: viewport)
             currentProjectURL = url
+            isDirty = false
             window?.title = "ThreeDViewport — " + url.deletingPathExtension().lastPathComponent
             // Resize the timeline editor if the number of tracks changed.
             timelineEditorWC?.updateWindowHeight()
+            // Restore window/panel positions saved with the project.
+            applyWindowLayout(data.windowLayout)
             print("[DEBUG] AppDelegate: project loaded from " + url.lastPathComponent)
         } catch {
             showErrorAlert(message: "Could not open project", detail: error.localizedDescription)
@@ -491,7 +631,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let url = currentProjectURL {
             guard let viewport = viewportView else { return }
             do {
-                try ProjectFile.save(to: url, viewport: viewport)
+                try ProjectFile.save(to: url, viewport: viewport,
+                                     windowLayout: currentWindowLayout())
+                isDirty = false
                 print("[DEBUG] AppDelegate: project saved to " + url.lastPathComponent)
             } catch {
                 showErrorAlert(message: "Could not save project", detail: error.localizedDescription)
@@ -519,8 +661,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard response == .OK, let url = panel.url else { return }
             guard let self = self else { return }
             do {
-                try ProjectFile.save(to: url, viewport: viewport)
+                try ProjectFile.save(to: url, viewport: viewport,
+                                     windowLayout: self.currentWindowLayout())
                 self.currentProjectURL = url
+                self.isDirty = false
                 self.window?.title = "ThreeDViewport — "
                     + url.deletingPathExtension().lastPathComponent
                 print("[DEBUG] AppDelegate: project saved as " + url.lastPathComponent)
@@ -553,6 +697,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func toggleWireframe(_ sender: Any) {
         viewportView?.renderer?.isWireframe.toggle()
+        markDirty()
         print("[DEBUG] AppDelegate: wireframe toggled to "
             + String(viewportView?.renderer?.isWireframe ?? false))
     }
@@ -565,6 +710,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func toggleLoopPlayback(_ sender: Any) {
         viewportView?.timeline.isLooping.toggle()
+        markDirty()
         print("[DEBUG] AppDelegate: loopPlayback toggled to "
             + String(viewportView?.timeline.isLooping ?? false))
     }
@@ -706,14 +852,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             camera:       viewport.camera,
             lightManager: viewport.lightManager
         )
-        wc.editorView.onInsertObjectKeyframe = { [weak viewport] index in
+        wc.editorView.onInsertObjectKeyframe = { [weak self, weak viewport] index in
             viewport?.addKeyframeAtCurrentTime(forObjectAt: index)
+            self?.markDirty()
         }
-        wc.editorView.onInsertCameraKeyframe = { [weak viewport] in
+        wc.editorView.onInsertCameraKeyframe = { [weak self, weak viewport] in
             viewport?.addCameraKeyframeAtCurrentTime()
+            self?.markDirty()
         }
-        wc.editorView.onInsertLightKeyframe = { [weak viewport] index in
+        wc.editorView.onInsertLightKeyframe = { [weak self, weak viewport] index in
             viewport?.addLightKeyframeAtCurrentTime(forLightAt: index)
+            self?.markDirty()
+        }
+        wc.editorView.onKeyframeDeleted = { [weak self] in
+            self?.markDirty()
         }
 
         // ── Enter edit mode ───────────────────────────────────────────────────
@@ -848,6 +1000,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
 
             self.kfEditSnapshot = nil
+            self.markDirty()
         }
 
         // ── Cancel edit ───────────────────────────────────────────────────────
@@ -977,10 +1130,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         panel.beginSheetModal(for: window) { [weak self] response in
-            guard response == .OK, let url = panel.url else {
+            guard response == .OK, let rawURL = panel.url else {
                 print("[DEBUG] AppDelegate: export panel cancelled")
                 return
             }
+            // Always enforce .mov extension regardless of what the user typed or
+            // which file they clicked (e.g. clicking a .3dvp file should still
+            // produce a .mov, not a .3dvp).
+            let url = rawURL.deletingPathExtension().appendingPathExtension("mov")
             let codec: ExportCodec = codecPopup.indexOfSelectedItem == 0
                 ? .proRes4444
                 : .proRes422HQ
@@ -1002,7 +1159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let popup = NSPopUpButton(frame: .zero, pullsDown: false)
         popup.addItem(withTitle: ExportCodec.proRes4444.displayName)
         popup.addItem(withTitle: ExportCodec.proRes422HQ.displayName)
-        popup.selectItem(at: 0)
+        popup.selectItem(at: 1)   // default: ProRes 422 HQ
         popup.sizeToFit()
 
         let stack = NSStackView(views: [label, popup])

@@ -59,6 +59,9 @@ final class TimelineEditorView: NSView {
 
     // ── Bidirectional sync callbacks (set by AppDelegate) ─────────────────────
 
+    /// Called when a keyframe is deleted (Delete key) so AppDelegate can mark the project dirty.
+    var onKeyframeDeleted: (() -> Void)?
+
     /// Called when a lane row or diamond is clicked, so AppDelegate can switch the
     /// viewport to the matching control mode / selection.
     var onLaneSelected: ((TrackRef) -> Void)?
@@ -119,6 +122,14 @@ final class TimelineEditorView: NSView {
 
     private var refreshTimer: Timer?
 
+    // ── Easing popup buttons ──────────────────────────────────────────────────
+    // One NSPopUpButton per object lane, positioned in the right half of the label
+    // column.  Rebuilt whenever the object count or view bounds change.
+
+    private var easingPopups:    [NSPopUpButton] = []
+    private var lastObjectCount: Int             = -1
+    private var lastBounds:      NSRect          = .zero
+
     // MARK: - Init
 
     override init(frame: NSRect) { super.init(frame: frame) }
@@ -131,9 +142,10 @@ final class TimelineEditorView: NSView {
 
     func startRefreshTimer() {
         refreshTimer?.invalidate()
-        // Fire at ~30 fps; always mark dirty so the playhead and scene changes show up.
+        // Fire at ~30 fps; sync easing popups and mark dirty for playhead / scene changes.
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0,
                                             repeats: true) { [weak self] _ in
+            self?.syncEasingPopupsIfNeeded()
             self?.needsDisplay = true
         }
     }
@@ -267,11 +279,23 @@ final class TimelineEditorView: NSView {
             .font:            NSFont.systemFont(ofSize: 11, weight: .regular),
             .foregroundColor: NSColor(white: 0.80, alpha: 1)
         ]
-        for (i, (name, _)) in tracks.enumerated() {
+        // Object rows share the label column with the easing popup (right ~66 px).
+        // Clip name drawing so it doesn't bleed into the popup area.
+        let popupReserved: CGFloat = 68  // matches popup width + margins
+        for (i, (name, ref)) in tracks.enumerated() {
+            let isObjectRow: Bool
+            if case .object = ref { isObjectRow = true } else { isObjectRow = false }
+            let maxNameW = isObjectRow ? (labelWidth - popupReserved) : (labelWidth - 12)
+
             let str  = name as NSString
             let size = str.size(withAttributes: nameAttrs)
-            str.draw(at: NSPoint(x: 8, y: laneCenter(i) - size.height / 2),
-                     withAttributes: nameAttrs)
+            let y    = laneCenter(i) - size.height / 2
+
+            // Clip to the available name width before drawing.
+            NSGraphicsContext.current?.saveGraphicsState()
+            NSBezierPath.clip(NSRect(x: 0, y: laneTop(i), width: maxNameW, height: laneHeight))
+            str.draw(at: NSPoint(x: 8, y: y), withAttributes: nameAttrs)
+            NSGraphicsContext.current?.restoreGraphicsState()
         }
 
         // ── Ruler ticks + time labels ─────────────────────────────────────────
@@ -501,11 +525,11 @@ final class TimelineEditorView: NSView {
         case 53:        // Escape
             handleEscapeKey()
 
-        case 51, 117:   // Backspace / Forward Delete → remove selected diamond
+        case 2, 51, 117: // D / Backspace / Forward Delete → remove selected diamond
             guard !isEditingKeyframe else { return }
             deleteSelectedKeyframe(tracks: tracks)
 
-        case 114:       // Insert / Help → stamp keyframe at current time in selected lane
+        case 34, 114:   // I / Insert / Help → stamp keyframe at current time in selected lane
             guard !isEditingKeyframe else { return }
             insertKeyframeInSelectedLane(tracks: tracks)
 
@@ -678,6 +702,7 @@ final class TimelineEditorView: NSView {
         }
         selectedKFIndex = nil
         needsDisplay    = true
+        onKeyframeDeleted?()
         print("[DEBUG] TimelineEditorView: deleted keyframe lane=\(ti) kf=\(ki)")
     }
 
@@ -737,5 +762,80 @@ final class TimelineEditorView: NSView {
 
         timeline?.seek(to: newTime)
         needsDisplay = true
+    }
+
+    // MARK: - Easing popups
+
+    /// Creates or refreshes per-object easing popup buttons in the label column.
+    /// Called from the refresh timer; only rebuilds subviews when needed.
+    private func syncEasingPopupsIfNeeded() {
+        guard let sm = sceneManager else { return }
+        let objCount    = sm.objects.count
+        let needsRebuild = objCount != lastObjectCount || bounds != lastBounds
+        lastObjectCount  = objCount
+        lastBounds       = bounds
+
+        if needsRebuild {
+            rebuildEasingPopups()
+        } else {
+            // Lightweight pass: just keep selected item in sync with the track.
+            for (i, popup) in easingPopups.enumerated() {
+                guard i < sm.objects.count else { continue }
+                let mode = sm.objects[i].keyframeTrack?.easingMode ?? .linear
+                if popup.selectedItem?.tag != mode.rawValue {
+                    popup.selectItem(withTag: mode.rawValue)
+                }
+            }
+        }
+    }
+
+    private func rebuildEasingPopups() {
+        easingPopups.forEach { $0.removeFromSuperview() }
+        easingPopups.removeAll()
+
+        guard let sm = sceneManager else { return }
+
+        // Layout constants — popup sits in the right portion of the label column.
+        let popupW: CGFloat = 62
+        let popupH: CGFloat = 18
+        let popupX: CGFloat = labelWidth - popupW - 3
+
+        // Object lanes start at track index 1 (Camera = 0).
+        for (i, obj) in sm.objects.enumerated() {
+            let trackIndex = 1 + i
+            let popupY     = laneTop(trackIndex) + (laneHeight - popupH) / 2
+
+            let popup = NSPopUpButton(frame: NSRect(x: popupX, y: popupY,
+                                                    width: popupW, height: popupH),
+                                      pullsDown: false)
+            // Use darkAqua appearance so the button renders with light text on a
+            // dark background, matching the label column's colour scheme.
+            popup.appearance  = NSAppearance(named: .darkAqua)
+            popup.bezelStyle  = .inline
+            popup.font        = NSFont.systemFont(ofSize: 9, weight: .regular)
+            popup.isBordered  = false
+            popup.tag         = i   // encodes object index for the action handler
+
+            for mode in EasingMode.allCases {
+                popup.addItem(withTitle: mode.displayName)
+                popup.lastItem?.tag = mode.rawValue
+            }
+            let current = obj.keyframeTrack?.easingMode ?? .linear
+            popup.selectItem(withTag: current.rawValue)
+
+            popup.target = self
+            popup.action = #selector(easingPopupChanged(_:))
+
+            addSubview(popup)
+            easingPopups.append(popup)
+        }
+    }
+
+    @objc private func easingPopupChanged(_ sender: NSPopUpButton) {
+        let objectIndex = sender.tag
+        guard let mode = EasingMode(rawValue: sender.selectedItem?.tag ?? 0),
+              let obj  = sceneManager?.objects[safe: objectIndex] else { return }
+        obj.keyframeTrack?.easingMode = mode
+        print("[DEBUG] TimelineEditorView: object \(objectIndex) easing → \(mode.displayName)")
     }
 }
