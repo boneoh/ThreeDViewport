@@ -20,9 +20,9 @@ final class GLTFLoader {
         print("[DEBUG] GLTFLoader: initialized")
     }
 
-    // Returns the first SceneObject found, or nil on failure.
+    // Returns ALL SceneObjects found in the file, or nil on failure.
     // On failure `lastError` contains a user-facing description of the problem.
-    func load(url: URL) -> SceneObject? {
+    func load(url: URL) -> [SceneObject]? {
         lastError = nil
         print("[DEBUG] GLTFLoader: loading " + url.lastPathComponent)
 
@@ -56,38 +56,48 @@ final class GLTFLoader {
             return nil
         }
 
+        // Collect every mesh node in the scene graph (depth-first).
+        var objects = [SceneObject]()
         for node in rootNodes {
-            if let obj = processNode(node, parentTransform: matrix_identity_float4x4) {
-                return obj
-            }
+            collectObjects(from: node,
+                           parentTransform: matrix_identity_float4x4,
+                           into: &objects)
         }
 
-        print("[DEBUG] GLTFLoader: no mesh found")
-        lastError = "The file contains no mesh geometry."
-        return nil
+        if objects.isEmpty {
+            print("[DEBUG] GLTFLoader: no mesh found")
+            lastError = "The file contains no mesh geometry."
+            return nil
+        }
+
+        print("[DEBUG] GLTFLoader: loaded \(objects.count) part(s)")
+        return objects
     }
 
     // MARK: - Node Traversal
 
-    private func processNode(_ node: GLTFNode,
-                              parentTransform: matrix_float4x4) -> SceneObject? {
+    /// Recursively visits every node, building a SceneObject for each mesh found.
+    /// Unlike the old `processNode` this does NOT return early — it walks the
+    /// entire scene graph so multi-part models are loaded in full.
+    private func collectObjects(from node: GLTFNode,
+                                 parentTransform: matrix_float4x4,
+                                 into results: inout [SceneObject]) {
         let worldTransform = parentTransform * node.matrix
 
-        if let mesh = node.mesh {
-            let name = node.name ?? "unnamed"
-            if !mesh.primitives.isEmpty,
-               let obj = buildSceneObject(from: mesh, transform: worldTransform, name: name) {
-                return obj
+        if let mesh = node.mesh, !mesh.primitives.isEmpty {
+            let name = node.name ?? "part_\(results.count)"
+            if let obj = buildSceneObject(from: mesh,
+                                           transform: worldTransform,
+                                           name: name) {
+                results.append(obj)
             }
         }
 
         for child in node.childNodes {
-            if let obj = processNode(child, parentTransform: worldTransform) {
-                return obj
-            }
+            collectObjects(from: child,
+                           parentTransform: worldTransform,
+                           into: &results)
         }
-
-        return nil
     }
 
     // MARK: - Mesh → SceneObject

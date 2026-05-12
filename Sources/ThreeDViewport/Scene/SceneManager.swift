@@ -1,4 +1,5 @@
 import Foundation
+import simd
 
 // Owns the live scene graph.
 // Phase 6: multi-object support with selectedIndex for keyboard/mouse routing.
@@ -30,13 +31,57 @@ final class SceneManager {
         }
     }
 
+    // Monotonically increasing counter — each call returns a unique group ID.
+    private var nextGroupID: Int = 0
+
+    // ── Group-level animation (Phase 2) ──────────────────────────────────────
+    // One KeyframeTrack per groupID.  Evaluated each frame and stored in
+    // groupTransforms; the renderer pre-multiplies groupTransform × obj.transform
+    // so the group layer sits on top of per-part animation.
+    var groupKeyframeTracks: [Int: KeyframeTrack]   = [:]
+
+    // Live evaluated (or manually positioned) group-level transform.
+    // Identity = no group offset.  The renderer only reads this; the animation
+    // system writes it by evaluating groupKeyframeTracks.
+    var groupTransforms:     [Int: matrix_float4x4] = [:]
+
     init() {
         print("[DEBUG] SceneManager: initialized, objects count = 0")
+    }
+
+    /// Returns a new unique group ID for a batch of parts loaded together.
+    func makeGroupID() -> Int {
+        let id = nextGroupID
+        nextGroupID += 1
+        return id
+    }
+
+    /// All objects that share the given group ID.
+    func objects(inGroup groupID: Int) -> [SceneObject] {
+        return objects.filter { $0.groupID == groupID }
+    }
+
+    /// Group ID of the currently selected object, if any.
+    var selectedGroupID: Int? {
+        return selectedObject?.groupID
+    }
+
+    /// Display name for a group — uses the source-URL filename of the first part.
+    func groupName(for groupID: Int) -> String {
+        guard let first = objects.first(where: { $0.groupID == groupID }) else {
+            return "Group \(groupID)"
+        }
+        if let url = first.sourceURL {
+            return url.deletingPathExtension().lastPathComponent
+        }
+        return first.name
     }
 
     func clear() {
         print("[DEBUG] SceneManager: clearing " + String(objects.count) + " object(s)")
         objects.removeAll()
+        groupKeyframeTracks.removeAll()
+        groupTransforms.removeAll()
         selectedIndex = 0
     }
 

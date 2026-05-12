@@ -1,31 +1,64 @@
 import AppKit
 
-// Floating panel that hosts the TimelineEditorView.
+// Floating panel that hosts the TimelineEditorView inside a vertical scroll view.
 // Open via Window → Timeline Editor; can be closed independently.
 // The panel is NOT a non-activating panel so it becomes key on click,
 // allowing the editor view to receive keyboard input (Delete, Insert, arrows).
 final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate {
 
     private(set) var editorView: TimelineEditorView
+    private let scrollView: NSScrollView
+
+    // The panel content height is clamped to this maximum so the timeline
+    // doesn't grow taller than the screen; content beyond this scrolls.
+    private static let maxPanelContentH: CGFloat = 420
 
     // MARK: - Init
 
     init(timeline: Timeline, sceneManager: SceneManager,
          camera: CameraController, lightManager: LightManager) {
 
-        let numTracks     = 1 + sceneManager.objects.count + lightManager.lights.count
-        let contentH      = Self.contentHeight(for: numTracks)
-        let contentRect   = NSRect(x: 0, y: 0, width: 1000, height: contentH)
+        let panelWidth: CGFloat = 1000
 
-        let editor = TimelineEditorView(frame: contentRect)
+        // Count only unique group IDs + ungrouped objects for the initial height.
+        // This ensures a 32-part model appears as 1 header row, not 32 rows.
+        var seenGIDs = Set<Int>()
+        var visibleObjectRows = 0
+        for obj in sceneManager.objects {
+            if let gid = obj.groupID {
+                if seenGIDs.insert(gid).inserted { visibleObjectRows += 1 }
+            } else {
+                visibleObjectRows += 1
+            }
+        }
+        let numTracks     = 1 + visibleObjectRows + lightManager.lights.count
+        let contentH      = Self.contentHeight(for: numTracks)
+        let panelContentH = min(contentH, Self.maxPanelContentH)
+
+        // Document view: full content height so everything is reachable by scrolling.
+        let docRect   = NSRect(x: 0, y: 0, width: panelWidth, height: contentH)
+        let panelRect = NSRect(x: 0, y: 0, width: panelWidth, height: panelContentH)
+
+        let editor = TimelineEditorView(frame: docRect)
         editor.timeline      = timeline
         editor.sceneManager  = sceneManager
         editor.camera        = camera
         editor.lightManager  = lightManager
+        // Width follows the scroll view when the panel is resized horizontally.
+        editor.autoresizingMask = [.width]
         editorView = editor
 
+        let sv = NSScrollView(frame: panelRect)
+        sv.hasVerticalScroller   = true
+        sv.hasHorizontalScroller = false
+        sv.autohidesScrollers    = true
+        sv.drawsBackground       = false
+        sv.documentView          = editor
+        sv.autoresizingMask      = [.width, .height]
+        scrollView = sv
+
         let panel = NSPanel(
-            contentRect: contentRect,
+            contentRect: panelRect,
             styleMask:   [.titled, .closable, .miniaturizable, .resizable, .utilityWindow],
             backing:     .buffered,
             defer:       false
@@ -34,11 +67,15 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
         panel.isFloatingPanel        = true
         panel.becomesKeyOnlyIfNeeded = false   // must become key so arrow/delete/insert work
         panel.hidesOnDeactivate      = false
-        panel.minSize                = NSSize(width: 520, height: 60)
-        panel.contentView            = editor
+        panel.minSize                = NSSize(width: 520, height: 80)
+        panel.contentView            = sv
 
         super.init(window: panel)
         panel.delegate = self
+
+        // Keep document view height and panel size in sync whenever the user
+        // expands or collapses a group in the timeline.
+        editor.onLayoutChanged = { [weak self] in self?.updateWindowHeight() }
 
         print("[DEBUG] TimelineEditorWindowController: initialized")
     }
@@ -63,31 +100,38 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
 
     // MARK: - Resize
 
-    /// Recalculates the required window height from the current track count and
-    /// resizes the panel if needed.  Call after loading a project or adding/removing
-    /// objects so the panel height matches the actual number of lanes.
-    /// The panel's top edge is kept fixed; the bottom edge grows or shrinks.
+    /// Recalculates the required content height from the current visible track count
+    /// (accounts for collapsed/expanded groups) and updates:
+    ///   • the document view height so all rows are reachable by scrolling,
+    ///   • the panel height up to maxPanelContentH (anchoring the top edge).
     func updateWindowHeight() {
         guard let panel = window else { return }
-        let numTracks = 1
-            + (editorView.sceneManager?.objects.count ?? 0)
-            + (editorView.lightManager?.lights.count  ?? 0)
-        let newContentH = Self.contentHeight(for: numTracks)
 
-        // Convert desired content height to a full frame height, then compare.
-        let sampleRect  = NSRect(x: 0, y: 0, width: panel.frame.width, height: newContentH)
+        let numTracks     = editorView.visibleTrackCount
+        let newContentH   = Self.contentHeight(for: numTracks)
+
+        // Update document view height.
+        var docFrame = editorView.frame
+        if abs(docFrame.height - newContentH) > 1 {
+            docFrame.size.height = newContentH
+            editorView.frame     = docFrame
+        }
+
+        // Resize panel up to maxPanelContentH, anchoring the top edge.
+        let newPanelContentH = min(newContentH, Self.maxPanelContentH)
+        let sampleRect  = NSRect(x: 0, y: 0, width: panel.frame.width, height: newPanelContentH)
         let newFrameH   = panel.frameRect(forContentRect: sampleRect).height
         let currentH    = panel.frame.height
         guard abs(newFrameH - currentH) > 1 else { return }
 
-        // Anchor the top edge: lower the origin by the delta so the top stays put.
         var f  = panel.frame
         let dy = newFrameH - currentH
         f.origin.y    -= dy
         f.size.height += dy
         panel.setFrame(f, display: true)
+
         print("[DEBUG] TimelineEditorWindowController: resized — "
-            + "tracks=\(numTracks) contentH=\(newContentH)")
+            + "tracks=\(numTracks) contentH=\(newContentH) panelH=\(newPanelContentH)")
     }
 
     // MARK: - Helpers

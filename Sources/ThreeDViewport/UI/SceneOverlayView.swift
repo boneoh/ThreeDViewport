@@ -56,6 +56,7 @@ struct SceneOverlayView: View {
         case .camera: return "camera.fill"
         case .light:  return "lightbulb.fill"
         case .object: return "cube.fill"
+        case .model:  return "square.3.layers.3d"
         }
     }
 
@@ -64,6 +65,7 @@ struct SceneOverlayView: View {
         case .camera: return Color(NSColor.systemBlue)
         case .light:  return Color(NSColor.systemYellow)
         case .object: return Color(NSColor.systemGreen)
+        case .model:  return Color(NSColor.systemOrange)
         }
     }
 }

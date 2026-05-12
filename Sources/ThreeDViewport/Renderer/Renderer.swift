@@ -443,11 +443,21 @@ final class Renderer: NSObject, MTKViewDelegate {
                       let idxBuffer = object.indexBuffer,
                       object.indexCount > 0 else { continue }
 
+                // Phase 2: apply the group-level transform layer on top of the
+                // per-part transform so groups animated as a unit render correctly.
+                let modelMatrix: matrix_float4x4
+                if let gid = object.groupID,
+                   let gt  = sceneManager.groupTransforms[gid] {
+                    modelMatrix = gt * object.transform
+                } else {
+                    modelMatrix = object.transform
+                }
+
                 // Correct normal matrix: inverse-transpose of model matrix
-                let normalMatrix = simd_transpose(simd_inverse(object.transform))
+                let normalMatrix = simd_transpose(simd_inverse(modelMatrix))
 
                 var uniforms = Uniforms(
-                    modelMatrix:          object.transform,
+                    modelMatrix:          modelMatrix,
                     viewProjectionMatrix: vp,
                     normalMatrix:         normalMatrix,
                     cameraPosition:       SIMD4<Float>(eye.x, eye.y, eye.z, 0)
@@ -881,6 +891,16 @@ final class Renderer: NSObject, MTKViewDelegate {
                   !track.keyframes.isEmpty else { continue }
             if let delta = track.evaluate(at: timeline.currentTime) {
                 object.transform = object.baseTransform * delta
+            }
+        }
+
+        // ── Group-level transforms (Phase 2) ──────────────────────────────────
+        // Evaluate each group's keyframe track and store the result in
+        // sceneManager.groupTransforms so the render loop can apply it.
+        for (gid, track) in sceneManager.groupKeyframeTracks {
+            guard !track.keyframes.isEmpty else { continue }
+            if let delta = track.evaluate(at: timeline.currentTime) {
+                sceneManager.groupTransforms[gid] = delta
             }
         }
 

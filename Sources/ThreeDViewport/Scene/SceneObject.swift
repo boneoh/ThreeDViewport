@@ -12,6 +12,10 @@ final class SceneObject {
     // Stored so multi-model project files can reload each object independently.
     var sourceURL: URL?
 
+    // Parts that share a groupID move together in Model mode.
+    // Nil = not part of any group (single-mesh models).
+    var groupID: Int?
+
     // The world transform used for rendering each frame.
     // Updated by the Renderer when animation is active.
     var transform: matrix_float4x4

@@ -45,6 +45,7 @@ final class ProjectFile {
             + "  objects=" + String(data.objects.count)
             + "  keyframes=" + String(data.objects.reduce(0) { $0 + $1.keyframes.count })
             + "  camKeyframes=" + String(data.cameraKeyframes.count)
+            + "  groupTracks=" + String(data.groupKeyframeTracks.count)
             + "  looping=" + String(data.isLooping)
             + "  wireframe=" + String(data.isWireframe)
             + "  bgMode=" + String(data.background.mode))
@@ -105,7 +106,15 @@ final class ProjectFile {
 
         // ── Objects — paths + keyframes ───────────────────────────────────────
         // Phase 6: each object carries its own sourceURL.
-        let modelPaths: [String] = vp.sceneManager.objects.compactMap { $0.sourceURL?.path }
+        // Deduplicate: save one path per unique model file so multi-part models
+        // (32 SceneObjects all sharing the same sourceURL) are not loaded 32 times
+        // when the project is reopened.
+        var _seenPaths = Set<String>()
+        let modelPaths: [String] = vp.sceneManager.objects.compactMap { obj -> String? in
+            guard let path = obj.sourceURL?.path else { return nil }
+            guard _seenPaths.insert(path).inserted else { return nil }
+            return path
+        }
 
         let objectsData: [ObjectData] = vp.sceneManager.objects.map { obj in
             let kfData: [KeyframeData] = (obj.keyframeTrack?.keyframes ?? []).map { kf in
@@ -218,8 +227,36 @@ final class ProjectFile {
             gamma:      cg.gamma
         )
 
+        // ── Group keyframe tracks (v14 / Phase 2) ─────────────────────────────
+        // Keyed by sourceFileName so group IDs (runtime ephemeral) can be
+        // reconnected on load.  Only tracks with at least one keyframe are stored.
+        var groupTrackData: [GroupTrackData] = []
+        for (gid, track) in vp.sceneManager.groupKeyframeTracks {
+            guard !track.keyframes.isEmpty else { continue }
+            // Derive a stable key: the filename of any object in the group.
+            guard let fileName = vp.sceneManager.objects
+                .first(where: { $0.groupID == gid })?.sourceURL?
+                .lastPathComponent
+            else { continue }
+
+            let kfData: [KeyframeData] = track.keyframes.map { kf in
+                KeyframeData(
+                    time: kf.time,
+                    tx: kf.translation.x, ty: kf.translation.y, tz: kf.translation.z,
+                    rx: kf.rotation.imag.x, ry: kf.rotation.imag.y,
+                    rz: kf.rotation.imag.z, rw: kf.rotation.real,
+                    sx: kf.scale.x, sy: kf.scale.y, sz: kf.scale.z
+                )
+            }
+            groupTrackData.append(GroupTrackData(
+                sourceFileName: fileName,
+                easingMode:     track.easingMode.rawValue,
+                keyframes:      kfData
+            ))
+        }
+
         return ProjectData(
-            version:             13,
+            version:             14,
             modelPath:           nil,           // v3+ uses modelPaths instead
             modelPaths:          modelPaths,
             timeline:            timelineData,
@@ -235,7 +272,8 @@ final class ProjectFile {
             showAxesGizmo:       vp.renderSettings.showAxesGizmo,
             lightConfigs:        lightConfigsData,
             windowLayout:        windowLayout,
-            colorGrade:          colorGradeData
+            colorGrade:          colorGradeData,
+            groupKeyframeTracks: groupTrackData
         )
     }
 
@@ -375,6 +413,9 @@ final class ProjectFile {
         // ── Light keyframe tracks (v6) ────────────────────────────────────────
         applyLightKeyframes(data.lightKeyframeTracks, to: vp)
 
+        // ── Group keyframe tracks (v14 / Phase 2) ─────────────────────────────
+        applyGroupKeyframes(data.groupKeyframeTracks, to: vp)
+
         // Sync HUD with restored scene.
         vp.syncOverlayState()
 
@@ -468,6 +509,49 @@ final class ProjectFile {
             lm.keyframeTracks[i] = track
             print("[DEBUG] ProjectFile: restored \(kfDataArray.count)"
                 + " light keyframes for slot \(i)")
+        }
+    }
+
+    // MARK: - Apply group keyframe tracks (v14 / Phase 2)
+
+    /// Restores group-level animation tracks saved in v14+ project files.
+    /// Tracks are keyed by source filename; we walk the live sceneManager to find
+    /// the runtime groupID that corresponds to each saved filename.
+    private static func applyGroupKeyframes(_ tracksData: [GroupTrackData],
+                                             to vp: ViewportView) {
+        guard !tracksData.isEmpty else { return }
+        let sm = vp.sceneManager
+
+        // Build a map: sourceFileName → groupID from the currently loaded objects.
+        var fileToGID: [String: Int] = [:]
+        for obj in sm.objects {
+            guard let gid = obj.groupID,
+                  let fileName = obj.sourceURL?.lastPathComponent
+            else { continue }
+            fileToGID[fileName] = gid
+        }
+
+        for trackData in tracksData {
+            guard !trackData.keyframes.isEmpty else { continue }
+            guard let gid = fileToGID[trackData.sourceFileName] else {
+                print("[DEBUG] ProjectFile: group track skipped — no loaded group"
+                    + " matches '\(trackData.sourceFileName)'")
+                continue
+            }
+
+            let track = KeyframeTrack()
+            track.easingMode = EasingMode(rawValue: trackData.easingMode) ?? .linear
+            for kf in trackData.keyframes {
+                track.addKeyframe(TransformKeyframe(
+                    time:        kf.time,
+                    translation: SIMD3<Float>(kf.tx, kf.ty, kf.tz),
+                    rotation:    simd_quatf(ix: kf.rx, iy: kf.ry, iz: kf.rz, r: kf.rw),
+                    scale:       SIMD3<Float>(kf.sx, kf.sy, kf.sz)
+                ))
+            }
+            sm.groupKeyframeTracks[gid] = track
+            print("[DEBUG] ProjectFile: restored \(trackData.keyframes.count)"
+                + " group keyframes for '\(trackData.sourceFileName)' → gid=\(gid)")
         }
     }
 

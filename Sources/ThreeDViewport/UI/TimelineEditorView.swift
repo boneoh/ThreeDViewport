@@ -8,6 +8,20 @@ enum TrackRef: Equatable {
     case camera
     case object(Int)   // index into sceneManager.objects
     case light(Int)    // index into LightManager.lights
+    case group(Int)    // groupID — multi-part model header row
+}
+
+// One row in the timeline label/track area.
+// Replaces the old (name: String, ref: TrackRef) tuple.
+struct TrackRow {
+    var name:          String
+    var ref:           TrackRef
+    /// True for collapsed/expanded group-header rows.
+    var isGroupHeader: Bool  = false
+    /// True for part rows shown when a group is expanded (indented name, no easing popup).
+    var isIndented:    Bool  = false
+    /// Set on group-header rows — the groupID that owns this header.
+    var groupID:       Int?  = nil
 }
 
 // MARK: - Safe array subscript (file-private)
@@ -45,6 +59,10 @@ final class TimelineEditorView: NSView {
     /// The argument is the light's index in LightManager.lights.
     var onInsertLightKeyframe: ((Int) -> Void)?
 
+    /// Called when the user presses Insert with a group-header lane selected.
+    /// The argument is the groupID that should receive a group-level keyframe.
+    var onInsertGroupKeyframe: ((Int) -> Void)?
+
     // ── Edit-mode callbacks (set by AppDelegate) ──────────────────────────────
 
     /// Called when the user presses Return on a selected diamond to enter edit mode.
@@ -66,6 +84,11 @@ final class TimelineEditorView: NSView {
     /// viewport to the matching control mode / selection.
     var onLaneSelected: ((TrackRef) -> Void)?
 
+    /// Called whenever group expansion state changes (rows added/removed).
+    /// TimelineEditorWindowController wires this to updateWindowHeight() so the
+    /// document view frame and panel height stay in sync with the visible row count.
+    var onLayoutChanged: (() -> Void)?
+
     /// View that receives key events not handled by the timeline editor.
     /// Set to the ViewportView so viewport shortcuts work even when the
     /// Timeline Editor panel has keyboard focus.
@@ -77,7 +100,7 @@ final class TimelineEditorView: NSView {
 
     // ── Layout constants ──────────────────────────────────────────────────────
 
-    private let labelWidth:      CGFloat = 120
+    private let labelWidth:      CGFloat = 160
     private let rulerHeight:     CGFloat = 24
     private let laneHeight:      CGFloat = 28
     private let diamondHalfSize: CGFloat = 5
@@ -122,9 +145,16 @@ final class TimelineEditorView: NSView {
 
     private var refreshTimer: Timer?
 
+    // ── Group expansion state ─────────────────────────────────────────────────
+    // groupIDs that are currently expanded (showing per-part rows).
+    // All groups start collapsed so complex models appear as a single row.
+
+    private var expandedGroups:     Set<Int> = []
+    private var lastExpandedGroups: Set<Int> = []
+
     // ── Easing popup buttons ──────────────────────────────────────────────────
     // One NSPopUpButton per object lane, positioned in the right half of the label
-    // column.  Rebuilt whenever the object count or view bounds change.
+    // column.  Rebuilt whenever the object count, expansion state, or view bounds change.
 
     private var easingPopups:    [NSPopUpButton] = []
     private var lastObjectCount: Int             = -1
@@ -137,6 +167,12 @@ final class TimelineEditorView: NSView {
 
     override var isFlipped: Bool { true }   // y=0 at top, natural for lane layout
     override var acceptsFirstResponder: Bool { true }
+
+    // MARK: - Public helpers
+
+    /// Number of rows currently rendered (accounts for collapsed/expanded groups).
+    /// Used by TimelineEditorWindowController to set the panel height.
+    var visibleTrackCount: Int { buildTracks().count }
 
     // MARK: - Timer management
 
@@ -157,16 +193,59 @@ final class TimelineEditorView: NSView {
 
     // MARK: - Track helpers
 
-    private typealias TrackList = [(name: String, ref: TrackRef)]
+    private typealias TrackList = [TrackRow]
 
-    /// Ordered track list: Camera first, then scene objects, then lights.
+    /// Ordered track list: Camera first, then scene objects (grouped or flat), then lights.
+    /// Multi-part models appear as a single collapsible header row; clicking the row
+    /// or the disclosure triangle expands it to show per-part rows sorted A→Z.
     private func buildTracks() -> TrackList {
-        var result: TrackList = [("Camera", .camera)]
-        for (i, obj) in (sceneManager?.objects ?? []).enumerated() {
-            result.append((obj.name, .object(i)))
+        var result: TrackList = [TrackRow(name: "Camera", ref: .camera)]
+        let objects = sceneManager?.objects ?? []
+
+        // Build an index of (groupID → sorted [(globalIndex, object)]) so expanded
+        // groups emit their parts in alphabetical order rather than load order.
+        var groupOrder: [Int: [(idx: Int, obj: SceneObject)]] = [:]
+        var ungrouped:  [(idx: Int, obj: SceneObject)]        = []
+
+        for (i, obj) in objects.enumerated() {
+            if let gid = obj.groupID {
+                groupOrder[gid, default: []].append((i, obj))
+            } else {
+                ungrouped.append((i, obj))
+            }
         }
+
+        // Emit groups in the order their first part appears in the objects array.
+        var seenGroups = Set<Int>()
+        for (i, obj) in objects.enumerated() {
+            if let gid = obj.groupID {
+                if !seenGroups.contains(gid) {
+                    seenGroups.insert(gid)
+                    let gName = sceneManager?.groupName(for: gid) ?? "Group"
+                    let parts = groupOrder[gid] ?? []
+                    let label = "\(gName)  (\(parts.count) parts)"
+                    result.append(TrackRow(name: label, ref: .group(gid),
+                                           isGroupHeader: true, groupID: gid))
+
+                    if expandedGroups.contains(gid) {
+                        // Emit parts sorted alphabetically by name.
+                        let sorted = parts.sorted { $0.obj.name.localizedCaseInsensitiveCompare($1.obj.name) == .orderedAscending }
+                        for pair in sorted {
+                            result.append(TrackRow(name: pair.obj.name,
+                                                   ref: .object(pair.idx),
+                                                   isIndented: true))
+                        }
+                    }
+                }
+            } else {
+                // Standalone (no group) — already collected in ungrouped, emit in place.
+                result.append(TrackRow(name: obj.name, ref: .object(i)))
+            }
+        }
+        _ = ungrouped   // already emitted inline above
+
         for i in 0..<(lightManager?.lights.count ?? 0) {
-            result.append(("Light \(i + 1)", .light(i)))
+            result.append(TrackRow(name: "Light \(i + 1)", ref: .light(i)))
         }
         return result
     }
@@ -181,6 +260,8 @@ final class TimelineEditorView: NSView {
         case .light(let i):
             guard let lm = lightManager, i < lm.keyframeTracks.count else { return [] }
             return lm.keyframeTracks[i]?.keyframes.map { $0.time } ?? []
+        case .group(let gid):
+            return sceneManager?.groupKeyframeTracks[gid]?.keyframes.map { $0.time } ?? []
         }
     }
 
@@ -206,9 +287,9 @@ final class TimelineEditorView: NSView {
     private func hitTestDiamond(at point: NSPoint,
                                  tracks: TrackList) -> (trackIndex: Int, kfIndex: Int)? {
         let hitRadius: CGFloat = diamondHalfSize + 5
-        for (ti, (_, ref)) in tracks.enumerated() {
+        for (ti, row) in tracks.enumerated() {
             let cy = laneCenter(ti)
-            for (ki, t) in keyframeTimes(for: ref).enumerated() {
+            for (ki, t) in keyframeTimes(for: row.ref).enumerated() {
                 let cx = timeToX(t)
                 if abs(point.x - cx) <= hitRadius && abs(point.y - cy) <= hitRadius {
                     return (ti, ki)
@@ -250,22 +331,34 @@ final class TimelineEditorView: NSView {
         NSBezierPath.fill(NSRect(x: 0, y: 0, width: w, height: rulerHeight))
 
         // ── Lane rows ─────────────────────────────────────────────────────────
-        for i in 0..<tracks.count {
-            let rowRect = NSRect(x: labelWidth, y: laneTop(i),
-                                 width: w - labelWidth, height: laneHeight)
+        for (i, row) in tracks.enumerated() {
+            let isHeader = row.isGroupHeader
+            // Group-header rows span the full width (including label column) so they
+            // stand out visually.  Normal rows only fill the track area.
+            let rowRect  = NSRect(x: isHeader ? 0 : labelWidth,
+                                  y: laneTop(i),
+                                  width: isHeader ? w : w - labelWidth,
+                                  height: laneHeight)
+
             if i == selectedTrackIndex {
-                // Amber tint while editing, blue-grey otherwise
-                let bg = isEditingKeyframe
-                    ? NSColor(red: 0.30, green: 0.22, blue: 0.08, alpha: 1)
-                    : NSColor(white: 0.27, alpha: 1)
+                let bg: NSColor
+                if isHeader {
+                    bg = NSColor(red: 0.22, green: 0.17, blue: 0.06, alpha: 1)   // warm amber header
+                } else if isEditingKeyframe {
+                    bg = NSColor(red: 0.30, green: 0.22, blue: 0.08, alpha: 1)   // editing amber
+                } else {
+                    bg = NSColor(white: 0.27, alpha: 1)
+                }
                 bg.setFill()
+            } else if isHeader {
+                NSColor(white: 0.26, alpha: 1).setFill()   // header: slightly lighter than default
             } else {
                 NSColor(white: i % 2 == 0 ? 0.18 : 0.21, alpha: 1).setFill()
             }
             NSBezierPath.fill(rowRect)
 
             // Row separator
-            NSColor(white: 0.13, alpha: 1).setFill()
+            NSColor(white: isHeader ? 0.11 : 0.13, alpha: 1).setFill()
             NSBezierPath.fill(NSRect(x: 0, y: laneTop(i) + laneHeight - 1,
                                      width: w, height: 1))
         }
@@ -279,22 +372,55 @@ final class TimelineEditorView: NSView {
             .font:            NSFont.systemFont(ofSize: 11, weight: .regular),
             .foregroundColor: NSColor(white: 0.80, alpha: 1)
         ]
+        let headerAttrs: [NSAttributedString.Key: Any] = [
+            .font:            NSFont.systemFont(ofSize: 11, weight: .semibold),
+            .foregroundColor: NSColor(white: 0.88, alpha: 1)
+        ]
         // Object rows share the label column with the easing popup (right ~66 px).
         // Clip name drawing so it doesn't bleed into the popup area.
-        let popupReserved: CGFloat = 68  // matches popup width + margins
-        for (i, (name, ref)) in tracks.enumerated() {
-            let isObjectRow: Bool
-            if case .object = ref { isObjectRow = true } else { isObjectRow = false }
-            let maxNameW = isObjectRow ? (labelWidth - popupReserved) : (labelWidth - 12)
+        let popupReserved: CGFloat = 64   // matches popup width (58) + right margin (3) + gap (3)
+        let triangleZone:  CGFloat = 22   // x-range reserved for the disclosure triangle
 
-            let str  = name as NSString
-            let size = str.size(withAttributes: nameAttrs)
+        for (i, row) in tracks.enumerated() {
+            // ── Disclosure triangle for group headers ─────────────────────────
+            if row.isGroupHeader, let gid = row.groupID {
+                let isExpanded = expandedGroups.contains(gid)
+                let triStr  = (isExpanded ? "▼" : "▶") as NSString
+                let triAttrs: [NSAttributedString.Key: Any] = [
+                    .font:            NSFont.systemFont(ofSize: 12, weight: .bold),
+                    .foregroundColor: NSColor(white: 0.92, alpha: 1)
+                ]
+                let triSize = triStr.size(withAttributes: triAttrs)
+                triStr.draw(at: NSPoint(x: 7, y: laneCenter(i) - triSize.height / 2),
+                            withAttributes: triAttrs)
+            }
+
+            // ── Name label ────────────────────────────────────────────────────
+            let attrs    = row.isGroupHeader ? headerAttrs : nameAttrs
+            let nameX: CGFloat
+            let maxNameW: CGFloat
+            if row.isGroupHeader {
+                nameX    = triangleZone
+                maxNameW = labelWidth - triangleZone - 4
+            } else if case .object = row.ref {
+                // Object rows (standalone or indented part) share the label column
+                // with an easing popup in the right portion.  Indented rows are
+                // inset by an extra 12 px to show hierarchy visually.
+                nameX    = row.isIndented ? 20 : 8
+                maxNameW = labelWidth - popupReserved   // same popup reservation for both
+            } else {
+                nameX    = 8
+                maxNameW = labelWidth - 12
+            }
+
+            let str  = row.name as NSString
+            let size = str.size(withAttributes: attrs)
             let y    = laneCenter(i) - size.height / 2
 
-            // Clip to the available name width before drawing.
             NSGraphicsContext.current?.saveGraphicsState()
-            NSBezierPath.clip(NSRect(x: 0, y: laneTop(i), width: maxNameW, height: laneHeight))
-            str.draw(at: NSPoint(x: 8, y: y), withAttributes: nameAttrs)
+            NSBezierPath.clip(NSRect(x: nameX, y: laneTop(i),
+                                     width: maxNameW, height: laneHeight))
+            str.draw(at: NSPoint(x: nameX, y: y), withAttributes: attrs)
             NSGraphicsContext.current?.restoreGraphicsState()
         }
 
@@ -344,9 +470,9 @@ final class TimelineEditorView: NSView {
 
         // ── Keyframe diamonds ─────────────────────────────────────────────────
         let hs = diamondHalfSize
-        for (ti, (_, ref)) in tracks.enumerated() {
+        for (ti, row) in tracks.enumerated() {
             let cy = laneCenter(ti)
-            for (ki, kfTime) in keyframeTimes(for: ref).enumerated() {
+            for (ki, kfTime) in keyframeTimes(for: row.ref).enumerated() {
                 let cx = timeToX(kfTime)
                 guard cx >= labelWidth - hs && cx <= w + hs else { continue }
 
@@ -456,10 +582,28 @@ final class TimelineEditorView: NSView {
             return
         }
 
-        // Lane hit → select lane, deselect any diamond, notify viewport.
+        // Lane hit → group headers toggle expansion; other rows select + notify viewport.
         if let lane = hitTestLane(at: pt, tracks: tracks) {
+            let row = tracks[lane]
+
+            if row.isGroupHeader, let gid = row.groupID {
+                // Clicking anywhere on a group header row toggles expansion.
+                // Also select the lane (highlights the row) and switch viewport to Model mode.
+                if expandedGroups.contains(gid) {
+                    expandedGroups.remove(gid)
+                } else {
+                    expandedGroups.insert(gid)
+                }
+                select(trackIndex: lane, kfIndex: nil)
+                onLaneSelected?(row.ref)
+                needsDisplay = true
+                rebuildEasingPopups()
+                onLayoutChanged?()   // resize document view / panel for new row count
+                return
+            }
+
             select(trackIndex: lane, kfIndex: nil)
-            onLaneSelected?(tracks[lane].ref)
+            onLaneSelected?(row.ref)
             return
         }
 
@@ -685,6 +829,12 @@ final class TimelineEditorView: NSView {
                   let idx   = track.keyframes.firstIndex(where: { abs($0.time - fromTime) < 0.0005 })
             else { return }
             track.retimeKeyframe(at: idx, to: toTime)
+
+        case .group(let gid):
+            guard let track = sceneManager?.groupKeyframeTracks[gid],
+                  let idx   = track.keyframes.firstIndex(where: { abs($0.time - fromTime) < 0.0005 })
+            else { return }
+            track.retimeKeyframe(at: idx, to: toTime)
         }
     }
 
@@ -699,6 +849,9 @@ final class TimelineEditorView: NSView {
         case .light(let i):
             guard let lm = lightManager, i < lm.keyframeTracks.count else { break }
             lm.keyframeTracks[i]?.removeKeyframe(at: ki)
+        case .group(let gid):
+            guard let track = sceneManager?.groupKeyframeTracks[gid] else { break }
+            track.removeKeyframe(at: ki)
         }
         selectedKFIndex = nil
         needsDisplay    = true
@@ -713,6 +866,7 @@ final class TimelineEditorView: NSView {
         case .camera:        onInsertCameraKeyframe?()
         case .object(let i): onInsertObjectKeyframe?(i)
         case .light(let i):  onInsertLightKeyframe?(i)
+        case .group(let gid): onInsertGroupKeyframe?(gid)
         }
         // Re-select the newly stamped diamond (callbacks are synchronous)
         let t            = timeline?.currentTime ?? 0
@@ -770,16 +924,20 @@ final class TimelineEditorView: NSView {
     /// Called from the refresh timer; only rebuilds subviews when needed.
     private func syncEasingPopupsIfNeeded() {
         guard let sm = sceneManager else { return }
-        let objCount    = sm.objects.count
-        let needsRebuild = objCount != lastObjectCount || bounds != lastBounds
-        lastObjectCount  = objCount
-        lastBounds       = bounds
+        let objCount     = sm.objects.count
+        let needsRebuild = objCount != lastObjectCount
+                        || bounds   != lastBounds
+                        || expandedGroups != lastExpandedGroups
+        lastObjectCount     = objCount
+        lastBounds          = bounds
+        lastExpandedGroups  = expandedGroups
 
         if needsRebuild {
             rebuildEasingPopups()
         } else {
             // Lightweight pass: just keep selected item in sync with the track.
-            for (i, popup) in easingPopups.enumerated() {
+            for popup in easingPopups {
+                let i = popup.tag
                 guard i < sm.objects.count else { continue }
                 let mode = sm.objects[i].keyframeTrack?.easingMode ?? .linear
                 if popup.selectedItem?.tag != mode.rawValue {
@@ -796,14 +954,20 @@ final class TimelineEditorView: NSView {
         guard let sm = sceneManager else { return }
 
         // Layout constants — popup sits in the right portion of the label column.
-        let popupW: CGFloat = 62
+        let popupW: CGFloat = 58   // slightly narrower than before to fit wider labelWidth
         let popupH: CGFloat = 18
         let popupX: CGFloat = labelWidth - popupW - 3
 
-        // Object lanes start at track index 1 (Camera = 0).
-        for (i, obj) in sm.objects.enumerated() {
-            let trackIndex = 1 + i
-            let popupY     = laneTop(trackIndex) + (laneHeight - popupH) / 2
+        // Walk the current track list so each popup lands on the correct lane,
+        // regardless of group expansion state.  All object rows (standalone or
+        // expanded part) get a popup so the user can set easing per part.
+        let tracks = buildTracks()
+        for (trackIndex, row) in tracks.enumerated() {
+            // Easing popups appear on all object rows (standalone and indented parts).
+            guard case .object(let i) = row.ref else { continue }
+            guard i < sm.objects.count else { continue }
+            let obj    = sm.objects[i]
+            let popupY = laneTop(trackIndex) + (laneHeight - popupH) / 2
 
             let popup = NSPopUpButton(frame: NSRect(x: popupX, y: popupY,
                                                     width: popupW, height: popupH),

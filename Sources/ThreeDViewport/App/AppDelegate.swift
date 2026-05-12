@@ -34,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     target: SIMD3<Float>, kfTime: Double)
         case light(index: Int, savedIntensity: Float, savedColor: SIMD3<Float>,
                    savedDirection: SIMD3<Float>, savedPosition: SIMD3<Float>, kfTime: Double)
+        case group(gid: Int, savedTransform: matrix_float4x4, kfTime: Double)
     }
     private var kfEditSnapshot: KFEditSnapshot? = nil
 
@@ -88,6 +89,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let viewport = ViewportView(frame: viewportFrame)
         viewport.autoresizingMask = [.width, .height]
         viewportView = viewport
+
+        // Wire drag-and-drop model drops → markDirty + updateWindowHeight.
+        viewport.onModelDropped = { [weak self] in
+            self?.markDirty()
+            self?.timelineEditorWC?.updateWindowHeight()
+        }
+        // Wire drag-and-drop project drops → dirty-check then load.
+        viewport.onDropProjectFile = { [weak self] url in
+            self?.handleDroppedProject(url)
+        }
 
         if viewport.device == nil {
             print("[DEBUG] AppDelegate: ViewportView MTLDevice is nil — Metal not available")
@@ -662,6 +673,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
     }
 
+    /// Called when the user drags a .3dvp file onto the viewport.
+    /// Prompts to discard unsaved changes (if any) before loading.
+    private func handleDroppedProject(_ url: URL) {
+        if isDirty {
+            let alert = NSAlert()
+            alert.messageText     = "Open \"\(url.deletingPathExtension().lastPathComponent)\"?"
+            alert.informativeText = "Unsaved changes will be lost."
+            alert.addButton(withTitle: "Open")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        loadProject(from: url)
+    }
+
     private func loadProject(from url: URL) {
         guard let viewport = viewportView else { return }
         do {
@@ -1011,6 +1036,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             viewport?.addLightKeyframeAtCurrentTime(forLightAt: index)
             self?.markDirty()
         }
+        wc.editorView.onInsertGroupKeyframe = { [weak self, weak viewport] gid in
+            viewport?.addGroupKeyframeAtCurrentTime(for: gid)
+            self?.markDirty()
+        }
         wc.editorView.onKeyframeDeleted = { [weak self] in
             self?.markDirty()
         }
@@ -1114,6 +1143,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 viewport.setControlMode(.light)
                 print("[DEBUG] AppDelegate: entered light keyframe edit index=\(i)"
                     + " t=" + String(format: "%.3f", kfTime))
+
+            case .group(let gid):
+                // Save the group transform that was baked into this keyframe so we
+                // can restore it on cancel, then switch the viewport to Model mode.
+                let savedGroupTransform: matrix_float4x4
+                if let track = viewport.sceneManager.groupKeyframeTracks[gid],
+                   let delta = track.evaluate(at: kfTime) {
+                    savedGroupTransform = delta
+                } else {
+                    savedGroupTransform = viewport.sceneManager.groupTransforms[gid]
+                        ?? matrix_identity_float4x4
+                }
+                self.kfEditSnapshot = .group(
+                    gid:           gid,
+                    savedTransform: savedGroupTransform,
+                    kfTime:         kfTime
+                )
+                // Restore the group to the keyframed pose so the user edits from
+                // the correct starting point.
+                viewport.sceneManager.groupTransforms[gid] = savedGroupTransform
+                // Select the first part of the group and enter Model mode.
+                if let idx = viewport.sceneManager.objects.firstIndex(where: { $0.groupID == gid }) {
+                    viewport.sceneManager.selectedIndex = idx
+                }
+                viewport.setControlMode(.model)
+                viewport.syncOverlayState()
+                print("[DEBUG] AppDelegate: entered group keyframe edit gid=\(gid)"
+                    + " t=" + String(format: "%.3f", kfTime))
             }
         }
 
@@ -1143,6 +1200,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 viewport.timeline.seek(to: kfTime)
                 viewport.addLightKeyframeAtCurrentTime(forLightAt: index)
                 print("[DEBUG] AppDelegate: committed light keyframe edit index=\(index)"
+                    + " t=" + String(format: "%.3f", kfTime))
+
+            case .group(let gid, _, let kfTime):
+                viewport.timeline.seek(to: kfTime)
+                viewport.addGroupKeyframeAtCurrentTime(for: gid)
+                print("[DEBUG] AppDelegate: committed group keyframe edit gid=\(gid)"
                     + " t=" + String(format: "%.3f", kfTime))
             }
 
@@ -1183,6 +1246,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 viewport.lightManager.lights[index].position   = savedPosition
                 print("[DEBUG] AppDelegate: cancelled light keyframe edit index=\(index)"
                     + " t=" + String(format: "%.3f", kfTime))
+
+            case .group(let gid, let savedTransform, let kfTime):
+                viewport.sceneManager.groupTransforms[gid] = savedTransform
+                print("[DEBUG] AppDelegate: cancelled group keyframe edit gid=\(gid)"
+                    + " t=" + String(format: "%.3f", kfTime))
             }
 
             self.kfEditSnapshot = nil
@@ -1208,6 +1276,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             case .light(let i):
                 viewport.lightManager.selectedIndex = i
                 viewport.setControlMode(.light)
+            case .group(let gid):
+                // Clicking a group header row selects the first part of the group
+                // and switches the viewport to Model mode so the whole group moves together.
+                if let idx = viewport.sceneManager.objects.firstIndex(where: { $0.groupID == gid }) {
+                    viewport.sceneManager.selectedIndex = idx
+                }
+                viewport.setControlMode(.model)
+                viewport.syncOverlayState()
             }
         }
 

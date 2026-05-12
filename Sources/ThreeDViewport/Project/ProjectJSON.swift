@@ -1,6 +1,6 @@
 import Foundation
 
-// Phase 4/5/6/8/9/10/11/12: Codable structs that define the .3dvp project file format (JSON).
+// Phase 4/5/6/8/9/10/11/12/14: Codable structs that define the .3dvp project file format (JSON).
 // Version history:
 //   1 — initial: model path, camera, timeline, per-object keyframe tracks.
 //   2 — Phase 5: added cameraKeyframes array.
@@ -16,6 +16,8 @@ import Foundation
 //  10 — Added lightConfigs array (per-light static config incl. beamThickness, excludeBeamFromFeedback).
 //  11 — Added easingMode (Int) per ObjectData for per-track keyframe interpolation style.
 //  12 — Added colorGrade (brightness Float, contrast Float).
+//  13 — Added gamma to ColorGradeData.
+//  14 — Phase 2 Timeline Hierarchy: added groupKeyframeTracks (group-level animation).
 //
 // Design rules:
 //   • No binary data inline — .glb files are referenced by absolute path.
@@ -27,7 +29,7 @@ import Foundation
 //     All new fields have defaults so older files load without error.
 
 struct ProjectData: Codable {
-    var version:             Int     = 13
+    var version:             Int     = 14
     var modelPath:           String? = nil   // v1/v2 compat; ignored when modelPaths non-empty.
     var modelPaths:          [String] = []   // v3 — ordered list of absolute .glb paths.
     var timeline:            TimelineData
@@ -45,10 +47,12 @@ struct ProjectData: Codable {
     var lightConfigs:        [LightConfigData] = []    // v10; per-light static config.
     var windowLayout:        WindowLayoutData  = WindowLayoutData()  // v11; panel positions.
     var colorGrade:          ColorGradeData   = ColorGradeData()    // v12; B/C post-process.
+    /// v14 (Phase 2): group-level animation tracks, one per loaded multi-part model.
+    var groupKeyframeTracks: [GroupTrackData] = []
 
     // MARK: - Memberwise init (required because we define init(from:) below)
 
-    init(version:             Int                    = 13,
+    init(version:             Int                    = 14,
          modelPath:           String?                = nil,
          modelPaths:          [String]               = [],
          timeline:            TimelineData,
@@ -64,7 +68,8 @@ struct ProjectData: Codable {
          showAxesGizmo:       Bool                   = false,
          lightConfigs:        [LightConfigData]      = [],
          windowLayout:        WindowLayoutData       = WindowLayoutData(),
-         colorGrade:          ColorGradeData         = ColorGradeData()) {
+         colorGrade:          ColorGradeData         = ColorGradeData(),
+         groupKeyframeTracks: [GroupTrackData]       = []) {
         self.version             = version
         self.modelPath           = modelPath
         self.modelPaths          = modelPaths
@@ -82,6 +87,7 @@ struct ProjectData: Codable {
         self.lightConfigs        = lightConfigs
         self.windowLayout        = windowLayout
         self.colorGrade          = colorGrade
+        self.groupKeyframeTracks = groupKeyframeTracks
     }
 
     // MARK: - Custom decoder
@@ -111,6 +117,7 @@ struct ProjectData: Codable {
         lightConfigs        = (try? c.decode([LightConfigData].self,     forKey: .lightConfigs))        ?? []
         windowLayout        = (try? c.decode(WindowLayoutData.self,      forKey: .windowLayout))        ?? WindowLayoutData()
         colorGrade          = (try? c.decode(ColorGradeData.self,        forKey: .colorGrade))          ?? ColorGradeData()
+        groupKeyframeTracks = (try? c.decode([GroupTrackData].self,      forKey: .groupKeyframeTracks)) ?? []
     }
 }
 
@@ -314,4 +321,17 @@ struct LightKeyframeData: Codable {
     // v11: beam properties (default to LightConfig defaults for older project files)
     var range:         Float = 15.0
     var beamThickness: Float = 1.0
+}
+
+// v14 (Phase 2 Timeline Hierarchy): Group-level animation track.
+// Keyed by sourceFileName (the last path component of the model URL) so that
+// group IDs — which are runtime ephemeral — can be reconnected on load.
+// The keyframe payload reuses KeyframeData (TRS delta, quaternion rotation).
+struct GroupTrackData: Codable {
+    /// The filename (e.g. "robot.glb") of the model whose group this track animates.
+    var sourceFileName: String
+    /// EasingMode.rawValue — 0 = .linear.  Absent in older files → 0.
+    var easingMode:     Int = 0
+    /// The keyframe array for this group track.
+    var keyframes:      [KeyframeData] = []
 }

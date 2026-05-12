@@ -9,13 +9,15 @@ import simd
 enum ControlMode {
     case camera
     case light
-    case object
+    case object   // individual part
+    case model    // all parts of a group move as one rigid body
 
     var displayName: String {
         switch self {
         case .camera: return "Camera"
         case .light:  return "Light"
         case .object: return "Object"
+        case .model:  return "Model"
         }
     }
 }
@@ -86,6 +88,19 @@ final class ViewportView: MTKView {
     /// Set to true by the Timeline Editor before it calls keyDown on us so we
     /// know not to forward the event back (prevents a ping-pong loop).
     var isReceivingForwardedKey: Bool = false
+
+    // MARK: - Drag-and-drop callbacks (wired by AppDelegate)
+
+    /// Fires after one or more model files are successfully drop-loaded.
+    /// AppDelegate wires this to markDirty() and updateWindowHeight().
+    var onModelDropped: (() -> Void)?
+
+    /// Fires when the user drops a single .3dvp project file.
+    /// AppDelegate wires this through handleDroppedProject() (with dirty-check).
+    var onDropProjectFile: ((URL) -> Void)?
+
+    // Overlay that highlights the viewport during a valid drag hover.
+    private var dragHighlightView: DragHighlightView?
 
     // MARK: - Init
 
@@ -158,6 +173,14 @@ final class ViewportView: MTKView {
                 self?.feedbackProcessor.reset()
             }
 
+        // Register as a drag-and-drop destination for .glb / .gltf / .3dvp files.
+        registerForDraggedTypes([.fileURL])
+        let hl = DragHighlightView(frame: bounds)
+        hl.autoresizingMask = [.width, .height]
+        hl.isHidden = true
+        addSubview(hl)
+        dragHighlightView = hl
+
         syncOverlayState()
     }
 
@@ -198,18 +221,26 @@ final class ViewportView: MTKView {
 
         let loader = GLTFLoader(device: dev)
 
-        if let obj = loader.load(url: url) {
-            autoNormalize(obj)
-            obj.baseTransform = obj.transform
-            obj.sourceURL     = url
-            obj.name          = url.deletingPathExtension().lastPathComponent
+        if let objects = loader.load(url: url) {
+            let (center, radius) = autoNormalize(objects)
 
-            sceneManager.objects = [obj]
+            let baseName = url.deletingPathExtension().lastPathComponent
+            // All parts from the same file share a group ID so they can be
+            // moved together in Model mode.
+            let gid = objects.count > 1 ? sceneManager.makeGroupID() : nil
+            for obj in objects {
+                obj.baseTransform = obj.transform
+                obj.sourceURL     = url
+                obj.groupID       = gid
+            }
+            objects.first?.name = baseName
+
+            sceneManager.objects = objects
             sceneManager.selectedIndex = 0
-            camera.fitToScene(boundingRadius: obj.boundingRadius, center: obj.boundingCenter)
+            camera.fitToScene(boundingRadius: radius, center: center)
             syncOverlayState()
 
-            print("[DEBUG] ViewportView: loadModel complete — objects=" + String(sceneManager.objects.count))
+            print("[DEBUG] ViewportView: loadModel complete — objects=\(objects.count) groupID=\(gid.map { String($0) } ?? "none")")
         } else {
             let filename = url.lastPathComponent
             let reason   = loader.lastError ?? "The file could not be read."
@@ -230,24 +261,29 @@ final class ViewportView: MTKView {
 
         let loader = GLTFLoader(device: dev)
 
-        if let obj = loader.load(url: url) {
-            autoNormalize(obj)
-            obj.baseTransform = obj.transform
-            obj.sourceURL     = url
-            obj.name          = url.deletingPathExtension().lastPathComponent
+        if let objects = loader.load(url: url) {
+            let (center, radius) = autoNormalize(objects)
+
+            let baseName = url.deletingPathExtension().lastPathComponent
+            let gid = objects.count > 1 ? sceneManager.makeGroupID() : nil
+            for obj in objects {
+                obj.baseTransform = obj.transform
+                obj.sourceURL     = url
+                obj.groupID       = gid
+            }
+            objects.first?.name = baseName
 
             let isFirst = sceneManager.objects.isEmpty
-            sceneManager.objects.append(obj)
+            sceneManager.objects.append(contentsOf: objects)
             sceneManager.selectedIndex = sceneManager.objects.count - 1
 
             if isFirst {
-                camera.fitToScene(boundingRadius: obj.boundingRadius, center: obj.boundingCenter)
+                camera.fitToScene(boundingRadius: radius, center: center)
             }
 
-            // No demo animation for additional objects — user authors their own keyframes.
             syncOverlayState()
 
-            print("[DEBUG] ViewportView: addModelToScene complete — total objects=" + String(sceneManager.objects.count))
+            print("[DEBUG] ViewportView: addModelToScene complete — total objects=\(sceneManager.objects.count) groupID=\(gid.map { String($0) } ?? "none")")
         } else {
             let filename = url.lastPathComponent
             let reason   = loader.lastError ?? "The file could not be read."
@@ -267,6 +303,13 @@ final class ViewportView: MTKView {
         case .camera:        onControlModeChanged?(.camera)
         case .object:        onControlModeChanged?(.object(sceneManager.selectedIndex))
         case .light:         onControlModeChanged?(.light(lightManager.selectedIndex))
+        case .model:
+            // Broadcast the group lane so the timeline highlights the right header row.
+            if let gid = sceneManager.selectedGroupID {
+                onControlModeChanged?(.group(gid))
+            } else {
+                onControlModeChanged?(.object(sceneManager.selectedIndex))
+            }
         }
     }
 
@@ -285,6 +328,15 @@ final class ViewportView: MTKView {
                 ? sceneManager.objects[idx].name : ""
         case .light:
             overlayState.selectedItemName = "Light \(lightManager.selectedIndex + 1)"
+        case .model:
+            // Show how many parts belong to the current group.
+            if let gid = sceneManager.selectedGroupID {
+                let count = sceneManager.objects(inGroup: gid).count
+                let name  = sceneManager.selectedObject?.name ?? "Model"
+                overlayState.selectedItemName = "\(name) (\(count) parts)"
+            } else {
+                overlayState.selectedItemName = sceneManager.selectedObject?.name ?? ""
+            }
         }
     }
 
@@ -342,58 +394,169 @@ final class ViewportView: MTKView {
         }
     }
 
-    // MARK: - Auto-normalization
+    // MARK: - Group helpers (Model mode)
 
-    private func autoNormalize(_ obj: SceneObject) {
-        let targetRadius: Float = 1.0
-        let t = obj.transform
-        let localCenter = obj.boundingCenter
-        let localRadius = obj.boundingRadius
+    /// Returns the parts to move in Model mode: all group members if the selected
+    /// object has a groupID, otherwise just the selected object alone.
+    private func groupParts() -> [SceneObject] {
+        guard let obj = sceneManager.selectedObject ?? sceneManager.primaryObject else {
+            return []
+        }
+        if let gid = obj.groupID {
+            return sceneManager.objects(inGroup: gid)
+        }
+        return [obj]
+    }
 
-        let lc4 = SIMD4<Float>(localCenter.x, localCenter.y, localCenter.z, 1.0)
-        let wc4 = t * lc4
-        let worldCenter = SIMD3<Float>(wc4.x, wc4.y, wc4.z)
+    /// Visual world-space centre of a group, accounting for the group transform layer.
+    /// Phase 2: final rendered position = groupTransform × obj.transform, so the
+    /// pivot used for rotations must be computed from that combined matrix.
+    private func groupCenter(_ parts: [SceneObject]) -> SIMD3<Float> {
+        let gid    = parts.first?.groupID
+        let groupT = gid.flatMap { sceneManager.groupTransforms[$0] } ?? matrix_identity_float4x4
+        var wMin = SIMD3<Float>(repeating:  Float.infinity)
+        var wMax = SIMD3<Float>(repeating: -Float.infinity)
+        for obj in parts {
+            let rendered = groupT * obj.transform
+            let wc = rendered * SIMD4<Float>(obj.boundingCenter, 1)
+            wMin = simd_min(wMin, SIMD3<Float>(wc.x, wc.y, wc.z))
+            wMax = simd_max(wMax, SIMD3<Float>(wc.x, wc.y, wc.z))
+        }
+        return (wMin + wMax) * 0.5
+    }
 
-        let sx = simd_length(SIMD3<Float>(t.columns.0.x, t.columns.0.y, t.columns.0.z))
-        let sy = simd_length(SIMD3<Float>(t.columns.1.x, t.columns.1.y, t.columns.1.z))
-        let sz = simd_length(SIMD3<Float>(t.columns.2.x, t.columns.2.y, t.columns.2.z))
-        let transformScale = max(sx, max(sy, sz))
+    // ── Phase 2: Model-mode movement drives the GROUP TRANSFORM layer ─────────
+    // Instead of modifying each part's transform directly, we accumulate a
+    // single group-level matrix in SceneManager.groupTransforms[gid].
+    // The renderer multiplies: groupTransform × obj.transform for each part.
 
-        if transformScale < 0.0001 {
-            print("[DEBUG] ViewportView: autoNormalize — transform scale near zero, skipping")
+    /// Translates the group transform by `delta` (world-space).
+    private func translateGroup(_ parts: [SceneObject], by delta: SIMD3<Float>) {
+        guard let gid = parts.first?.groupID else {
+            // Ungrouped fallback — move parts directly.
+            for obj in parts {
+                obj.transform.columns.3.x += delta.x
+                obj.transform.columns.3.y += delta.y
+                obj.transform.columns.3.z += delta.z
+            }
             return
         }
+        var t = matrix_identity_float4x4
+        t.columns.3 = SIMD4<Float>(delta.x, delta.y, delta.z, 1)
+        let current = sceneManager.groupTransforms[gid] ?? matrix_identity_float4x4
+        sceneManager.groupTransforms[gid] = t * current
+    }
 
-        let worldRadius = localRadius * transformScale
-        print("[DEBUG] ViewportView: autoNormalize localRadius=" + String(localRadius)
-            + " transformScale=" + String(transformScale)
-            + " worldRadius=" + String(worldRadius))
+    /// Rotates the group transform by `q` around the shared world-space `pivot`.
+    private func rotateGroup(_ parts: [SceneObject], by q: simd_quatf, around pivot: SIMD3<Float>) {
+        guard let gid = parts.first?.groupID else {
+            // Ungrouped fallback.
+            let rot = rotationMatrix4x4(q)
+            var tFwd = matrix_identity_float4x4;  tFwd.columns.3 = SIMD4<Float>( pivot.x,  pivot.y,  pivot.z, 1)
+            var tInv = matrix_identity_float4x4;  tInv.columns.3 = SIMD4<Float>(-pivot.x, -pivot.y, -pivot.z, 1)
+            let compound = tFwd * rot * tInv
+            for obj in parts { obj.transform = compound * obj.transform }
+            return
+        }
+        let rot = rotationMatrix4x4(q)
+        var tFwd = matrix_identity_float4x4;  tFwd.columns.3 = SIMD4<Float>( pivot.x,  pivot.y,  pivot.z, 1)
+        var tInv = matrix_identity_float4x4;  tInv.columns.3 = SIMD4<Float>(-pivot.x, -pivot.y, -pivot.z, 1)
+        let compound = tFwd * rot * tInv
+        let current  = sceneManager.groupTransforms[gid] ?? matrix_identity_float4x4
+        sceneManager.groupTransforms[gid] = compound * current
+    }
+
+    /// Scales the group transform uniformly around the shared world-space `pivot`.
+    private func scaleGroup(_ parts: [SceneObject], by factor: Float, around pivot: SIMD3<Float>) {
+        guard let gid = parts.first?.groupID else {
+            // Ungrouped fallback.
+            for obj in parts {
+                obj.transform.columns.0 *= factor
+                obj.transform.columns.1 *= factor
+                obj.transform.columns.2 *= factor
+                let t    = SIMD3<Float>(obj.transform.columns.3.x,
+                                        obj.transform.columns.3.y,
+                                        obj.transform.columns.3.z)
+                let newT = pivot + (t - pivot) * factor
+                obj.transform.columns.3 = SIMD4<Float>(newT.x, newT.y, newT.z, 1)
+            }
+            return
+        }
+        var s = matrix_identity_float4x4
+        s.columns.0.x = factor; s.columns.1.y = factor; s.columns.2.z = factor
+        var tFwd = matrix_identity_float4x4;  tFwd.columns.3 = SIMD4<Float>( pivot.x,  pivot.y,  pivot.z, 1)
+        var tInv = matrix_identity_float4x4;  tInv.columns.3 = SIMD4<Float>(-pivot.x, -pivot.y, -pivot.z, 1)
+        let compound = tFwd * s * tInv
+        let current  = sceneManager.groupTransforms[gid] ?? matrix_identity_float4x4
+        sceneManager.groupTransforms[gid] = compound * current
+    }
+
+    // MARK: - Auto-normalization
+
+    /// Computes a single uniform scale from the **combined** world-space AABB of all
+    /// parts, then applies it to every object.  This guarantees that multi-part models
+    /// (e.g. a character with 30+ named nodes) are scaled correctly as a whole rather
+    /// than each part being sized independently based on its own tiny bounding sphere.
+    ///
+    /// Returns the post-scale (center, radius) for camera placement.
+    @discardableResult
+    private func autoNormalize(_ objects: [SceneObject]) -> (center: SIMD3<Float>, radius: Float) {
+        guard !objects.isEmpty else { return (.zero, 1.0) }
+
+        let targetRadius: Float = 1.0
+
+        // ── Step 1: expand a world-space AABB from all 8 corners of each part ──
+        var worldMin = SIMD3<Float>(repeating:  Float.infinity)
+        var worldMax = SIMD3<Float>(repeating: -Float.infinity)
+
+        for obj in objects {
+            let t = obj.transform
+            for ix in [obj.boundingMin.x, obj.boundingMax.x] {
+                for iy in [obj.boundingMin.y, obj.boundingMax.y] {
+                    for iz in [obj.boundingMin.z, obj.boundingMax.z] {
+                        let wp = t * SIMD4<Float>(ix, iy, iz, 1)
+                        let w  = SIMD3<Float>(wp.x, wp.y, wp.z)
+                        worldMin = simd_min(worldMin, w)
+                        worldMax = simd_max(worldMax, w)
+                    }
+                }
+            }
+        }
+
+        let worldCenter = (worldMin + worldMax) * 0.5
+        let worldRadius = simd_length(worldMax - worldMin) * 0.5
+
+        print("[DEBUG] ViewportView: autoNormalize \(objects.count) part(s) — worldRadius=\(worldRadius)")
 
         guard worldRadius > 0.0001 else {
             print("[DEBUG] ViewportView: autoNormalize — worldRadius near zero, skipping")
-            return
+            return (worldCenter, 1.0)
         }
-
-        obj.boundingCenter = worldCenter
-        obj.boundingRadius = worldRadius
 
         let scale = targetRadius / worldRadius
         guard abs(scale - 1.0) > 0.02 else {
-            print("[DEBUG] ViewportView: autoNormalize — worldRadius " + String(worldRadius) + " already near 1.0")
-            return
+            print("[DEBUG] ViewportView: autoNormalize — already near 1.0, skipping")
+            return (worldCenter, worldRadius)
         }
 
+        // ── Step 2: apply the same scale matrix to every part ─────────────────
         var S = matrix_identity_float4x4
         S.columns.0.x = scale
         S.columns.1.y = scale
         S.columns.2.z = scale
 
-        obj.transform      = S * t
-        obj.boundingCenter = worldCenter * scale
-        obj.boundingRadius = targetRadius
+        for obj in objects {
+            obj.transform = S * obj.transform
+            // Update bounding sphere to post-scale world space.
+            let lc4 = SIMD4<Float>(obj.boundingCenter, 1)
+            let wc4 = obj.transform * lc4
+            obj.boundingCenter = SIMD3<Float>(wc4.x, wc4.y, wc4.z)
+            obj.boundingRadius *= scale
+        }
 
-        print("[DEBUG] ViewportView: autoNormalize scale=" + String(scale)
-            + " worldRadius=" + String(worldRadius) + " -> " + String(targetRadius))
+        let finalCenter = worldCenter * scale
+        print("[DEBUG] ViewportView: autoNormalize scale=\(scale) — worldRadius \(worldRadius) → \(targetRadius)")
+        return (finalCenter, targetRadius)
     }
 
     // MARK: - Add Object Keyframe
@@ -418,6 +581,8 @@ final class ViewportView: MTKView {
         }
         let obj = sceneManager.objects[index]
 
+        // In model mode, keyframes apply to the selected part only.
+        // Full group keyframing is a future enhancement.
         if obj.keyframeTrack == nil {
             obj.keyframeTrack = KeyframeTrack()
             print("[DEBUG] ViewportView: created new KeyframeTrack for '" + obj.name + "'")
@@ -456,6 +621,53 @@ final class ViewportView: MTKView {
 
         print("[DEBUG] ViewportView: keyframe added at t=" + String(format: "%.3f", timeline.currentTime)
             + " for '" + obj.name + "'")
+    }
+
+    // MARK: - Add Group Keyframe (Phase 2)
+
+    /// Stamps a group-level keyframe at the current time by decomposing the live
+    /// group transform stored in SceneManager.groupTransforms[gid] into TRS.
+    /// The group track sits above per-part animation in the render stack:
+    ///   finalTransform = groupTransform × (baseTransform × partDelta)
+    func addGroupKeyframeAtCurrentTime(for gid: Int) {
+        if sceneManager.groupKeyframeTracks[gid] == nil {
+            sceneManager.groupKeyframeTracks[gid] = KeyframeTrack()
+            print("[DEBUG] ViewportView: created group KeyframeTrack for groupID=\(gid)")
+        }
+
+        // If no group transform has been set yet, record identity (no offset).
+        let m = sceneManager.groupTransforms[gid] ?? matrix_identity_float4x4
+
+        let translation = SIMD3<Float>(m.columns.3.x, m.columns.3.y, m.columns.3.z)
+
+        let sx = simd_length(SIMD3<Float>(m.columns.0.x, m.columns.0.y, m.columns.0.z))
+        let sy = simd_length(SIMD3<Float>(m.columns.1.x, m.columns.1.y, m.columns.1.z))
+        let sz = simd_length(SIMD3<Float>(m.columns.2.x, m.columns.2.y, m.columns.2.z))
+        let scale = SIMD3<Float>(sx, sy, sz)
+
+        let rotation: simd_quatf
+        if sx > 0.0001 && sy > 0.0001 && sz > 0.0001 {
+            let rotMat = matrix_float3x3(columns: (
+                SIMD3<Float>(m.columns.0.x / sx, m.columns.0.y / sx, m.columns.0.z / sx),
+                SIMD3<Float>(m.columns.1.x / sy, m.columns.1.y / sy, m.columns.1.z / sy),
+                SIMD3<Float>(m.columns.2.x / sz, m.columns.2.y / sz, m.columns.2.z / sz)
+            ))
+            rotation = simd_quatf(rotMat)
+        } else {
+            rotation = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+            print("[DEBUG] ViewportView: addGroupKeyframe — near-zero scale, using identity rotation")
+        }
+
+        let kf = TransformKeyframe(
+            time:        timeline.currentTime,
+            translation: translation,
+            rotation:    rotation,
+            scale:       scale
+        )
+        sceneManager.groupKeyframeTracks[gid]?.addKeyframe(kf)
+        print("[DEBUG] ViewportView: group keyframe added at t="
+            + String(format: "%.3f", timeline.currentTime)
+            + " for groupID=\(gid)")
     }
 
     // MARK: - Add Light Keyframe
@@ -604,21 +816,26 @@ final class ViewportView: MTKView {
             camera.orbit(deltaX: dx, deltaY: dy)
 
         } else if controlMode == .object {
-            // Object mode: translate selected object — or do nothing if conditions
-            // aren't met (timeline playing, no object).  Never fall through to
-            // camera pan here; that asymmetry was the cause of the "all objects
-            // move" bug (left-drag was panning the camera instead of doing nothing).
+            // Object mode: translate selected object.
             guard !timeline.isPlaying,
                   let obj = sceneManager.selectedObject ?? sceneManager.primaryObject
             else { return }
-            // Translate in the camera's view plane.
-            // Scale with distance so the feel is consistent at any zoom level.
             let scale = camera.distance * 0.001
             let move  = camera.rightVector * (dx * scale)
                       + camera.upVector   * (dy * scale)
             obj.transform.columns.3.x += move.x
             obj.transform.columns.3.y += move.y
             obj.transform.columns.3.z += move.z
+
+        } else if controlMode == .model {
+            // Model mode: translate all group parts together.
+            guard !timeline.isPlaying else { return }
+            let parts = groupParts()
+            guard !parts.isEmpty else { return }
+            let scale = camera.distance * 0.001
+            let move  = camera.rightVector * (dx * scale)
+                      + camera.upVector   * (dy * scale)
+            translateGroup(parts, by: move)
 
         } else {
             // Camera / Light mode: pan the camera.
@@ -649,9 +866,6 @@ final class ViewportView: MTKView {
             else { return }
 
             // ── Axis lock ─────────────────────────────────────────────────────
-            // Accumulate displacement until one screen axis clearly dominates,
-            // then commit for the rest of the gesture.  This prevents diagonal
-            // drift and makes single-axis spins easy to execute.
             if dragLockAxis == .none {
                 dragAccumX += dx
                 dragAccumY += dy
@@ -660,10 +874,6 @@ final class ViewportView: MTKView {
                 dragLockAxis = abs(dragAccumX) >= abs(dragAccumY) ? .horizontal : .vertical
             }
 
-            // Apply only the locked-axis component of this frame's delta.
-            // Camera-space axes:
-            //   Horizontal drag → spin around camera.upVector    (screen left/right)
-            //   Vertical drag   → tilt around camera.rightVector (screen up/down)
             let rotAxis: SIMD3<Float>
             let angle:   Float
             switch dragLockAxis {
@@ -678,14 +888,10 @@ final class ViewportView: MTKView {
             }
             let rot = rotationMatrix4x4(simd_quatf(angle: angle, axis: rotAxis))
 
-            // Pivot = local AABB midpoint in world space (invariant under rotation).
-            // boundingMin/boundingMax are always in local space (set by GLTFLoader
-            // and never modified after load).
             let localCentre = (obj.boundingMin + obj.boundingMax) * 0.5
             let wc4   = obj.transform * SIMD4<Float>(localCentre, 1)
             let pivot = SIMD3<Float>(wc4.x, wc4.y, wc4.z)
 
-            // Rotate the 3×3 orientation block.
             let c0 = rot * SIMD4<Float>(obj.transform.columns.0.x,
                                          obj.transform.columns.0.y,
                                          obj.transform.columns.0.z, 0)
@@ -699,15 +905,41 @@ final class ViewportView: MTKView {
             obj.transform.columns.1 = SIMD4<Float>(c1.x, c1.y, c1.z, 0)
             obj.transform.columns.2 = SIMD4<Float>(c2.x, c2.y, c2.z, 0)
 
-            // Recompute translation so `pivot` stays fixed in world space.
-            // t_new = pivot − M_new · localCentre  (w=0 skips the old translation)
             let mc4    = obj.transform * SIMD4<Float>(localCentre, 0)
             let newPos = pivot - SIMD3<Float>(mc4.x, mc4.y, mc4.z)
             obj.transform.columns.3 = SIMD4<Float>(newPos.x, newPos.y, newPos.z, 1)
 
+        case .model:
+            // Model mode: rotate all group parts around their shared world centre.
+            guard !timeline.isPlaying else { return }
+            let parts = groupParts()
+            guard !parts.isEmpty else { return }
+
+            if dragLockAxis == .none {
+                dragAccumX += dx
+                dragAccumY += dy
+                let dist = (dragAccumX * dragAccumX + dragAccumY * dragAccumY).squareRoot()
+                guard dist >= dragLockThreshold else { return }
+                dragLockAxis = abs(dragAccumX) >= abs(dragAccumY) ? .horizontal : .vertical
+            }
+
+            let rotAxis: SIMD3<Float>
+            let angle:   Float
+            switch dragLockAxis {
+            case .horizontal:
+                rotAxis = camera.upVector
+                angle   =  dx * sensitivity
+            case .vertical:
+                rotAxis = camera.rightVector
+                angle   = -dy * sensitivity
+            case .none:
+                return
+            }
+            let pivot = groupCenter(parts)
+            rotateGroup(parts, by: simd_quatf(angle: angle, axis: rotAxis), around: pivot)
+
         case .camera, .light:
             // Right drag in camera / light mode: free-look.
-            // Camera position stays fixed; aim direction rotates.
             camera.freeLook(deltaYaw: dx * sensitivity, deltaPitch: dy * sensitivity)
         }
     }
@@ -726,6 +958,21 @@ final class ViewportView: MTKView {
     override func scrollWheel(with event: NSEvent) {
         let delta = Float(event.scrollingDeltaY)
 
+        // Model mode: scale or push/pull the whole group.
+        if controlMode == .model, !timeline.isPlaying {
+            let parts = groupParts()
+            if !parts.isEmpty {
+                if event.modifierFlags.contains(.option) {
+                    let factor = exp(delta * 0.02)
+                    scaleGroup(parts, by: factor, around: groupCenter(parts))
+                } else {
+                    let move = delta * camera.distance * 0.05
+                    translateGroup(parts, by: camera.forwardVector * move)
+                }
+                return
+            }
+        }
+
         guard controlMode == .object,
               !timeline.isPlaying,
               let obj = sceneManager.selectedObject ?? sceneManager.primaryObject
@@ -736,23 +983,16 @@ final class ViewportView: MTKView {
 
         if event.modifierFlags.contains(.option) {
             // ⌥ + scroll → uniform scale around the object's visual centre.
-            // exp() keeps the factor strictly positive and gives symmetric
-            // feel: the same delta undoes a previous equal-and-opposite delta.
             let factor = exp(delta * 0.02)
 
-            // Pivot = world-space AABB centre (same reliable source as rotation)
             let localCentre = (obj.boundingMin + obj.boundingMax) * 0.5
             let wc4   = obj.transform * SIMD4<Float>(localCentre, 1)
             let pivot = SIMD3<Float>(wc4.x, wc4.y, wc4.z)
 
-            // Scale the 3×3 orientation+scale columns uniformly.
-            // w=0 on each column, so 0 * factor = 0 — w stays clean.
             obj.transform.columns.0 *= factor
             obj.transform.columns.1 *= factor
             obj.transform.columns.2 *= factor
 
-            // Recompute translation so the visual centre stays at `pivot`.
-            // t_new = pivot − M_new · localCentre  (w=0 isolates the 3×3)
             let mc4    = obj.transform * SIMD4<Float>(localCentre, 0)
             let newPos = pivot - SIMD3<Float>(mc4.x, mc4.y, mc4.z)
             obj.transform.columns.3 = SIMD4<Float>(newPos.x, newPos.y, newPos.z, 1)
@@ -785,6 +1025,12 @@ final class ViewportView: MTKView {
             let idx = lightManager.selectedIndex
             times = idx < lightManager.keyframeTracks.count
                 ? (lightManager.keyframeTracks[idx]?.keyframes.map { $0.time } ?? [])
+                : []
+        case .model:
+            // Seek uses the selected part's track in model mode.
+            let idx = sceneManager.selectedIndex
+            times = idx < sceneManager.objects.count
+                ? (sceneManager.objects[idx].keyframeTrack?.keyframes.map { $0.time } ?? [])
                 : []
         }
         guard !times.isEmpty else { return }
@@ -831,6 +1077,7 @@ final class ViewportView: MTKView {
         // Commit / dismiss
         static let returnKey:    UInt16 = 36   // Return / Enter
         // Keyframe insertion / deletion shortcuts
+        static let m:            UInt16 = 46   // M — model (group) mode
         static let insert:       UInt16 = 114  // Insert / Help key
         static let i:            UInt16 = 34   // I — alias for Insert (add keyframe)
         // Playhead navigation
@@ -866,6 +1113,12 @@ final class ViewportView: MTKView {
                 addCameraKeyframeAtCurrentTime()
             case .object:
                 addKeyframeAtCurrentTime()
+            case .model:
+                if let gid = sceneManager.selectedGroupID {
+                    addGroupKeyframeAtCurrentTime(for: gid)
+                } else {
+                    addKeyframeAtCurrentTime()   // ungrouped fallback
+                }
             case .light:
                 addLightKeyframeAtCurrentTime(forLightAt: lightManager.selectedIndex)
             }
@@ -909,6 +1162,12 @@ final class ViewportView: MTKView {
                     addCameraKeyframeAtCurrentTime()
                 case .object:
                     addKeyframeAtCurrentTime()
+                case .model:
+                    if let gid = sceneManager.selectedGroupID {
+                        addGroupKeyframeAtCurrentTime(for: gid)
+                    } else {
+                        addKeyframeAtCurrentTime()
+                    }
                 case .light:
                     addLightKeyframeAtCurrentTime(forLightAt: lightManager.selectedIndex)
                 }
@@ -952,6 +1211,17 @@ final class ViewportView: MTKView {
                 onControlModeChanged?(.object(sceneManager.selectedIndex))
                 return
 
+            case KC.m:
+                // M — switch to Model mode (move all parts of a group as one).
+                controlMode = .model
+                syncOverlayState()
+                if let gid = sceneManager.selectedGroupID {
+                    onControlModeChanged?(.group(gid))
+                } else {
+                    onControlModeChanged?(.object(sceneManager.selectedIndex))
+                }
+                return
+
             case KC.r:
                 // R — reset the selected object's rotation to its original loaded orientation.
                 // Position and scale are preserved; only the rotation is replaced.
@@ -989,6 +1259,14 @@ final class ViewportView: MTKView {
                         obj.transform.columns.3.x -= translateStep
                     }
                 }
+            case .model:
+                let parts = groupParts()
+                if event.modifierFlags.contains(.shift) {
+                    let pivot = groupCenter(parts)
+                    rotateGroup(parts, by: simd_quatf(angle: -rotStep, axis: SIMD3<Float>(0, 1, 0)), around: pivot)
+                } else {
+                    translateGroup(parts, by: SIMD3<Float>(-translateStep, 0, 0))
+                }
             }
 
         // ── Right arrow / KP6 ────────────────────────────────────────────────
@@ -1010,6 +1288,14 @@ final class ViewportView: MTKView {
                     } else {
                         obj.transform.columns.3.x += translateStep
                     }
+                }
+            case .model:
+                let parts = groupParts()
+                if event.modifierFlags.contains(.shift) {
+                    let pivot = groupCenter(parts)
+                    rotateGroup(parts, by: simd_quatf(angle: rotStep, axis: SIMD3<Float>(0, 1, 0)), around: pivot)
+                } else {
+                    translateGroup(parts, by: SIMD3<Float>(translateStep, 0, 0))
                 }
             }
 
@@ -1033,6 +1319,14 @@ final class ViewportView: MTKView {
                         obj.transform.columns.3.y += translateStep
                     }
                 }
+            case .model:
+                let parts = groupParts()
+                if event.modifierFlags.contains(.shift) {
+                    let pivot = groupCenter(parts)
+                    rotateGroup(parts, by: simd_quatf(angle: rotStep, axis: SIMD3<Float>(1, 0, 0)), around: pivot)
+                } else {
+                    translateGroup(parts, by: SIMD3<Float>(0, translateStep, 0))
+                }
             }
 
         // ── Down arrow / KP2 ─────────────────────────────────────────────────
@@ -1055,46 +1349,64 @@ final class ViewportView: MTKView {
                         obj.transform.columns.3.y -= translateStep
                     }
                 }
+            case .model:
+                let parts = groupParts()
+                if event.modifierFlags.contains(.shift) {
+                    let pivot = groupCenter(parts)
+                    rotateGroup(parts, by: simd_quatf(angle: -rotStep, axis: SIMD3<Float>(1, 0, 0)), around: pivot)
+                } else {
+                    translateGroup(parts, by: SIMD3<Float>(0, -translateStep, 0))
+                }
             }
 
-        // ── [ / { — roll object left ──────────────────────────────────────────
+        // ── [ / { — roll left (object or group) ───────────────────────────────
         case KC.leftBracket:
             if controlMode == .object, let obj = sceneManager.selectedObject {
                 let q = simd_quatf(angle: -rotStep, axis: SIMD3<Float>(0, 0, 1))
                 obj.transform = rotationMatrix4x4(q) * obj.transform
+            } else if controlMode == .model {
+                let parts = groupParts()
+                rotateGroup(parts, by: simd_quatf(angle: -rotStep, axis: SIMD3<Float>(0, 0, 1)), around: groupCenter(parts))
             }
 
-        // ── ] / } — roll object right ─────────────────────────────────────────
+        // ── ] / } — roll right (object or group) ──────────────────────────────
         case KC.rightBracket:
             if controlMode == .object, let obj = sceneManager.selectedObject {
                 let q = simd_quatf(angle: rotStep, axis: SIMD3<Float>(0, 0, 1))
                 obj.transform = rotationMatrix4x4(q) * obj.transform
+            } else if controlMode == .model {
+                let parts = groupParts()
+                rotateGroup(parts, by: simd_quatf(angle: rotStep, axis: SIMD3<Float>(0, 0, 1)), around: groupCenter(parts))
             }
 
-        // ── Plus / KP+ — zoom in / light depth in / object +Z / Option: scale up ─
+        // ── Plus / KP+ ────────────────────────────────────────────────────────
         case KC.kpPlus, KC.regEqual:
             switch controlMode {
             case .camera:
                 camera.zoom(delta: camera.distance * zoomStep / 0.05)
             case .light:
-                // Move positional light forward along its direction (+Z into scene)
                 lightManager.moveSelectedDepth(delta: translateStep * 2)
             case .object:
                 if let obj = sceneManager.selectedObject {
                     if event.modifierFlags.contains(.option) {
-                        // Option+= : scale object up 5%
                         let sv = SIMD4<Float>(scaleStep, scaleStep, scaleStep, 1)
                         obj.transform.columns.0 *= sv
                         obj.transform.columns.1 *= sv
                         obj.transform.columns.2 *= sv
-                        print("[DEBUG] ViewportView: object scale up ×\(scaleStep)")
                     } else {
                         obj.transform.columns.3.z += translateStep
                     }
                 }
+            case .model:
+                let parts = groupParts()
+                if event.modifierFlags.contains(.option) {
+                    scaleGroup(parts, by: scaleStep, around: groupCenter(parts))
+                } else {
+                    translateGroup(parts, by: SIMD3<Float>(0, 0, translateStep))
+                }
             }
 
-        // ── Minus / KP− — zoom out / light depth out / object −Z / Option: scale down ─
+        // ── Minus / KP− ───────────────────────────────────────────────────────
         case KC.kpMinus, KC.regMinus:
             switch controlMode {
             case .camera:
@@ -1104,16 +1416,21 @@ final class ViewportView: MTKView {
             case .object:
                 if let obj = sceneManager.selectedObject {
                     if event.modifierFlags.contains(.option) {
-                        // Option+- : scale object down 5%
                         let s: Float = 1.0 / scaleStep
                         let sv = SIMD4<Float>(s, s, s, 1)
                         obj.transform.columns.0 *= sv
                         obj.transform.columns.1 *= sv
                         obj.transform.columns.2 *= sv
-                        print("[DEBUG] ViewportView: object scale down ×\(s)")
                     } else {
                         obj.transform.columns.3.z -= translateStep
                     }
+                }
+            case .model:
+                let parts = groupParts()
+                if event.modifierFlags.contains(.option) {
+                    scaleGroup(parts, by: 1.0 / scaleStep, around: groupCenter(parts))
+                } else {
+                    translateGroup(parts, by: SIMD3<Float>(0, 0, -translateStep))
                 }
             }
 
@@ -1135,5 +1452,96 @@ final class ViewportView: MTKView {
         case KC.space: isSpaceDown = false
         default:       super.keyUp(with: event)
         }
+    }
+
+    // MARK: - Drag & Drop (NSDraggingDestination)
+
+    private static let acceptedExtensions: Set<String> = ["glb", "gltf", "3dvp"]
+
+    /// Extracts file URLs from a drag pasteboard, filtering to supported extensions.
+    private func dragURLs(from info: NSDraggingInfo) -> [URL] {
+        guard let items = info.draggingPasteboard.readObjects(
+                forClasses: [NSURL.self],
+                options: [.urlReadingFileURLsOnly: true]) as? [URL]
+        else { return [] }
+        return items.filter {
+            Self.acceptedExtensions.contains($0.pathExtension.lowercased())
+        }
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard !dragURLs(from: sender).isEmpty else { return [] }
+        dragHighlightView?.isHidden = false
+        return .copy
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        let urls = dragURLs(from: sender)
+        if urls.isEmpty {
+            dragHighlightView?.isHidden = true
+            return []
+        }
+        return .copy
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        dragHighlightView?.isHidden = true
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        dragHighlightView?.isHidden = true
+
+        let urls = dragURLs(from: sender)
+        guard !urls.isEmpty else { return false }
+
+        let projectURLs = urls.filter { $0.pathExtension.lowercased() == "3dvp" }
+        let modelURLs   = urls.filter { ["glb", "gltf"].contains($0.pathExtension.lowercased()) }
+
+        // Single project file with no model files — delegate to AppDelegate for dirty-check.
+        if projectURLs.count == 1 && modelURLs.isEmpty {
+            onDropProjectFile?(projectURLs[0])
+            return true
+        }
+
+        // Load all model files (project files ignored in mixed drops).
+        var anyLoaded = false
+        for url in modelURLs {
+            addModelToScene(url: url)
+            anyLoaded = true
+        }
+        if anyLoaded { onModelDropped?() }
+        return anyLoaded
+    }
+}
+
+// MARK: - Drag highlight overlay
+
+/// Transparent overlay drawn on top of the Metal surface during a valid drag hover.
+private final class DragHighlightView: NSView {
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.isOpaque = false
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var isOpaque: Bool { false }
+
+    override func draw(_ dirtyRect: NSRect) {
+        // Subtle accent tint over the entire viewport.
+        NSColor.controlAccentColor.withAlphaComponent(0.10).setFill()
+        bounds.fill()
+
+        // Inset rounded-rect border in the accent colour.
+        let inset: CGFloat = 6
+        let path = NSBezierPath(
+            roundedRect: bounds.insetBy(dx: inset, dy: inset),
+            xRadius: 10, yRadius: 10
+        )
+        path.lineWidth = 3
+        NSColor.controlAccentColor.setStroke()
+        path.stroke()
     }
 }

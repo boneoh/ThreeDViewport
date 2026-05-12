@@ -1,0 +1,1037 @@
+{
+  "background" : {
+    "gradBottomB" : 0,
+    "gradBottomG" : 0,
+    "gradBottomR" : 0,
+    "gradTopB" : 0.14,
+    "gradTopG" : 0.06,
+    "gradTopR" : 0.05,
+    "mode" : 0,
+    "solidB" : 0,
+    "solidG" : 0,
+    "solidR" : 0
+  },
+  "camera" : {
+    "distance" : 2.5,
+    "pitch" : 0.37804687,
+    "targetX" : -0.08280261,
+    "targetY" : 0.13507858,
+    "targetZ" : 0.05183451,
+    "yaw" : -0.9584003
+  },
+  "cameraKeyframes" : [
+    {
+      "distance" : 2.5,
+      "pitch" : 0.37804687,
+      "targetX" : -0.08280261,
+      "targetY" : 0.13507858,
+      "targetZ" : 0.05183451,
+      "time" : 0.001388250612745098,
+      "yaw" : -0.9584003
+    }
+  ],
+  "colorGrade" : {
+    "brightness" : 0,
+    "contrast" : 1,
+    "gamma" : 1
+  },
+  "feedback" : {
+    "blendMode" : 0,
+    "decay" : 0.5,
+    "interval" : 10,
+    "isEnabled" : false,
+    "length" : 10,
+    "swapLayers" : false
+  },
+  "groupKeyframeTracks" : [
+    {
+      "easingMode" : 0,
+      "keyframes" : [
+        {
+          "rw" : 1,
+          "rx" : 0,
+          "ry" : 0,
+          "rz" : 0,
+          "sx" : 1,
+          "sy" : 1,
+          "sz" : 1,
+          "time" : 0.006989123774509804,
+          "tx" : 0,
+          "ty" : 0,
+          "tz" : 0
+        },
+        {
+          "rw" : 1,
+          "rx" : 0,
+          "ry" : 0,
+          "rz" : 0,
+          "sx" : 1,
+          "sy" : 1,
+          "sz" : 1,
+          "time" : 3.0409869025735294,
+          "tx" : 0.252619,
+          "ty" : -0.029460857,
+          "tz" : 0.37995896
+        }
+      ],
+      "sourceFileName" : "character.glb"
+    }
+  ],
+  "isColorMode" : true,
+  "isLooping" : true,
+  "isWireframe" : false,
+  "lightConfigs" : [
+    {
+      "beamThickness" : 1,
+      "colorB" : 0.95,
+      "colorG" : 0.98,
+      "colorR" : 1,
+      "dirX" : 0.32756087,
+      "dirY" : -0.7861461,
+      "dirZ" : -0.5240974,
+      "excludeBeamFromFeedback" : false,
+      "innerConeAngle" : 0.39269906,
+      "intensity" : 10,
+      "isEnabled" : true,
+      "outerConeAngle" : 0.52359873,
+      "posX" : 0,
+      "posY" : 3,
+      "posZ" : 3,
+      "range" : 15,
+      "type" : 1
+    },
+    {
+      "beamThickness" : 1,
+      "colorB" : 1,
+      "colorG" : 1,
+      "colorR" : 1,
+      "dirX" : 0.32756087,
+      "dirY" : -0.7861461,
+      "dirZ" : -0.5240974,
+      "excludeBeamFromFeedback" : false,
+      "innerConeAngle" : 0.39269906,
+      "intensity" : 8.203421,
+      "isEnabled" : true,
+      "outerConeAngle" : 0.52359873,
+      "posX" : 0,
+      "posY" : 3,
+      "posZ" : 3,
+      "range" : 15,
+      "type" : 0
+    }
+  ],
+  "lightKeyframeTracks" : [
+    [
+
+    ],
+    [
+
+    ]
+  ],
+  "modelPaths" : [
+    "\/Volumes\/Elektron 1 TB\/ThreeDViewport\/character.glb"
+  ],
+  "objects" : [
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+
+      ],
+      "name" : "character"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+
+      ],
+      "name" : "visor"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+
+      ],
+      "name" : "eye_L"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+
+      ],
+      "name" : "eye_R"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+
+      ],
+      "name" : "ear_L"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+
+      ],
+      "name" : "ear_R"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+
+      ],
+      "name" : "antenna_pole"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+
+      ],
+      "name" : "antenna_ball"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+
+      ],
+      "name" : "neck"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+
+      ],
+      "name" : "torso"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+
+      ],
+      "name" : "chest_panel"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+
+      ],
+      "name" : "hips"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+
+      ],
+      "name" : "shoulder_L"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+
+      ],
+      "name" : "upper_arm_L"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+
+      ],
+      "name" : "elbow_L"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+
+      ],
+      "name" : "forearm_L"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+
+      ],
+      "name" : "hand_L"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+
+      ],
+      "name" : "upper_leg_L"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+
+      ],
+      "name" : "knee_L"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+        {
+          "rw" : 1,
+          "rx" : 0,
+          "ry" : 0,
+          "rz" : 0,
+          "sx" : 0.9999979,
+          "sy" : 0.999998,
+          "sz" : 0.9999995,
+          "time" : 0.002154181985294118,
+          "tx" : 0.049005296,
+          "ty" : -0.07349216,
+          "tz" : -0.03866512
+        },
+        {
+          "rw" : 0.9884596,
+          "rx" : -0.15148483,
+          "ry" : 0,
+          "rz" : 0,
+          "sx" : 1,
+          "sy" : 1.0000002,
+          "sz" : 1.0000002,
+          "time" : 2.952569699754902,
+          "tx" : 0.00082505157,
+          "ty" : -0.09151489,
+          "tz" : -0.11171492
+        }
+      ],
+      "name" : "lower_leg_L"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+        {
+          "rw" : 1,
+          "rx" : 0,
+          "ry" : 0,
+          "rz" : 0,
+          "sx" : 1,
+          "sy" : 1,
+          "sz" : 1,
+          "time" : 0.001388250612745098,
+          "tx" : 0,
+          "ty" : 0,
+          "tz" : 0
+        },
+        {
+          "rw" : 1,
+          "rx" : 0,
+          "ry" : 0,
+          "rz" : 0,
+          "sx" : 1,
+          "sy" : 1,
+          "sz" : 1,
+          "time" : 3.036726409313726,
+          "tx" : -4.7035497e-05,
+          "ty" : -0.11478997,
+          "tz" : 0.07924138
+        }
+      ],
+      "name" : "ankle_L"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+        {
+          "rw" : 1,
+          "rx" : 0,
+          "ry" : 0,
+          "rz" : 0,
+          "sx" : 1,
+          "sy" : 1,
+          "sz" : 1,
+          "time" : 0,
+          "tx" : 0,
+          "ty" : 0,
+          "tz" : 0
+        },
+        {
+          "rw" : 0.99306124,
+          "rx" : -0.1175983,
+          "ry" : 0,
+          "rz" : 0,
+          "sx" : 1,
+          "sy" : 1.0000005,
+          "sz" : 0.99999976,
+          "time" : 2.952569699754902,
+          "tx" : 0.021153452,
+          "ty" : -0.16165881,
+          "tz" : -0.06489711
+        }
+      ],
+      "name" : "foot_L"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+
+      ],
+      "name" : "shoulder_R"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+
+      ],
+      "name" : "upper_arm_R"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+
+      ],
+      "name" : "elbow_R"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+
+      ],
+      "name" : "forearm_R"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+
+      ],
+      "name" : "hand_R"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+
+      ],
+      "name" : "upper_leg_R"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+
+      ],
+      "name" : "knee_R"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+
+      ],
+      "name" : "lower_leg_R"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+
+      ],
+      "name" : "ankle_R"
+    },
+    {
+      "baseTransformMatrix" : [
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        0.9291904,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "easingMode" : 0,
+      "keyframes" : [
+
+      ],
+      "name" : "foot_R"
+    }
+  ],
+  "showAxesGizmo" : false,
+  "timeline" : {
+    "currentTime" : 0,
+    "duration" : 10
+  },
+  "version" : 14,
+  "windowLayout" : {
+    "lightsPanel" : {
+      "h" : 744,
+      "w" : 280,
+      "x" : 2780,
+      "y" : 595
+    },
+    "mainWindow" : {
+      "h" : 1192,
+      "w" : 1920,
+      "x" : 760,
+      "y" : 162
+    },
+    "timelineEditor" : {
+      "h" : 444,
+      "w" : 1000,
+      "x" : 2233,
+      "y" : 761
+    }
+  }
+}
