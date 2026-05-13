@@ -1043,6 +1043,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         wc.editorView.onKeyframeDeleted = { [weak self] in
             self?.markDirty()
         }
+        wc.editorView.onKeyframePasted = { [weak self] in
+            self?.markDirty()
+        }
 
         // ── Enter edit mode ───────────────────────────────────────────────────
         // Called when the user presses Return on a selected diamond.

@@ -229,7 +229,9 @@ final class ViewportView: MTKView {
             // moved together in Model mode.
             let gid = objects.count > 1 ? sceneManager.makeGroupID() : nil
             for obj in objects {
-                obj.baseTransform = obj.transform
+                // For hierarchical parts (parentIndex != nil), baseTransform is the
+                // base LOCAL transform; for roots it is the world transform (as before).
+                obj.baseTransform = (obj.parentIndex != nil) ? obj.localTransform : obj.transform
                 obj.sourceURL     = url
                 obj.groupID       = gid
             }
@@ -267,7 +269,9 @@ final class ViewportView: MTKView {
             let baseName = url.deletingPathExtension().lastPathComponent
             let gid = objects.count > 1 ? sceneManager.makeGroupID() : nil
             for obj in objects {
-                obj.baseTransform = obj.transform
+                // For hierarchical parts (parentIndex != nil), baseTransform is the
+                // base LOCAL transform; for roots it is the world transform (as before).
+                obj.baseTransform = (obj.parentIndex != nil) ? obj.localTransform : obj.transform
                 obj.sourceURL     = url
                 obj.groupID       = gid
             }
@@ -340,6 +344,24 @@ final class ViewportView: MTKView {
         }
     }
 
+    // MARK: - FK hierarchy sync helper
+
+    /// After directly modifying a hierarchical object's `transform` in Object mode,
+    /// back-computes `localTransform` so the next `applyHierarchy()` call produces
+    /// the same result.  For root / non-hierarchical objects, keeps `localTransform`
+    /// equal to `transform` (they are the same thing for roots).
+    private func syncLocalTransform(_ obj: SceneObject) {
+        guard let parentIdx = obj.parentIndex,
+              parentIdx < sceneManager.objects.count else {
+            // Root or no parent: localTransform == transform
+            obj.localTransform = obj.transform
+            return
+        }
+        // Back-compute: localTransform = inverse(parentWorld) × myWorld
+        obj.localTransform = simd_inverse(sceneManager.objects[parentIdx].transform)
+                           * obj.transform
+    }
+
     // MARK: - Orientation reset
 
     /// Resets `obj`'s rotation to its base-transform orientation while keeping
@@ -375,6 +397,7 @@ final class ViewportView: MTKView {
         obj.transform.columns.0 = SIMD4<Float>(b0 * s0, 0)
         obj.transform.columns.1 = SIMD4<Float>(b1 * s1, 0)
         obj.transform.columns.2 = SIMD4<Float>(b2 * s2, 0)
+        syncLocalTransform(obj)
 
         print("[DEBUG] ViewportView: resetObjectOrientation — " + obj.name)
     }
@@ -547,6 +570,14 @@ final class ViewportView: MTKView {
 
         for obj in objects {
             obj.transform = S * obj.transform
+            // For root parts (no parent), localTransform equals transform.
+            // Non-root parts' localTransforms are unchanged because uniform scale
+            // distributes correctly through the hierarchy: the scaled parent world
+            // transform times the unchanged local transform gives the correctly-scaled
+            // child world transform.  applyHierarchy() propagates this each frame.
+            if obj.parentIndex == nil {
+                obj.localTransform = obj.transform
+            }
             // Update bounding sphere to post-scale world space.
             let lc4 = SIMD4<Float>(obj.boundingCenter, 1)
             let wc4 = obj.transform * lc4
@@ -589,7 +620,9 @@ final class ViewportView: MTKView {
         }
 
         let invBase = simd_inverse(obj.baseTransform)
-        let m = invBase * obj.transform
+        // For hierarchical parts, the delta is relative to the base LOCAL transform;
+        // for root parts, it is relative to the base world transform (unchanged).
+        let m = invBase * (obj.parentIndex != nil ? obj.localTransform : obj.transform)
 
         let translation = SIMD3<Float>(m.columns.3.x, m.columns.3.y, m.columns.3.z)
 
@@ -826,6 +859,7 @@ final class ViewportView: MTKView {
             obj.transform.columns.3.x += move.x
             obj.transform.columns.3.y += move.y
             obj.transform.columns.3.z += move.z
+            syncLocalTransform(obj)
 
         } else if controlMode == .model {
             // Model mode: translate all group parts together.
@@ -908,6 +942,7 @@ final class ViewportView: MTKView {
             let mc4    = obj.transform * SIMD4<Float>(localCentre, 0)
             let newPos = pivot - SIMD3<Float>(mc4.x, mc4.y, mc4.z)
             obj.transform.columns.3 = SIMD4<Float>(newPos.x, newPos.y, newPos.z, 1)
+            syncLocalTransform(obj)
 
         case .model:
             // Model mode: rotate all group parts around their shared world centre.
@@ -996,6 +1031,7 @@ final class ViewportView: MTKView {
             let mc4    = obj.transform * SIMD4<Float>(localCentre, 0)
             let newPos = pivot - SIMD3<Float>(mc4.x, mc4.y, mc4.z)
             obj.transform.columns.3 = SIMD4<Float>(newPos.x, newPos.y, newPos.z, 1)
+            syncLocalTransform(obj)
 
         } else {
             // Plain scroll → translate along the camera forward axis (depth push/pull)
@@ -1004,6 +1040,7 @@ final class ViewportView: MTKView {
             obj.transform.columns.3.x += fwd.x * move
             obj.transform.columns.3.y += fwd.y * move
             obj.transform.columns.3.z += fwd.z * move
+            syncLocalTransform(obj)
         }
     }
 
@@ -1258,6 +1295,7 @@ final class ViewportView: MTKView {
                     } else {
                         obj.transform.columns.3.x -= translateStep
                     }
+                    syncLocalTransform(obj)
                 }
             case .model:
                 let parts = groupParts()
@@ -1288,6 +1326,7 @@ final class ViewportView: MTKView {
                     } else {
                         obj.transform.columns.3.x += translateStep
                     }
+                    syncLocalTransform(obj)
                 }
             case .model:
                 let parts = groupParts()
@@ -1318,6 +1357,7 @@ final class ViewportView: MTKView {
                     } else {
                         obj.transform.columns.3.y += translateStep
                     }
+                    syncLocalTransform(obj)
                 }
             case .model:
                 let parts = groupParts()
@@ -1348,6 +1388,7 @@ final class ViewportView: MTKView {
                     } else {
                         obj.transform.columns.3.y -= translateStep
                     }
+                    syncLocalTransform(obj)
                 }
             case .model:
                 let parts = groupParts()
@@ -1364,6 +1405,7 @@ final class ViewportView: MTKView {
             if controlMode == .object, let obj = sceneManager.selectedObject {
                 let q = simd_quatf(angle: -rotStep, axis: SIMD3<Float>(0, 0, 1))
                 obj.transform = rotationMatrix4x4(q) * obj.transform
+                syncLocalTransform(obj)
             } else if controlMode == .model {
                 let parts = groupParts()
                 rotateGroup(parts, by: simd_quatf(angle: -rotStep, axis: SIMD3<Float>(0, 0, 1)), around: groupCenter(parts))
@@ -1374,6 +1416,7 @@ final class ViewportView: MTKView {
             if controlMode == .object, let obj = sceneManager.selectedObject {
                 let q = simd_quatf(angle: rotStep, axis: SIMD3<Float>(0, 0, 1))
                 obj.transform = rotationMatrix4x4(q) * obj.transform
+                syncLocalTransform(obj)
             } else if controlMode == .model {
                 let parts = groupParts()
                 rotateGroup(parts, by: simd_quatf(angle: rotStep, axis: SIMD3<Float>(0, 0, 1)), around: groupCenter(parts))
@@ -1396,6 +1439,7 @@ final class ViewportView: MTKView {
                     } else {
                         obj.transform.columns.3.z += translateStep
                     }
+                    syncLocalTransform(obj)
                 }
             case .model:
                 let parts = groupParts()
@@ -1424,6 +1468,7 @@ final class ViewportView: MTKView {
                     } else {
                         obj.transform.columns.3.z -= translateStep
                     }
+                    syncLocalTransform(obj)
                 }
             case .model:
                 let parts = groupParts()

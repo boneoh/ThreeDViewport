@@ -17,13 +17,27 @@ final class SceneObject {
     var groupID: Int?
 
     // The world transform used for rendering each frame.
-    // Updated by the Renderer when animation is active.
+    // For root parts (parentIndex == nil): directly driven by animation / interaction.
+    // For hierarchical parts (parentIndex != nil): recomputed every frame by
+    // Renderer.applyHierarchy() as  parent.transform × localTransform.
     var transform: matrix_float4x4
 
-    // The original world transform set by GLTFLoader (after autoNormalize).
-    // The animation system multiplies baseTransform * animationDelta each frame.
-    // When no animation is active, transform == baseTransform.
+    // The original world/local transform set by GLTFLoader (after autoNormalize).
+    // For root parts: world-space base transform (same meaning as before).
+    // For hierarchical parts: base LOCAL transform relative to the parent part.
+    // The animation system multiplies baseTransform × animationDelta each frame.
     var baseTransform: matrix_float4x4
+
+    // FK hierarchy: index of the parent part within the same loaded model, or nil
+    // for root parts.  When non-nil, `transform` is recomputed each frame as
+    // parent.transform × localTransform by Renderer.applyHierarchy().
+    var parentIndex: Int?
+
+    // Local transform relative to the parent part's world space.
+    // For root parts (parentIndex == nil): equals transform (same matrix).
+    // Animation and Object-mode interaction modify localTransform directly;
+    // applyHierarchy() then propagates the change to `transform` and children.
+    var localTransform: matrix_float4x4
 
     // Phase 2: optional keyframe animation track.
     // Nil means the object uses baseTransform unchanged.
@@ -52,10 +66,12 @@ final class SceneObject {
     var boundingMax: SIMD3<Float>
 
     init(name: String) {
-        self.name          = name
-        self.transform     = matrix_identity_float4x4
-        self.baseTransform = matrix_identity_float4x4
-        self.indexCount    = 0
+        self.name           = name
+        self.transform      = matrix_identity_float4x4
+        self.baseTransform  = matrix_identity_float4x4
+        self.parentIndex    = nil
+        self.localTransform = matrix_identity_float4x4
+        self.indexCount     = 0
         self.isVisible     = true
         self.boundingCenter = SIMD3<Float>(0, 0, 0)
         self.boundingRadius = 1.0

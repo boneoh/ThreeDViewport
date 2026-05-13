@@ -118,11 +118,13 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
         }
 
         // Resize panel up to maxPanelContentH, anchoring the top edge.
+        // Never decrease the panel height — the user may have manually resized
+        // the window taller and we don't want to undo that on collapse.
         let newPanelContentH = min(newContentH, Self.maxPanelContentH)
         let sampleRect  = NSRect(x: 0, y: 0, width: panel.frame.width, height: newPanelContentH)
         let newFrameH   = panel.frameRect(forContentRect: sampleRect).height
         let currentH    = panel.frame.height
-        guard abs(newFrameH - currentH) > 1 else { return }
+        guard newFrameH > currentH + 1 else { return }   // grow only, never shrink
 
         var f  = panel.frame
         let dy = newFrameH - currentH

@@ -354,6 +354,11 @@ final class Renderer: NSObject, MTKViewDelegate {
             applyAnimation()
             lastAnimatedTime = timeline.currentTime
         }
+        // FK hierarchy: recompute world transforms for all hierarchical parts
+        // every frame, not just when time changes, so interactive manipulation
+        // of a parent (e.g. rotating an upper arm) propagates to children
+        // immediately regardless of whether animation is playing.
+        applyHierarchy()
 
         view.clearColor = backgroundConfig.clearColor
 
@@ -890,7 +895,15 @@ final class Renderer: NSObject, MTKViewDelegate {
             guard let track = object.keyframeTrack,
                   !track.keyframes.isEmpty else { continue }
             if let delta = track.evaluate(at: timeline.currentTime) {
-                object.transform = object.baseTransform * delta
+                if object.parentIndex != nil {
+                    // Hierarchical part: baseTransform is a LOCAL transform, so
+                    // the animated result goes into localTransform.
+                    // applyHierarchy() (called every frame) computes world transform.
+                    object.localTransform = object.baseTransform * delta
+                } else {
+                    // Root / non-hierarchical: animate world transform directly.
+                    object.transform = object.baseTransform * delta
+                }
             }
         }
 
@@ -927,6 +940,22 @@ final class Renderer: NSObject, MTKViewDelegate {
                 lightManager.lights[i].range         = state.range
                 lightManager.lights[i].beamThickness = state.beamThickness
             }
+        }
+    }
+
+    // MARK: - FK Hierarchy propagation
+
+    /// Recomputes world transforms for all hierarchical parts in depth-first order.
+    /// GLTFLoader guarantees parents come before children in the objects array,
+    /// so a single forward pass is sufficient.
+    /// Non-hierarchical parts (parentIndex == nil) are skipped — their `transform`
+    /// is driven by applyAnimation() or direct interaction, unchanged.
+    private func applyHierarchy() {
+        let objects = sceneManager.objects
+        for obj in objects {
+            guard let parentIdx = obj.parentIndex,
+                  parentIdx < objects.count else { continue }
+            obj.transform = objects[parentIdx].transform * obj.localTransform
         }
     }
 }

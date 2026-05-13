@@ -127,11 +127,20 @@ final class ProjectFile {
                 )
             }
             // Objects with keyframes: save baseTransform so delta computation
-            // (invBase * transform) stays valid after reload.
-            // Objects without keyframes: save transform so any manual
-            // repositioning / rotation survives the save-load round-trip.
+            // (invBase * localTransform) stays valid after reload.
+            // Objects without keyframes: save the current live position.
+            //   • Hierarchical parts (parentIndex != nil): save localTransform so
+            //     the local pose is preserved regardless of parent position.
+            //   • Root / non-hierarchical: save transform (world) as before.
             let hasKeyframes = !kfData.isEmpty
-            let matrixToSave = hasKeyframes ? obj.baseTransform : obj.transform
+            let matrixToSave: matrix_float4x4
+            if hasKeyframes {
+                matrixToSave = obj.baseTransform
+            } else if obj.parentIndex != nil {
+                matrixToSave = obj.localTransform
+            } else {
+                matrixToSave = obj.transform
+            }
             return ObjectData(name: obj.name,
                               keyframes: kfData,
                               baseTransformMatrix: encodeMatrix(matrixToSave),
@@ -448,7 +457,14 @@ final class ProjectFile {
             // ── v4: restore baseTransform so manual repositioning survives reload ──
             if let m = decodeMatrix(saved.baseTransformMatrix) {
                 obj.baseTransform = m
-                obj.transform     = m   // start at rest pose; animation will override next tick
+                if obj.parentIndex != nil {
+                    // Hierarchical part: m is a LOCAL transform.
+                    // Set localTransform; applyHierarchy() will compute world transform.
+                    obj.localTransform = m
+                    obj.transform      = m   // temporary; overwritten by applyHierarchy next draw
+                } else {
+                    obj.transform = m   // root: m is the world transform
+                }
                 print("[DEBUG] ProjectFile: baseTransform restored for '" + obj.name + "'")
             }
 

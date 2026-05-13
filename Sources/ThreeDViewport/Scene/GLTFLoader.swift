@@ -57,10 +57,14 @@ final class GLTFLoader {
         }
 
         // Collect every mesh node in the scene graph (depth-first).
+        // parentObjectIndex / parentObjectWorldTransform track the closest ancestor
+        // that already has a mesh so we can compute correct local transforms.
         var objects = [SceneObject]()
         for node in rootNodes {
             collectObjects(from: node,
-                           parentTransform: matrix_identity_float4x4,
+                           parentObjectIndex: nil,
+                           parentObjectWorldTransform: matrix_identity_float4x4,
+                           parentWorldTransform: matrix_identity_float4x4,
                            into: &objects)
         }
 
@@ -77,33 +81,69 @@ final class GLTFLoader {
     // MARK: - Node Traversal
 
     /// Recursively visits every node, building a SceneObject for each mesh found.
-    /// Unlike the old `processNode` this does NOT return early — it walks the
-    /// entire scene graph so multi-part models are loaded in full.
+    /// Preserves the parent-child hierarchy so FK animation works: each part stores
+    /// `parentIndex` (index of its parent part in the results array) and
+    /// `localTransform` (transform relative to the parent part's world space).
+    ///
+    /// - Parameters:
+    ///   - parentObjectIndex:          Index into `results` of the nearest ancestor
+    ///                                 that already has a mesh (nil = no such ancestor).
+    ///   - parentObjectWorldTransform: World transform of that nearest-mesh ancestor,
+    ///                                 used to compute the local transform for new parts.
+    ///   - parentWorldTransform:       Accumulated GLTF node world transform up to
+    ///                                 (but not including) `node` — used to chain
+    ///                                 empty parent nodes without creating SceneObjects.
     private func collectObjects(from node: GLTFNode,
-                                 parentTransform: matrix_float4x4,
+                                 parentObjectIndex: Int?,
+                                 parentObjectWorldTransform: matrix_float4x4,
+                                 parentWorldTransform: matrix_float4x4,
                                  into results: inout [SceneObject]) {
-        let worldTransform = parentTransform * node.matrix
+        // This node's world transform in the scene.
+        let nodeWorldTransform = parentWorldTransform * node.matrix
+
+        var myObjectIndex: Int? = nil
+        // If this node produces a mesh-object, its world transform becomes the
+        // reference for its own children.
+        var myWorldTransform = parentObjectWorldTransform
 
         if let mesh = node.mesh, !mesh.primitives.isEmpty {
             let name = node.name ?? "part_\(results.count)"
-            if let obj = buildSceneObject(from: mesh,
-                                           transform: worldTransform,
-                                           name: name) {
+            if let obj = buildSceneObject(from: mesh, name: name) {
+                // localTransform = this part's world transform expressed in the
+                // coordinate space of its nearest mesh ancestor (or world if none).
+                let localT = simd_inverse(parentObjectWorldTransform) * nodeWorldTransform
+                obj.parentIndex    = parentObjectIndex
+                obj.localTransform = localT
+                obj.baseTransform  = localT          // rest-pose local transform
+                obj.transform      = nodeWorldTransform
+                myObjectIndex      = results.count
+                myWorldTransform   = nodeWorldTransform
                 results.append(obj)
             }
         }
 
+        // Children of this node inherit the nearest-mesh-ancestor context.
+        // If this node produced an object, that becomes the new parent context;
+        // otherwise the parent context passes through unchanged (allowing empty
+        // "group" nodes in the GLTF hierarchy to be transparent).
+        let childParentIndex     = myObjectIndex ?? parentObjectIndex
+        let childParentWorldT    = myWorldTransform
+
         for child in node.childNodes {
             collectObjects(from: child,
-                           parentTransform: worldTransform,
+                           parentObjectIndex: childParentIndex,
+                           parentObjectWorldTransform: childParentWorldT,
+                           parentWorldTransform: nodeWorldTransform,
                            into: &results)
         }
     }
 
     // MARK: - Mesh → SceneObject
 
+    /// Builds a SceneObject from a GLTFMesh.  The caller is responsible for
+    /// setting `transform`, `localTransform`, `baseTransform`, and `parentIndex`
+    /// after this returns — this function only populates mesh/material data.
     private func buildSceneObject(from mesh: GLTFMesh,
-                                   transform: matrix_float4x4,
                                    name: String) -> SceneObject? {
         guard let primitive = mesh.primitives.first else { return nil }
 
@@ -204,7 +244,6 @@ final class GLTFLoader {
 
         // ── Assemble ────────────────────────────────────────────────────────
         let obj = SceneObject(name: name)
-        obj.transform      = transform
         obj.positionBuffer = posBuffer
         obj.normalBuffer   = normBuffer
         obj.uvBuffer       = uvBuffer
