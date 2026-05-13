@@ -697,8 +697,15 @@ final class TimelineEditorView: NSView {
                 } else {
                     multiSelectedDiamonds.insert(hitDiamond)
                 }
+            } else if multiSelectedDiamonds.contains(hitDiamond) {
+                // ── Plain click on an already-selected diamond ─────────────────
+                // Preserve the multi-selection so the drag that follows can move
+                // all selected diamonds together.  Don't call removeAll() here.
+                // (The set is cleared in mouseUp if no drag actually occurs, or
+                //  rebuilt by the multi-drag path if it does.)
             } else {
-                // ── Plain click: collapse multi-selection to just this diamond ─
+                // ── Plain click on an unselected diamond ───────────────────────
+                // Collapse the multi-selection; this diamond becomes the only one.
                 multiSelectedDiamonds.removeAll()
                 multiClipboard.removeAll()
             }
