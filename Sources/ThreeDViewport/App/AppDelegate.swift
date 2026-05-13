@@ -353,6 +353,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         openModelItem.target = self
         fileMenu.addItem(openModelItem)
 
+        let replaceModelItem = NSMenuItem(
+            title: "Replace Selected Model...",
+            action: #selector(replaceSelectedModel(_:)),
+            keyEquivalent: ""
+        )
+        replaceModelItem.target = self
+        fileMenu.addItem(replaceModelItem)
+
         fileMenu.addItem(.separator())
 
         // New Project (⌘N)
@@ -652,6 +660,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
     }
 
+    // MARK: - Replace Selected Model
+
+    @objc private func replaceSelectedModel(_ sender: Any) {
+        guard let window = window else { return }
+
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories    = false
+        panel.canChooseFiles          = true
+        panel.title                   = "Replace Selected Model"
+        panel.prompt                  = "Replace"
+        panel.message                 = "Choose a .glb file to replace the selected model's geometry."
+
+        let modelTypes = [UTType(filenameExtension: "glb"), UTType(filenameExtension: "gltf")]
+            .compactMap { $0 }
+        if !modelTypes.isEmpty {
+            panel.allowedContentTypes = modelTypes
+        }
+
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            print("[DEBUG] AppDelegate: replaceSelectedModel — " + url.lastPathComponent)
+            self?.viewportView?.replaceSelectedModel(url: url)
+            self?.markDirty()
+        }
+    }
+
     // MARK: - Open Project
 
     @objc private func openProject(_ sender: Any) {
@@ -849,6 +884,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     // Keep menu item checkmarks in sync with current rendering state.
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(replaceSelectedModel(_:)) {
+            // Disabled when no object is selected.
+            return viewportView?.sceneManager.selectedObject != nil
+        }
         if menuItem.action == #selector(toggleColorMode(_:)) {
             // Checkmark when greyscale is active (isColorMode == false).
             let isGreyscale = !(viewportView?.renderSettings.isColorMode ?? true)

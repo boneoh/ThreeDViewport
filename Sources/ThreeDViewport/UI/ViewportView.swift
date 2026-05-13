@@ -296,6 +296,89 @@ final class ViewportView: MTKView {
         }
     }
 
+    // MARK: - Replace Selected Model
+
+    /// Replaces the geometry and material of the currently selected object (or its
+    /// whole group) with a freshly loaded .glb file while preserving every aspect
+    /// of the scene state: transforms, keyframe tracks, baseTransform, groupID,
+    /// parentIndex, name, and visibility.
+    ///
+    /// If the new file has a different part count from the selection the operation
+    /// is aborted with an error alert — replacing a differently-structured model
+    /// would silently corrupt the per-part animation data.
+    func replaceSelectedModel(url: URL) {
+        guard let dev = device else { return }
+
+        // Determine which objects are being replaced.
+        guard let selected = sceneManager.selectedObject else {
+            print("[DEBUG] ViewportView: replaceSelectedModel — nothing selected")
+            return
+        }
+        let targets: [SceneObject]
+        if let gid = selected.groupID {
+            targets = sceneManager.objects(inGroup: gid)
+        } else {
+            targets = [selected]
+        }
+
+        print("[DEBUG] ViewportView: replaceSelectedModel — \(url.lastPathComponent)"
+            + " replacing \(targets.count) part(s)")
+
+        // Load the replacement geometry (no autoNormalize — existing transforms are kept).
+        let loader = GLTFLoader(device: dev)
+        guard let newObjects = loader.load(url: url) else {
+            let reason = loader.lastError ?? "The file could not be read."
+            showLoadError(filename: url.lastPathComponent, reason: reason)
+            return
+        }
+
+        // Part-count mismatch → abort.
+        if newObjects.count != targets.count {
+            let alert = NSAlert()
+            alert.alertStyle      = .warning
+            alert.messageText     = "Cannot Replace Model"
+            alert.informativeText = "\"\(url.lastPathComponent)\" has \(newObjects.count)"
+                + " part\(newObjects.count == 1 ? "" : "s")"
+                + " but the selected model has \(targets.count)."
+                + " Both models must have the same number of parts"
+                + " to preserve the animation."
+            alert.addButton(withTitle: "OK")
+            if let w = window { alert.beginSheetModal(for: w) } else { alert.runModal() }
+            print("[DEBUG] ViewportView: replaceSelectedModel — aborted, part count mismatch"
+                + " (new=\(newObjects.count) existing=\(targets.count))")
+            return
+        }
+
+        // Swap geometry + material on each target in order, preserving all scene state.
+        for (target, source) in zip(targets, newObjects) {
+            target.positionBuffer = source.positionBuffer
+            target.normalBuffer   = source.normalBuffer
+            target.uvBuffer       = source.uvBuffer
+            target.tangentBuffer  = source.tangentBuffer
+            target.indexBuffer    = source.indexBuffer
+            target.indexCount     = source.indexCount
+            target.material       = source.material
+            target.boundingCenter = source.boundingCenter
+            target.boundingRadius = source.boundingRadius
+            target.boundingMin    = source.boundingMin
+            target.boundingMax    = source.boundingMax
+            target.sourceURL      = url
+            // Preserved: transform, baseTransform, localTransform, parentIndex,
+            //            groupID, keyframeTrack, isVisible, name.
+        }
+
+        // Rename the first (root) object to match the new file's base name.
+        // Project save/reload matches objects by name; addModelToScene always sets
+        // objects[0].name = url.baseName on load, so the saved name must agree with
+        // the replacement file — otherwise the root object fails to match on reload,
+        // its baseTransform is not restored, and FK propagation puts all parts at
+        // the wrong world position.
+        targets.first?.name = url.deletingPathExtension().lastPathComponent
+
+        needsDisplay = true
+        print("[DEBUG] ViewportView: replaceSelectedModel — done, \(targets.count) part(s) replaced")
+    }
+
     // MARK: - Control Mode (external access for edit-mode wiring)
 
     /// Sets the active control mode from outside the viewport (e.g. AppDelegate keyframe edit wiring).

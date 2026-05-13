@@ -600,9 +600,19 @@ final class VideoExporter {
                       let idxBuffer = object.indexBuffer,
                       object.indexCount > 0 else { continue }
 
-                let normalMatrix = simd_transpose(simd_inverse(object.transform))
+                // Apply the group-level transform layer on top of the per-part
+                // transform, mirroring the live Renderer's geometry loop.
+                let modelMatrix: matrix_float4x4
+                if let gid = object.groupID,
+                   let gt  = sceneManager.groupTransforms[gid] {
+                    modelMatrix = gt * object.transform
+                } else {
+                    modelMatrix = object.transform
+                }
+
+                let normalMatrix = simd_transpose(simd_inverse(modelMatrix))
                 var uniforms = Uniforms(
-                    modelMatrix:          object.transform,
+                    modelMatrix:          modelMatrix,
                     viewProjectionMatrix: vp,
                     normalMatrix:         normalMatrix,
                     cameraPosition:       SIMD4<Float>(eye.x, eye.y, eye.z, 0)
@@ -1008,7 +1018,7 @@ final class VideoExporter {
 
     // MARK: - Animation (independent of Timeline.currentTime)
 
-    // Evaluates keyframes at the given time and writes directly to object.transform.
+    // Evaluates keyframes at the given time and writes directly to object transforms.
     // Does NOT modify timeline.currentTime — the live UI is unaffected during export.
     private func applyAnimation(at time: Double) {
         // ── Object transforms ─────────────────────────────────────────────────
@@ -1016,7 +1026,34 @@ final class VideoExporter {
             guard let track = object.keyframeTrack,
                   !track.keyframes.isEmpty else { continue }
             if let delta = track.evaluate(at: time) {
-                object.transform = object.baseTransform * delta
+                if object.parentIndex != nil {
+                    // Hierarchical part: baseTransform is a LOCAL transform; write
+                    // localTransform and let applyHierarchy() below compute world transform.
+                    object.localTransform = object.baseTransform * delta
+                } else {
+                    // Root / non-hierarchical: animate world transform directly.
+                    object.transform = object.baseTransform * delta
+                }
+            }
+        }
+
+        // ── FK hierarchy propagation ──────────────────────────────────────────
+        // Mirrors Renderer.applyHierarchy().  Must run after all per-object
+        // localTransforms are written so parent world transforms are already current.
+        let objects = sceneManager.objects
+        for obj in objects {
+            guard let parentIdx = obj.parentIndex,
+                  parentIdx < objects.count else { continue }
+            obj.transform = objects[parentIdx].transform * obj.localTransform
+        }
+
+        // ── Group-level transforms ────────────────────────────────────────────
+        // Evaluate each group's keyframe track and store the result in
+        // sceneManager.groupTransforms so renderFrame can apply it.
+        for (gid, track) in sceneManager.groupKeyframeTracks {
+            guard !track.keyframes.isEmpty else { continue }
+            if let delta = track.evaluate(at: time) {
+                sceneManager.groupTransforms[gid] = delta
             }
         }
 
