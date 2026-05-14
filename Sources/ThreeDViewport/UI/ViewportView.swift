@@ -846,6 +846,85 @@ final class ViewportView: MTKView {
             + " distance=" + String(format: "%.4f", camera.distance))
     }
 
+    /// Adds a camera follow keyframe at the current playhead time.
+    /// The follow target is the currently selected (or primary) object.
+    ///
+    /// The camera's yaw is stored as an offset from the object's current "behind yaw"
+    /// so that as the object rotates the camera automatically stays in the same
+    /// relative position (e.g. behind and above).  Pitch and distance are absolute.
+    func addFollowCameraKeyframeAtCurrentTime() {
+        guard let obj = sceneManager.selectedObject ?? sceneManager.primaryObject else {
+            print("[DEBUG] ViewportView: addFollowCameraKeyframe — no object selected")
+            return
+        }
+        if camera.keyframeTrack == nil {
+            camera.keyframeTrack = CameraKeyframeTrack()
+            print("[DEBUG] ViewportView: created new CameraKeyframeTrack")
+        }
+
+        // Capture how far the camera yaw is offset from the "directly behind" angle
+        // of the object right now.  At runtime, this offset is re-applied on top of
+        // the object's current behind-yaw so the camera stays in the same relative
+        // bearing regardless of how much the object has rotated.
+        let followYawOffset: Float?
+        if let anchor = sceneManager.worldOrbitAnchor(ofObjectNamed: obj.name) {
+            followYawOffset = camera.yaw - anchor.behindYaw
+        } else {
+            followYawOffset = nil
+        }
+
+        let kf = CameraKeyframe(
+            time:             timeline.currentTime,
+            yaw:              camera.yaw,
+            pitch:            camera.pitch,
+            distance:         camera.distance,
+            target:           camera.target,
+            followTargetName: obj.name,
+            followYawOffset:  followYawOffset
+        )
+        camera.keyframeTrack?.addKeyframe(kf)
+
+        let offsetStr = followYawOffset.map { String(format: "%.4f", $0) } ?? "nil"
+        print("[DEBUG] ViewportView: follow camera keyframe added at t="
+            + String(format: "%.3f", timeline.currentTime)
+            + " followTarget='\(obj.name)'"
+            + " yaw=" + String(format: "%.4f", camera.yaw)
+            + " followYawOffset=" + offsetStr
+            + " distance=" + String(format: "%.4f", camera.distance))
+    }
+
+    /// Variant of `addFollowCameraKeyframeAtCurrentTime()` that follows a specific named
+    /// object rather than the current selection.  Used by the keyframe-edit commit path
+    /// to preserve the original follow target when re-writing an edited keyframe.
+    func addFollowCameraKeyframeAtCurrentTime(followingObjectNamed targetName: String) {
+        if camera.keyframeTrack == nil {
+            camera.keyframeTrack = CameraKeyframeTrack()
+            print("[DEBUG] ViewportView: created new CameraKeyframeTrack")
+        }
+        let followYawOffset: Float?
+        if let anchor = sceneManager.worldOrbitAnchor(ofObjectNamed: targetName) {
+            followYawOffset = camera.yaw - anchor.behindYaw
+        } else {
+            followYawOffset = nil
+        }
+        let kf = CameraKeyframe(
+            time:             timeline.currentTime,
+            yaw:              camera.yaw,
+            pitch:            camera.pitch,
+            distance:         camera.distance,
+            target:           camera.target,
+            followTargetName: targetName,
+            followYawOffset:  followYawOffset
+        )
+        camera.keyframeTrack?.addKeyframe(kf)
+
+        let offsetStr = followYawOffset.map { String(format: "%.4f", $0) } ?? "nil"
+        print("[DEBUG] ViewportView: follow camera keyframe updated at t="
+            + String(format: "%.3f", timeline.currentTime)
+            + " followTarget='\(targetName)'"
+            + " followYawOffset=" + offsetStr)
+    }
+
     // MARK: - Video Export
 
     func startExport(to url: URL, codec: ExportCodec, exportState: ExportState) {
@@ -919,6 +998,10 @@ final class ViewportView: MTKView {
 
     override func mouseDown(with event: NSEvent) {
         lastMouseLocation = convert(event.locationInWindow, from: nil)
+        // Reset axis lock for the new left-drag gesture.
+        dragLockAxis = .none
+        dragAccumX   = 0
+        dragAccumY   = 0
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -928,35 +1011,76 @@ final class ViewportView: MTKView {
         lastMouseLocation = loc
 
         if isSpaceDown {
-            // Space+drag: orbit camera around target (available in all modes).
+            // Space+drag: free orbit around target — no axis lock so the user can
+            // freely position the view angle in a single stroke.
             camera.orbit(deltaX: dx, deltaY: dy)
 
         } else if controlMode == .object {
-            // Object mode: translate selected object.
+            // Object mode: axis-locked translation.
+            // Accumulate until one axis dominates, then move only along that axis
+            // so horizontal/vertical alignment is clean and precise.
             guard !timeline.isPlaying,
                   let obj = sceneManager.selectedObject ?? sceneManager.primaryObject
             else { return }
+
+            if dragLockAxis == .none {
+                dragAccumX += dx
+                dragAccumY += dy
+                let dist = (dragAccumX * dragAccumX + dragAccumY * dragAccumY).squareRoot()
+                guard dist >= dragLockThreshold else { return }
+                dragLockAxis = abs(dragAccumX) >= abs(dragAccumY) ? .horizontal : .vertical
+            }
+
             let scale = camera.distance * 0.001
-            let move  = camera.rightVector * (dx * scale)
-                      + camera.upVector   * (dy * scale)
+            let move: SIMD3<Float>
+            switch dragLockAxis {
+            case .horizontal: move = camera.rightVector * (dx * scale)
+            case .vertical:   move = camera.upVector   * (dy * scale)
+            case .none:       return
+            }
             obj.transform.columns.3.x += move.x
             obj.transform.columns.3.y += move.y
             obj.transform.columns.3.z += move.z
             syncLocalTransform(obj)
 
         } else if controlMode == .model {
-            // Model mode: translate all group parts together.
+            // Model mode: axis-locked translation of all group parts.
             guard !timeline.isPlaying else { return }
             let parts = groupParts()
             guard !parts.isEmpty else { return }
+
+            if dragLockAxis == .none {
+                dragAccumX += dx
+                dragAccumY += dy
+                let dist = (dragAccumX * dragAccumX + dragAccumY * dragAccumY).squareRoot()
+                guard dist >= dragLockThreshold else { return }
+                dragLockAxis = abs(dragAccumX) >= abs(dragAccumY) ? .horizontal : .vertical
+            }
+
             let scale = camera.distance * 0.001
-            let move  = camera.rightVector * (dx * scale)
-                      + camera.upVector   * (dy * scale)
+            let move: SIMD3<Float>
+            switch dragLockAxis {
+            case .horizontal: move = camera.rightVector * (dx * scale)
+            case .vertical:   move = camera.upVector   * (dy * scale)
+            case .none:       return
+            }
             translateGroup(parts, by: move)
 
         } else {
-            // Camera / Light mode: pan the camera.
-            camera.pan(deltaX: dx, deltaY: dy)
+            // Camera / Light mode: axis-locked pan.
+            if dragLockAxis == .none {
+                dragAccumX += dx
+                dragAccumY += dy
+                let dist = (dragAccumX * dragAccumX + dragAccumY * dragAccumY).squareRoot()
+                guard dist >= dragLockThreshold else { return }
+                dragLockAxis = abs(dragAccumX) >= abs(dragAccumY) ? .horizontal : .vertical
+            }
+
+            switch dragLockAxis {
+            case .horizontal: camera.pan(deltaX: dx, deltaY: 0)
+            case .vertical:   camera.pan(deltaX: 0,  deltaY: dy)
+            case .none:       return
+            }
         }
     }
 
@@ -964,9 +1088,7 @@ final class ViewportView: MTKView {
 
     override func rightMouseDown(with event: NSEvent) {
         lastMouseLocation = convert(event.locationInWindow, from: nil)
-        dragLockAxis = .none
-        dragAccumX   = 0
-        dragAccumY   = 0
+        // Right drag is always free (no axis lock) — nothing to reset.
     }
 
     override func rightMouseDragged(with event: NSEvent) {
@@ -978,32 +1100,19 @@ final class ViewportView: MTKView {
         let sensitivity: Float = 0.005
         switch controlMode {
         case .object:
+            // Free rotation on both axes simultaneously — no axis lock.
+            // Horizontal drag yaws around the world-up vector; vertical drag
+            // pitches around the camera-right vector.  Both apply in the same
+            // frame so diagonal strokes rotate cleanly in any direction.
             guard !timeline.isPlaying,
                   let obj = sceneManager.selectedObject ?? sceneManager.primaryObject
             else { return }
 
-            // ── Axis lock ─────────────────────────────────────────────────────
-            if dragLockAxis == .none {
-                dragAccumX += dx
-                dragAccumY += dy
-                let dist = (dragAccumX * dragAccumX + dragAccumY * dragAccumY).squareRoot()
-                guard dist >= dragLockThreshold else { return }
-                dragLockAxis = abs(dragAccumX) >= abs(dragAccumY) ? .horizontal : .vertical
-            }
-
-            let rotAxis: SIMD3<Float>
-            let angle:   Float
-            switch dragLockAxis {
-            case .horizontal:
-                rotAxis = camera.upVector
-                angle   =  dx * sensitivity
-            case .vertical:
-                rotAxis = camera.rightVector
-                angle   = -dy * sensitivity
-            case .none:
-                return
-            }
-            let rot = rotationMatrix4x4(simd_quatf(angle: angle, axis: rotAxis))
+            let hRot = rotationMatrix4x4(simd_quatf(angle:  dx * sensitivity,
+                                                     axis: camera.upVector))
+            let vRot = rotationMatrix4x4(simd_quatf(angle: -dy * sensitivity,
+                                                     axis: camera.rightVector))
+            let rot  = vRot * hRot   // horizontal applied first, vertical on top
 
             let localCentre = (obj.boundingMin + obj.boundingMax) * 0.5
             let wc4   = obj.transform * SIMD4<Float>(localCentre, 1)
@@ -1028,36 +1137,18 @@ final class ViewportView: MTKView {
             syncLocalTransform(obj)
 
         case .model:
-            // Model mode: rotate all group parts around their shared world centre.
+            // Free rotation of the whole group on both axes simultaneously.
             guard !timeline.isPlaying else { return }
             let parts = groupParts()
             guard !parts.isEmpty else { return }
 
-            if dragLockAxis == .none {
-                dragAccumX += dx
-                dragAccumY += dy
-                let dist = (dragAccumX * dragAccumX + dragAccumY * dragAccumY).squareRoot()
-                guard dist >= dragLockThreshold else { return }
-                dragLockAxis = abs(dragAccumX) >= abs(dragAccumY) ? .horizontal : .vertical
-            }
-
-            let rotAxis: SIMD3<Float>
-            let angle:   Float
-            switch dragLockAxis {
-            case .horizontal:
-                rotAxis = camera.upVector
-                angle   =  dx * sensitivity
-            case .vertical:
-                rotAxis = camera.rightVector
-                angle   = -dy * sensitivity
-            case .none:
-                return
-            }
+            let hQuat = simd_quatf(angle:  dx * sensitivity, axis: camera.upVector)
+            let vQuat = simd_quatf(angle: -dy * sensitivity, axis: camera.rightVector)
             let pivot = groupCenter(parts)
-            rotateGroup(parts, by: simd_quatf(angle: angle, axis: rotAxis), around: pivot)
+            rotateGroup(parts, by: vQuat * hQuat, around: pivot)
 
         case .camera, .light:
-            // Right drag in camera / light mode: free-look.
+            // Right drag: free-look on both axes (unchanged).
             camera.freeLook(deltaYaw: dx * sensitivity, deltaPitch: dy * sensitivity)
         }
     }

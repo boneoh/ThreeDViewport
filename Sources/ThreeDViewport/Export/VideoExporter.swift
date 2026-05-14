@@ -1068,6 +1068,15 @@ final class VideoExporter {
                 camera.distance = state.distance
                 camera.target   = state.target
             }
+            // Camera-follow override: replace target and yaw so the exported video
+            // matches playback — camera tracks the object's position and orientation.
+            if let follow = camTrack.resolveFollowCamera(
+                at:             time,
+                getObjectState: { [self] name in sceneManager.worldOrbitAnchor(ofObjectNamed: name) }
+            ) {
+                camera.target = follow.target
+                if let yaw = follow.yaw { camera.yaw = yaw }
+            }
         }
 
         // ── Lights ────────────────────────────────────────────────────────────

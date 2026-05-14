@@ -554,8 +554,14 @@ final class TimelineEditorView: NSView {
                                       multiSelectedDiamonds.contains(
                                           SelectedDiamond(trackIndex: ti, kfIndex: ki))
 
+                // True when this camera-track keyframe is a follow keyframe.
+                let isFollowKeyframe: Bool = {
+                    guard case .camera = row.ref else { return false }
+                    return camera?.keyframeTrack?.keyframes[safe: ki]?.followTargetName != nil
+                }()
+
                 // Colour: amber while editing, teal when multi-selected,
-                // accent when single-selected, grey otherwise.
+                // accent when single-selected, orange for follow keyframes, grey otherwise.
                 let fillColor: NSColor
                 if isSelected && isEditingKeyframe {
                     // Pulsing amber to signal live-edit mode.
@@ -564,6 +570,9 @@ final class TimelineEditorView: NSView {
                     fillColor = NSColor.systemTeal
                 } else if isSelected {
                     fillColor = NSColor.controlAccentColor
+                } else if isFollowKeyframe {
+                    // Orange to distinguish follow keyframes from free-camera keyframes.
+                    fillColor = NSColor(red: 1.0, green: 0.50, blue: 0.10, alpha: 1)
                 } else {
                     fillColor = NSColor(white: 0.72, alpha: 1)
                 }

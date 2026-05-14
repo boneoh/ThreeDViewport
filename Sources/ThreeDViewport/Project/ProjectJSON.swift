@@ -274,14 +274,48 @@ struct KeyframeData: Codable {
 
 // Phase 5: One saved camera keyframe — absolute camera state.
 // Yaw uses shortest-path interpolation in CameraKeyframeTrack.evaluate(at:).
+// Camera Follow (Phase N): added followTarget — nil = free camera, non-nil = follow named object.
 struct CameraKeyframeData: Codable {
-    var time:     Double
-    var yaw:      Float
-    var pitch:    Float
-    var distance: Float
-    var targetX:  Float
-    var targetY:  Float
-    var targetZ:  Float
+    var time:         Double
+    var yaw:          Float
+    var pitch:        Float
+    var distance:     Float
+    var targetX:      Float
+    var targetY:      Float
+    var targetZ:      Float
+    /// nil = free camera (default, absent in older project files).
+    var followTarget:    String? = nil
+    /// Camera yaw stored as an offset from the object's "behind yaw" at creation time.
+    /// nil = no yaw-relative follow (absolute yaw / position-only follow).
+    var followYawOffset: Float?  = nil
+
+    // Custom decoder so files saved before camera-follow fields decode cleanly.
+    init(from decoder: Decoder) throws {
+        let c    = try decoder.container(keyedBy: CodingKeys.self)
+        time     = try  c.decode(Double.self, forKey: .time)
+        yaw      = try  c.decode(Float.self,  forKey: .yaw)
+        pitch    = try  c.decode(Float.self,  forKey: .pitch)
+        distance = try  c.decode(Float.self,  forKey: .distance)
+        targetX  = try  c.decode(Float.self,  forKey: .targetX)
+        targetY  = try  c.decode(Float.self,  forKey: .targetY)
+        targetZ  = try  c.decode(Float.self,  forKey: .targetZ)
+        followTarget    = try? c.decode(String.self, forKey: .followTarget)
+        followYawOffset = try? c.decode(Float.self,  forKey: .followYawOffset)
+    }
+
+    init(time: Double, yaw: Float, pitch: Float, distance: Float,
+         targetX: Float, targetY: Float, targetZ: Float,
+         followTarget: String? = nil, followYawOffset: Float? = nil) {
+        self.time            = time
+        self.yaw             = yaw
+        self.pitch           = pitch
+        self.distance        = distance
+        self.targetX         = targetX
+        self.targetY         = targetY
+        self.targetZ         = targetZ
+        self.followTarget    = followTarget
+        self.followYawOffset = followYawOffset
+    }
 }
 
 // v10: Static per-light configuration.  All fields have sensible defaults so

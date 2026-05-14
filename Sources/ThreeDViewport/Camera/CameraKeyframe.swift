@@ -8,19 +8,30 @@ import simd
 // to CameraController's properties each frame.
 
 struct CameraKeyframe {
-    var time:     Double
-    var yaw:      Float
-    var pitch:    Float
-    var distance: Float
-    var target:   SIMD3<Float>
+    var time:             Double
+    var yaw:              Float
+    var pitch:            Float
+    var distance:         Float
+    var target:           SIMD3<Float>
+    /// nil = free camera (default).  non-nil = name of the SceneObject to follow.
+    var followTargetName: String? = nil
+    /// When followTargetName is set, the offset between the camera yaw and the
+    /// "behind yaw" of the followed object at keyframe-creation time.
+    /// e.g. 0 = directly behind, π/4 = 45° to the right.
+    /// nil = no yaw-relative follow (position-only, absolute yaw).
+    var followYawOffset:  Float?  = nil
 
     init(time: Double, yaw: Float, pitch: Float,
-         distance: Float, target: SIMD3<Float>) {
-        self.time     = time
-        self.yaw      = yaw
-        self.pitch    = pitch
-        self.distance = distance
-        self.target   = target
+         distance: Float, target: SIMD3<Float>,
+         followTargetName: String? = nil,
+         followYawOffset:  Float?  = nil) {
+        self.time             = time
+        self.yaw              = yaw
+        self.pitch            = pitch
+        self.distance         = distance
+        self.target           = target
+        self.followTargetName = followTargetName
+        self.followYawOffset  = followYawOffset
     }
 }
 
@@ -96,6 +107,97 @@ final class CameraKeyframeTrack {
             )
         }
         return keyframes.last!
+    }
+
+    // MARK: - Follow camera resolution
+
+    /// Resolves camera-follow overrides at `time`.
+    ///
+    /// Returns `(target, yaw?)` where:
+    ///   • `target` — the world-space position the camera should orbit around.
+    ///   • `yaw`    — the camera yaw to apply, or nil to keep the evaluated yaw.
+    ///
+    /// Returns nil when no follow is active (free → free segment or empty track),
+    /// meaning `evaluate(at:)` values are used unchanged.
+    ///
+    /// `getObjectState` maps an object name to its current world position and
+    /// "behind yaw" — the camera yaw that places the camera directly behind the
+    /// object.  Passing it as a closure keeps this track decoupled from SceneManager.
+    ///
+    /// Blending rules (target follows the same logic for yaw when followYawOffset is set):
+    ///   free  → free   : nil (no override)
+    ///   free  → follow : lerp(a.stored, b.live, alpha)
+    ///   follow→ free   : lerp(a.live, b.stored, alpha)
+    ///   follow→ follow (same target)     : live continuously
+    ///   follow→ follow (different target): snap — use a's target throughout segment
+    func resolveFollowCamera(
+        at time: Double,
+        getObjectState: (String) -> (pos: SIMD3<Float>, behindYaw: Float)?
+    ) -> (target: SIMD3<Float>, yaw: Float?)? {
+
+        guard !keyframes.isEmpty else { return nil }
+
+        // ── Before first keyframe ─────────────────────────────────────────────
+        if time <= keyframes.first!.time {
+            let kf = keyframes.first!
+            guard let name = kf.followTargetName,
+                  let state = getObjectState(name) else { return nil }
+            let yaw = kf.followYawOffset.map { state.behindYaw + $0 }
+            return (target: state.pos, yaw: yaw)
+        }
+
+        // ── After last keyframe ───────────────────────────────────────────────
+        if time >= keyframes.last!.time {
+            let kf = keyframes.last!
+            guard let name = kf.followTargetName,
+                  let state = getObjectState(name) else { return nil }
+            let yaw = kf.followYawOffset.map { state.behindYaw + $0 }
+            return (target: state.pos, yaw: yaw)
+        }
+
+        // ── Between two keyframes ─────────────────────────────────────────────
+        for i in 0..<(keyframes.count - 1) {
+            let a = keyframes[i]
+            let b = keyframes[i + 1]
+            guard time >= a.time && time <= b.time else { continue }
+
+            let span  = b.time - a.time
+            let alpha = span < 0.0001 ? Float(1) : Float((time - a.time) / span)
+
+            switch (a.followTargetName, b.followTargetName) {
+
+            case (.none, .none):
+                return nil   // free → free
+
+            case (.none, .some(let bName)):
+                // free → follow: blend stored a.target / a.yaw toward live b values
+                guard let bState = getObjectState(bName) else { return nil }
+                let blendedTarget = a.target + (bState.pos - a.target) * alpha
+                let blendedYaw: Float? = b.followYawOffset.map {
+                    lerpAngle(a.yaw, bState.behindYaw + $0, alpha)
+                }
+                return (target: blendedTarget, yaw: blendedYaw)
+
+            case (.some(let aName), .none):
+                // follow → free: blend live a values toward stored b.target / b.yaw
+                guard let aState = getObjectState(aName) else {
+                    return (target: b.target, yaw: nil)
+                }
+                let blendedTarget = aState.pos + (b.target - aState.pos) * alpha
+                let blendedYaw: Float? = a.followYawOffset.map {
+                    lerpAngle(aState.behindYaw + $0, b.yaw, alpha)
+                }
+                return (target: blendedTarget, yaw: blendedYaw)
+
+            case (.some(let aName), .some(let bName)):
+                // follow → follow
+                let trackName = (aName == bName) ? aName : aName  // snap: always follow a
+                guard let state = getObjectState(trackName) else { return nil }
+                let yaw = a.followYawOffset.map { state.behindYaw + $0 }
+                return (target: state.pos, yaw: yaw)
+            }
+        }
+        return nil
     }
 
     // MARK: - Interpolation helpers

@@ -150,13 +150,15 @@ final class ProjectFile {
         // ── Camera keyframes (Phase 5) ────────────────────────────────────────
         let cameraKfData: [CameraKeyframeData] = (cam.keyframeTrack?.keyframes ?? []).map { kf in
             CameraKeyframeData(
-                time:     kf.time,
-                yaw:      kf.yaw,
-                pitch:    kf.pitch,
-                distance: kf.distance,
-                targetX:  kf.target.x,
-                targetY:  kf.target.y,
-                targetZ:  kf.target.z
+                time:            kf.time,
+                yaw:             kf.yaw,
+                pitch:           kf.pitch,
+                distance:        kf.distance,
+                targetX:         kf.target.x,
+                targetY:         kf.target.y,
+                targetZ:         kf.target.z,
+                followTarget:    kf.followTargetName,
+                followYawOffset: kf.followYawOffset
             )
         }
 
@@ -304,11 +306,13 @@ final class ProjectFile {
             let camTrack = CameraKeyframeTrack()
             for kf in data.cameraKeyframes {
                 camTrack.addKeyframe(CameraKeyframe(
-                    time:     kf.time,
-                    yaw:      kf.yaw,
-                    pitch:    kf.pitch,
-                    distance: kf.distance,
-                    target:   SIMD3<Float>(kf.targetX, kf.targetY, kf.targetZ)
+                    time:             kf.time,
+                    yaw:              kf.yaw,
+                    pitch:            kf.pitch,
+                    distance:         kf.distance,
+                    target:           SIMD3<Float>(kf.targetX, kf.targetY, kf.targetZ),
+                    followTargetName: kf.followTarget,
+                    followYawOffset:  kf.followYawOffset
                 ))
             }
             vp.camera.keyframeTrack = camTrack

@@ -132,4 +132,57 @@ final class SceneManager {
         objects.remove(at: index)
         print("[DEBUG] SceneManager: removed object '" + name + "', remaining count = " + String(objects.count))
     }
+
+    // MARK: - Camera follow helpers
+
+    /// Returns the world-space orbit anchor for the named object — the data needed
+    /// for camera-follow.
+    ///
+    /// `pos` — world translation (camera orbits around this point).
+    /// `behindYaw` — camera yaw that places the camera directly *behind* the object,
+    ///   i.e. on the side opposite to the object's -Z (GLTF forward) direction.
+    ///   Formula: atan2(columns.2.x, columns.2.z) of the object's world rotation.
+    ///
+    /// Uses the group transform for grouped objects (so the camera follows the whole
+    /// group as one unit, not just an individual part), or the object's own transform
+    /// for ungrouped objects.
+    func worldOrbitAnchor(ofObjectNamed name: String)
+        -> (pos: SIMD3<Float>, behindYaw: Float)? {
+        guard let obj = objects.first(where: { $0.name == name }) else { return nil }
+
+        // Determine which transform to use as the orbit anchor.
+        //
+        // Priority:
+        //   1. Explicit group transform (driven by group keyframe animation) —
+        //      represents the whole-model pose, so it's the correct pivot.
+        //   2. Group root object's transform — used when no group keyframe has
+        //      been applied yet.  Keeps the camera orbiting around the model's
+        //      natural pivot regardless of which sub-part the user selected.
+        //      Without this, selecting a sub-part (e.g. chest panel) would put
+        //      the orbit anchor on the part's surface, pulling the camera inside
+        //      the model and making that part appear displaced in the viewport.
+        //   3. Object's own transform — for ungrouped root objects.
+        let mat: matrix_float4x4
+        if let gid = obj.groupID {
+            if let groupMat = groupTransforms[gid] {
+                // Group has an active keyframe-animated transform.
+                mat = groupMat
+            } else {
+                // No group keyframe yet — use the root node of this group so the
+                // camera orbits around the model's pivot, not the selected sub-part.
+                let root = objects.first(where: { $0.groupID == gid && $0.parentIndex == nil })
+                mat = root?.transform ?? obj.transform
+            }
+        } else {
+            mat = obj.transform
+        }
+
+        let pos = SIMD3<Float>(mat.columns.3.x, mat.columns.3.y, mat.columns.3.z)
+        // "Behind yaw": the camera yaw that places the orbit eye on the +Z (local)
+        // side of the object.  In GLTF the -Z axis is forward, so +Z is behind.
+        // atan2(columns.2.x, columns.2.z) gives the world-space angle of that axis.
+        let behindYaw = atan2(mat.columns.2.x, mat.columns.2.z)
+
+        return (pos: pos, behindYaw: behindYaw)
+    }
 }

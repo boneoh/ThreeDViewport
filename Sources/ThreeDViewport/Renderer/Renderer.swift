@@ -925,6 +925,17 @@ final class Renderer: NSObject, MTKViewDelegate {
                 camera.distance = state.distance
                 camera.target   = state.target
             }
+            // Camera-follow override: replace target (and yaw when yaw-relative follow
+            // is active) so the camera tracks the object's position and orientation.
+            if let follow = camTrack.resolveFollowCamera(
+                at:              timeline.currentTime,
+                getObjectState:  { [weak self] name in
+                    self?.sceneManager.worldOrbitAnchor(ofObjectNamed: name)
+                }
+            ) {
+                camera.target = follow.target
+                if let yaw = follow.yaw { camera.yaw = yaw }
+            }
         }
 
         // ── Lights ────────────────────────────────────────────────────────────

@@ -31,7 +31,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private enum KFEditSnapshot {
         case object(index: Int, savedTransform: matrix_float4x4, kfTime: Double)
         case camera(yaw: Float, pitch: Float, distance: Float,
-                    target: SIMD3<Float>, kfTime: Double)
+                    target: SIMD3<Float>,
+                    followTargetName: String?,   // nil = was a free keyframe
+                    kfTime: Double)
         case light(index: Int, savedIntensity: Float, savedColor: SIMD3<Float>,
                    savedDirection: SIMD3<Float>, savedPosition: SIMD3<Float>, kfTime: Double)
         case group(gid: Int, savedTransform: matrix_float4x4, kfTime: Double)
@@ -411,6 +413,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         mainMenu.addItem(editItem)
         let editMenu = NSMenu(title: "Edit")
         editItem.submenu = editMenu
+
+        // Add Follow Camera Keyframe — requires an object to be selected
+        let followCamItem = NSMenuItem(
+            title:          "Add Follow Camera Keyframe",
+            action:         #selector(addFollowCameraKeyframe(_:)),
+            keyEquivalent:  ""
+        )
+        followCamItem.target = self
+        editMenu.addItem(followCamItem)
+
+        editMenu.addItem(.separator())
 
         let removeItem = NSMenuItem(title: "Remove", action: nil, keyEquivalent: "")
         let sub = NSMenu(title: "Remove")
@@ -882,11 +895,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             + String(viewportView?.timeline.isLooping ?? false))
     }
 
+    // MARK: - Add Follow Camera Keyframe
+
+    @objc private func addFollowCameraKeyframe(_ sender: Any) {
+        guard let viewport = viewportView else { return }
+        viewport.addFollowCameraKeyframeAtCurrentTime()
+        markDirty()
+        timelineEditorWC?.editorView.needsDisplay = true
+    }
+
     // Keep menu item checkmarks in sync with current rendering state.
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(replaceSelectedModel(_:)) {
             // Disabled when no object is selected.
             return viewportView?.sceneManager.selectedObject != nil
+        }
+        if menuItem.action == #selector(addFollowCameraKeyframe(_:)) {
+            // Disabled when no model is in the scene (need something to follow).
+            return viewportView?.sceneManager.primaryObject != nil
         }
         if menuItem.action == #selector(toggleColorMode(_:)) {
             // Checkmark when greyscale is active (isColorMode == false).
@@ -1104,29 +1130,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             switch ref {
             case .camera:
                 // Evaluate the camera track at kfTime to get the exact saved values.
+                // Also look up the RAW keyframe to preserve followTargetName —
+                // evaluate() creates a new struct and drops follow metadata.
                 let c = viewport.camera
+                let rawFollowName = c.keyframeTrack?.keyframes
+                    .first(where: { abs($0.time - kfTime) < 0.001 })?.followTargetName
                 if let track = c.keyframeTrack,
                    let state = track.evaluate(at: kfTime) {
                     self.kfEditSnapshot = .camera(
-                        yaw:      state.yaw,
-                        pitch:    state.pitch,
-                        distance: state.distance,
-                        target:   state.target,
-                        kfTime:   kfTime
+                        yaw:             state.yaw,
+                        pitch:           state.pitch,
+                        distance:        state.distance,
+                        target:          state.target,
+                        followTargetName: rawFollowName,
+                        kfTime:          kfTime
                     )
                 } else {
                     // Fallback: save the current live state.
                     self.kfEditSnapshot = .camera(
-                        yaw:      c.yaw,
-                        pitch:    c.pitch,
-                        distance: c.distance,
-                        target:   c.target,
-                        kfTime:   kfTime
+                        yaw:             c.yaw,
+                        pitch:           c.pitch,
+                        distance:        c.distance,
+                        target:          c.target,
+                        followTargetName: rawFollowName,
+                        kfTime:          kfTime
                     )
                 }
                 viewport.setControlMode(.camera)
                 print("[DEBUG] AppDelegate: entered camera keyframe edit at t="
-                    + String(format: "%.3f", kfTime))
+                    + String(format: "%.3f", kfTime)
+                    + (rawFollowName.map { " follow='\($0)'" } ?? " (free)"))
 
             case .object(let i):
                 guard i < viewport.sceneManager.objects.count else { return }
@@ -1232,11 +1265,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 print("[DEBUG] AppDelegate: committed object keyframe edit index=\(index)"
                     + " t=" + String(format: "%.3f", kfTime))
 
-            case .camera(_, _, _, _, let kfTime):
+            case .camera(_, _, _, _, let followTargetName, let kfTime):
                 viewport.timeline.seek(to: kfTime)
-                viewport.addCameraKeyframeAtCurrentTime()
+                if let name = followTargetName {
+                    // Preserve follow: re-add as a follow keyframe for the same target,
+                    // recomputing the yaw offset from the new camera position.
+                    viewport.addFollowCameraKeyframeAtCurrentTime(followingObjectNamed: name)
+                } else {
+                    viewport.addCameraKeyframeAtCurrentTime()
+                }
                 print("[DEBUG] AppDelegate: committed camera keyframe edit"
-                    + " t=" + String(format: "%.3f", kfTime))
+                    + " t=" + String(format: "%.3f", kfTime)
+                    + (followTargetName.map { " follow='\($0)'" } ?? " (free)"))
 
             case .light(let index, _, _, _, _, let kfTime):
                 viewport.timeline.seek(to: kfTime)
@@ -1270,7 +1310,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 print("[DEBUG] AppDelegate: cancelled object keyframe edit index=\(index)"
                     + " t=" + String(format: "%.3f", kfTime))
 
-            case .camera(let yaw, let pitch, let distance, let target, let kfTime):
+            case .camera(let yaw, let pitch, let distance, let target, _, let kfTime):
                 let c      = viewport.camera
                 c.yaw      = yaw
                 c.pitch    = pitch
