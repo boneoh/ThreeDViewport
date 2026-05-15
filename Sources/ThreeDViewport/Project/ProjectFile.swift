@@ -57,7 +57,8 @@ final class ProjectFile {
     /// keyframe tracks and camera state.  Camera is applied AFTER model loading so
     /// it overrides any fitToScene calls made during load.
     @discardableResult
-    static func load(from url: URL, into viewport: ViewportView) throws -> ProjectData {
+    static func load(from url: URL, into viewport: ViewportView,
+                     missingModelResolver: ((String) -> URL?)? = nil) throws -> ProjectData {
         let json: Data
         do {
             json = try Data(contentsOf: url)
@@ -77,7 +78,7 @@ final class ProjectFile {
             + "  models=" + String(data.modelPaths.count)
             + "  objects=" + String(data.objects.count))
 
-        applyData(data, to: viewport)
+        applyData(data, to: viewport, missingModelResolver: missingModelResolver)
         return data
     }
 
@@ -291,7 +292,8 @@ final class ProjectFile {
 
     // MARK: - Apply ProjectData → live state
 
-    private static func applyData(_ data: ProjectData, to vp: ViewportView) {
+    private static func applyData(_ data: ProjectData, to vp: ViewportView,
+                                   missingModelResolver: ((String) -> URL?)? = nil) {
 
         // ── Timeline ──────────────────────────────────────────────────────────
         vp.timeline.duration    = data.timeline.duration
@@ -343,12 +345,18 @@ final class ProjectFile {
 
         var loadedCount = 0
         for pathStr in paths {
+            let modelURL: URL
             if FileManager.default.fileExists(atPath: pathStr) {
-                vp.addModelToScene(url: URL(fileURLWithPath: pathStr))
-                loadedCount += 1
+                modelURL = URL(fileURLWithPath: pathStr)
+            } else if let resolved = missingModelResolver?(pathStr) {
+                print("[DEBUG] ProjectFile: missing model resolved by user — " + resolved.lastPathComponent)
+                modelURL = resolved
             } else {
                 print("[DEBUG] ProjectFile: model file not found at " + pathStr)
+                continue
             }
+            vp.addModelToScene(url: modelURL)
+            loadedCount += 1
         }
 
         if loadedCount == 0 && paths.isEmpty {

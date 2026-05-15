@@ -614,6 +614,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         ])
     }
 
+    // MARK: - Default directories
+
+    /// Returns ~/Documents/ThreeDViewport/<subfolder>, creating it if needed.
+    private func defaultDirectory(for subfolder: String) -> URL {
+        let base = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("ThreeDViewport")
+            .appendingPathComponent(subfolder)
+        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        return base
+    }
+
     // MARK: - New Project
 
     @objc private func newProject(_ sender: Any) {
@@ -657,7 +668,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories    = false
         panel.canChooseFiles          = true
-        panel.title = "Open Model"
+        panel.title        = "Open Model"
+        panel.directoryURL = defaultDirectory(for: "Models")
 
         let modelTypes = [UTType(filenameExtension: "glb"), UTType(filenameExtension: "gltf")]
             .compactMap { $0 }
@@ -689,7 +701,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories    = false
         panel.canChooseFiles          = true
-        panel.title = "Add Model to Scene"
+        panel.title        = "Add Model to Scene"
+        panel.directoryURL = defaultDirectory(for: "Models")
 
         let modelTypes = [UTType(filenameExtension: "glb"), UTType(filenameExtension: "gltf")]
             .compactMap { $0 }
@@ -720,6 +733,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.title                   = "Replace Selected Model"
         panel.prompt                  = "Replace"
         panel.message                 = "Choose a .glb file to replace the selected model's geometry."
+        panel.directoryURL            = defaultDirectory(for: "Models")
 
         let modelTypes = [UTType(filenameExtension: "glb"), UTType(filenameExtension: "gltf")]
             .compactMap { $0 }
@@ -745,6 +759,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories    = false
         panel.canChooseFiles          = true
+        panel.directoryURL            = defaultDirectory(for: "Projects")
 
         if let projType = UTType(filenameExtension: "3dvp") {
             panel.allowedContentTypes = [projType]
@@ -772,8 +787,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     private func loadProject(from url: URL) {
         guard let viewport = viewportView else { return }
+
+        let resolver: (String) -> URL? = { [weak self] missingPath in
+            let filename = URL(fileURLWithPath: missingPath).lastPathComponent
+            let panel = NSOpenPanel()
+            panel.allowsMultipleSelection = false
+            panel.canChooseDirectories    = false
+            panel.canChooseFiles          = true
+            panel.title                   = "Locate Missing Model"
+            panel.prompt                  = "Locate"
+            panel.message                 = "\"\(filename)\" could not be found. Please locate it, or cancel to skip."
+            panel.directoryURL            = self?.defaultDirectory(for: "Models")
+
+            let modelTypes = [UTType(filenameExtension: "glb"), UTType(filenameExtension: "gltf")]
+                .compactMap { $0 }
+            if !modelTypes.isEmpty {
+                panel.allowedContentTypes = modelTypes
+            }
+
+            return panel.runModal() == .OK ? panel.url : nil
+        }
+
         do {
-            let data = try ProjectFile.load(from: url, into: viewport)
+            let data = try ProjectFile.load(from: url, into: viewport,
+                                            missingModelResolver: resolver)
             currentProjectURL = url
             isDirty = false
             window?.title = "ThreeDViewport — " + url.deletingPathExtension().lastPathComponent
@@ -813,6 +850,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.title                = "Save Project"
         panel.nameFieldStringValue = "project.3dvp"
         panel.canCreateDirectories = true
+        panel.directoryURL         = defaultDirectory(for: "Projects")
 
         // Suggest the first loaded model's name as a project name default.
         if let firstURL = viewport.sceneManager.objects.first?.sourceURL {
@@ -1495,6 +1533,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.title                = "Export ProRes Video"
         panel.nameFieldStringValue = "animation.mov"
         panel.canCreateDirectories = true
+        panel.directoryURL         = defaultDirectory(for: "Movies")
         panel.accessoryView        = accessory
 
         if let movType = UTType(filenameExtension: "mov") {
