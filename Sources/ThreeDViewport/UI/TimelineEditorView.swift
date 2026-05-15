@@ -966,23 +966,21 @@ final class TimelineEditorView: NSView {
             seekToAdjacentKeyframe(backward: event.modifierFlags.contains(.shift),
                                    tracks: tracks)
 
-        case 123:       // Left arrow → nudge selected diamond one frame earlier,
-                        // or forward to viewport if no diamond is selected.
+        case 123:       // Left arrow → always forward to viewport.
             guard !isEditingKeyframe else { super.keyDown(with: event); return }
-            if selectedKFIndex != nil || !multiSelectedDiamonds.isEmpty {
-                nudgeSelected(by: -1.0 / 30.0, tracks: tracks)
-            } else {
-                forwardToViewport(event)
-            }
+            forwardToViewport(event)
 
-        case 124:       // Right arrow → nudge selected diamond one frame later,
-                        // or forward to viewport if no diamond is selected.
+        case 124:       // Right arrow → always forward to viewport.
             guard !isEditingKeyframe else { super.keyDown(with: event); return }
-            if selectedKFIndex != nil || !multiSelectedDiamonds.isEmpty {
-                nudgeSelected(by: 1.0 / 30.0, tracks: tracks)
-            } else {
-                forwardToViewport(event)
-            }
+            forwardToViewport(event)
+
+        case 3:         // F → nudge selected diamond one frame forward.
+            guard !isEditingKeyframe else { super.keyDown(with: event); return }
+            nudgeSelected(by: 1.0 / 30.0, tracks: tracks)
+
+        case 11:        // B → nudge selected diamond one frame backward.
+            guard !isEditingKeyframe else { super.keyDown(with: event); return }
+            nudgeSelected(by: -1.0 / 30.0, tracks: tracks)
 
         default:
             // Forward unrecognised keys to the viewport so shortcuts like
@@ -1280,6 +1278,11 @@ final class TimelineEditorView: NSView {
                 needsDisplay = true
             }
         }
+    }
+
+    /// Called by ViewportView when F or B is pressed while the viewport has focus.
+    func nudgeSelectedKeyframe(by delta: Double) {
+        nudgeSelected(by: delta, tracks: buildTracks())
     }
 
     private func nudgeSelected(by delta: Double, tracks: TrackList) {

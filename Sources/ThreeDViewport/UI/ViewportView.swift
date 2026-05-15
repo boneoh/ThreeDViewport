@@ -1092,8 +1092,8 @@ final class ViewportView: MTKView {
             }
 
             switch dragLockAxis {
-            case .horizontal: camera.pan(deltaX: dx, deltaY: 0)
-            case .vertical:   camera.pan(deltaX: 0,  deltaY: dy)
+            case .horizontal: camera.pan(deltaX: -dx, deltaY: 0)
+            case .vertical:   camera.pan(deltaX: 0,   deltaY: dy)
             case .none:       return
             }
         }
@@ -1164,7 +1164,7 @@ final class ViewportView: MTKView {
 
         case .camera, .light:
             // Right drag: free-look on both axes (unchanged).
-            camera.freeLook(deltaYaw: dx * sensitivity, deltaPitch: dy * sensitivity)
+            camera.freeLook(deltaYaw: -dx * sensitivity, deltaPitch: dy * sensitivity)
         }
     }
 
@@ -1307,8 +1307,8 @@ final class ViewportView: MTKView {
     // Key code constants
     private enum KC {
         static let space:    UInt16 = 49
-        static let g:        UInt16 = 5    // wireframe
-        static let t:        UInt16 = 17   // color / greyscale toggle
+        static let w:        UInt16 = 13   // wireframe
+        static let g:        UInt16 = 5    // color / greyscale toggle
         static let c:        UInt16 = 8    // camera mode
         static let l:        UInt16 = 37   // light mode
         static let o:        UInt16 = 31   // object mode / cycle
@@ -1336,6 +1336,8 @@ final class ViewportView: MTKView {
         static let returnKey:    UInt16 = 36   // Return / Enter
         // Keyframe insertion / deletion shortcuts
         static let m:            UInt16 = 46   // M — model (group) mode
+        static let f:            UInt16 = 3    // F — nudge keyframe 1 frame forward
+        static let b:            UInt16 = 11   // B — nudge keyframe 1 frame backward
         static let insert:       UInt16 = 114  // Insert / Help key
         static let i:            UInt16 = 34   // I — alias for Insert (add keyframe)
         // Playhead navigation
@@ -1402,6 +1404,16 @@ final class ViewportView: MTKView {
             return
         }
 
+        // ── F / B — nudge selected keyframe one frame forward / backward ──────
+        if kc == KC.f, !event.isARepeat {
+            timelineKeyTarget?.nudgeSelectedKeyframe(by: 1.0 / 30.0)
+            return
+        }
+        if kc == KC.b, !event.isARepeat {
+            timelineKeyTarget?.nudgeSelectedKeyframe(by: -1.0 / 30.0)
+            return
+        }
+
         // ── Mode-switch keys — single-fire only (no repeat) ──────────────────
         if !event.isARepeat {
             switch kc {
@@ -1431,12 +1443,12 @@ final class ViewportView: MTKView {
                 }
                 return
 
-            case KC.g:
+            case KC.w:
                 renderer?.isWireframe.toggle()
                 print("[DEBUG] ViewportView: wireframe = " + String(renderer?.isWireframe ?? false))
                 return
 
-            case KC.t:
+            case KC.g:
                 renderSettings.isColorMode.toggle()
                 return
 
@@ -1513,7 +1525,11 @@ final class ViewportView: MTKView {
                     camera.pan(deltaX: panStep, deltaY: 0)
                 }
             case .light:
-                lightManager.rotateSelected(deltaAzimuth: -lightStep, deltaElevation: 0)
+                if event.modifierFlags.contains(.shift) {
+                    lightManager.rotateSelected(deltaAzimuth: lightStep, deltaElevation: 0)
+                } else {
+                    lightManager.moveSelectedLateral(deltaX: -lightStep, deltaY: 0)
+                }
             case .object:
                 if let obj = sceneManager.selectedObject {
                     if event.modifierFlags.contains(.shift) {
@@ -1543,7 +1559,11 @@ final class ViewportView: MTKView {
                     camera.pan(deltaX: -panStep, deltaY: 0)
                 }
             case .light:
-                lightManager.rotateSelected(deltaAzimuth: lightStep, deltaElevation: 0)
+                if event.modifierFlags.contains(.shift) {
+                    lightManager.rotateSelected(deltaAzimuth: -lightStep, deltaElevation: 0)
+                } else {
+                    lightManager.moveSelectedLateral(deltaX: lightStep, deltaY: 0)
+                }
             case .object:
                 if let obj = sceneManager.selectedObject {
                     if event.modifierFlags.contains(.shift) {
@@ -1573,11 +1593,15 @@ final class ViewportView: MTKView {
                     camera.pan(deltaX: 0, deltaY: panStep)
                 }
             case .light:
-                lightManager.rotateSelected(deltaAzimuth: 0, deltaElevation: -lightStep)
+                if event.modifierFlags.contains(.shift) {
+                    lightManager.rotateSelected(deltaAzimuth: 0, deltaElevation: -lightStep)
+                } else {
+                    lightManager.moveSelectedLateral(deltaX: 0, deltaY: lightStep)
+                }
             case .object:
                 if let obj = sceneManager.selectedObject {
                     if event.modifierFlags.contains(.shift) {
-                        rotateAroundBoundingCenter(obj, by: simd_quatf(angle: rotStep, axis: SIMD3<Float>(1, 0, 0)))
+                        rotateAroundBoundingCenter(obj, by: simd_quatf(angle: -rotStep, axis: SIMD3<Float>(1, 0, 0)))
                     } else {
                         obj.transform.columns.3.y += translateStep
                         syncLocalTransform(obj)
@@ -1603,11 +1627,15 @@ final class ViewportView: MTKView {
                     camera.pan(deltaX: 0, deltaY: -panStep)
                 }
             case .light:
-                lightManager.rotateSelected(deltaAzimuth: 0, deltaElevation: lightStep)
+                if event.modifierFlags.contains(.shift) {
+                    lightManager.rotateSelected(deltaAzimuth: 0, deltaElevation: lightStep)
+                } else {
+                    lightManager.moveSelectedLateral(deltaX: 0, deltaY: -lightStep)
+                }
             case .object:
                 if let obj = sceneManager.selectedObject {
                     if event.modifierFlags.contains(.shift) {
-                        rotateAroundBoundingCenter(obj, by: simd_quatf(angle: -rotStep, axis: SIMD3<Float>(1, 0, 0)))
+                        rotateAroundBoundingCenter(obj, by: simd_quatf(angle: rotStep, axis: SIMD3<Float>(1, 0, 0)))
                     } else {
                         obj.transform.columns.3.y -= translateStep
                         syncLocalTransform(obj)
@@ -1629,7 +1657,7 @@ final class ViewportView: MTKView {
             if controlMode == .camera {
                 camera.yaw -= rotStep
             } else if controlMode == .light {
-                lightManager.rotateSelected(deltaAzimuth: -lightStep, deltaElevation: 0)
+                lightManager.rotateSelected(deltaAzimuth: lightStep, deltaElevation: 0)
             } else if controlMode == .object, let obj = sceneManager.selectedObject {
                 rotateAroundBoundingCenter(obj, by: simd_quatf(angle: -rotStep, axis: SIMD3<Float>(0, 0, 1)))
             } else if controlMode == .model {
@@ -1642,7 +1670,7 @@ final class ViewportView: MTKView {
             if controlMode == .camera {
                 camera.yaw += rotStep
             } else if controlMode == .light {
-                lightManager.rotateSelected(deltaAzimuth: lightStep, deltaElevation: 0)
+                lightManager.rotateSelected(deltaAzimuth: -lightStep, deltaElevation: 0)
             } else if controlMode == .object, let obj = sceneManager.selectedObject {
                 rotateAroundBoundingCenter(obj, by: simd_quatf(angle: rotStep, axis: SIMD3<Float>(0, 0, 1)))
             } else if controlMode == .model {

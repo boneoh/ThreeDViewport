@@ -121,6 +121,20 @@ final class LightManager: ObservableObject {
         lights[selectedIndex] = light
     }
 
+    // Moves the selected light laterally (arrow keys, no modifier).
+    // Positional lights (point/spot/laser) translate in X/Y.
+    // Directional lights have no position — no-op (use Shift+arrow to rotate direction).
+    func moveSelectedLateral(deltaX: Float, deltaY: Float) {
+        guard selectedIndex < lights.count else { return }
+        switch lights[selectedIndex].type {
+        case .ambient, .directional:
+            return
+        case .point, .spot, .laser:
+            lights[selectedIndex].position.x += deltaX
+            lights[selectedIndex].position.y += deltaY
+        }
+    }
+
     // Moves the selected positional light in/out along its direction (+/- keys).
     func moveSelectedDepth(delta: Float) {
         guard selectedIndex < lights.count else { return }

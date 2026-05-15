@@ -485,7 +485,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let greyItem = NSMenuItem(
             title: "Greyscale Mode",
             action: #selector(toggleColorMode(_:)),
-            keyEquivalent: "t"
+            keyEquivalent: "g"
         )
         greyItem.target = self
         viewMenu.addItem(greyItem)
