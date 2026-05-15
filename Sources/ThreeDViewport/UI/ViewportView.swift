@@ -1081,8 +1081,25 @@ final class ViewportView: MTKView {
             }
             translateGroup(parts, by: move)
 
+        } else if controlMode == .light {
+            // Light mode: axis-locked lateral move.
+            if dragLockAxis == .none {
+                dragAccumX += dx
+                dragAccumY += dy
+                let dist = (dragAccumX * dragAccumX + dragAccumY * dragAccumY).squareRoot()
+                guard dist >= dragLockThreshold else { return }
+                dragLockAxis = abs(dragAccumX) >= abs(dragAccumY) ? .horizontal : .vertical
+            }
+
+            let scale = camera.distance * 0.001
+            switch dragLockAxis {
+            case .horizontal: lightManager.moveSelectedLateral(deltaX:  dx * scale, deltaY: 0)
+            case .vertical:   lightManager.moveSelectedLateral(deltaX: 0, deltaY:  dy * scale)
+            case .none:       return
+            }
+
         } else {
-            // Camera / Light mode: axis-locked pan.
+            // Camera mode: axis-locked pan.
             if dragLockAxis == .none {
                 dragAccumX += dx
                 dragAccumY += dy
@@ -1162,8 +1179,12 @@ final class ViewportView: MTKView {
             let pivot = groupCenter(parts)
             rotateGroup(parts, by: vQuat * hQuat, around: pivot)
 
-        case .camera, .light:
-            // Right drag: free-look on both axes (unchanged).
+        case .light:
+            // Right drag: rotate the selected light (azimuth + elevation).
+            lightManager.rotateSelected(deltaAzimuth: -dx * sensitivity, deltaElevation: -dy * sensitivity)
+
+        case .camera:
+            // Right drag: free-look on both axes.
             camera.freeLook(deltaYaw: -dx * sensitivity, deltaPitch: dy * sensitivity)
         }
     }
