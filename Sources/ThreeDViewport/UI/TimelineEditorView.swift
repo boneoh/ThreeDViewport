@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import simd
 
 // MARK: - Clipboard
@@ -62,7 +63,20 @@ final class TimelineEditorView: NSView {
 
     // ── External references ───────────────────────────────────────────────────
 
-    weak var timeline:     Timeline?
+    /// Set by TimelineEditorWindowController.  A Combine subscription is
+    /// installed on didSet so the playhead redraws immediately whenever
+    /// Timeline.currentTime changes — even during event-tracking (slider drag).
+    weak var timeline: Timeline? {
+        didSet {
+            timeSubscription?.cancel()
+            timeSubscription = timeline?.$currentTime
+                .receive(on: RunLoop.main)
+                .sink { [weak self] _ in self?.needsDisplay = true }
+        }
+    }
+    /// Cancellable for the currentTime subscription; lives as long as the view.
+    private var timeSubscription: AnyCancellable?
+
     weak var sceneManager: SceneManager?
     weak var camera:       CameraController?
     weak var lightManager: LightManager?
@@ -252,12 +266,17 @@ final class TimelineEditorView: NSView {
 
     func startRefreshTimer() {
         refreshTimer?.invalidate()
-        // Fire at ~30 fps; sync easing popups and mark dirty for playhead / scene changes.
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0,
-                                            repeats: true) { [weak self] _ in
+        // Fire at ~30 fps; syncs easing popups and marks the view dirty for
+        // general scene changes (object names, keyframe edits, etc.).
+        // Playhead position is additionally driven by the Combine subscription on
+        // Timeline.currentTime, which updates even during event-tracking run loops.
+        // Using .common mode so this timer also fires while the user drags a slider.
+        let t = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
             self?.syncEasingPopupsIfNeeded()
             self?.needsDisplay = true
         }
+        RunLoop.main.add(t, forMode: .common)
+        refreshTimer = t
     }
 
     func stopRefreshTimer() {
@@ -947,30 +966,43 @@ final class TimelineEditorView: NSView {
             seekToAdjacentKeyframe(backward: event.modifierFlags.contains(.shift),
                                    tracks: tracks)
 
-        case 123:       // Left arrow → nudge one frame earlier
+        case 123:       // Left arrow → nudge selected diamond one frame earlier,
+                        // or forward to viewport if no diamond is selected.
             guard !isEditingKeyframe else { super.keyDown(with: event); return }
-            nudgeSelected(by: -1.0 / 30.0, tracks: tracks)
+            if selectedKFIndex != nil || !multiSelectedDiamonds.isEmpty {
+                nudgeSelected(by: -1.0 / 30.0, tracks: tracks)
+            } else {
+                forwardToViewport(event)
+            }
 
-        case 124:       // Right arrow → nudge one frame later
+        case 124:       // Right arrow → nudge selected diamond one frame later,
+                        // or forward to viewport if no diamond is selected.
             guard !isEditingKeyframe else { super.keyDown(with: event); return }
-            nudgeSelected(by:  1.0 / 30.0, tracks: tracks)
+            if selectedKFIndex != nil || !multiSelectedDiamonds.isEmpty {
+                nudgeSelected(by: 1.0 / 30.0, tracks: tracks)
+            } else {
+                forwardToViewport(event)
+            }
 
         default:
             // Forward unrecognised keys to the viewport so shortcuts like
             // O / C / L / arrows still work while the timeline editor has focus.
-            // Set isReceivingForwardedKey on the target first so it doesn't
-            // bounce the event back here (prevents a ping-pong loop).
-            if let target = keyForwardTarget, !isReceivingForwardedKey {
-                if let vp = target as? ViewportView {
-                    vp.isReceivingForwardedKey = true
-                    vp.keyDown(with: event)
-                    vp.isReceivingForwardedKey = false
-                } else {
-                    target.keyDown(with: event)
-                }
+            forwardToViewport(event)
+        }
+    }
+
+    /// Forwards a key event to the viewport, guarded against ping-pong loops.
+    private func forwardToViewport(_ event: NSEvent) {
+        if let target = keyForwardTarget, !isReceivingForwardedKey {
+            if let vp = target as? ViewportView {
+                vp.isReceivingForwardedKey = true
+                vp.keyDown(with: event)
+                vp.isReceivingForwardedKey = false
             } else {
-                super.keyDown(with: event)
+                target.keyDown(with: event)
             }
+        } else {
+            super.keyDown(with: event)
         }
     }
 

@@ -158,7 +158,8 @@ final class ProjectFile {
                 targetY:         kf.target.y,
                 targetZ:         kf.target.z,
                 followTarget:    kf.followTargetName,
-                followYawOffset: kf.followYawOffset
+                followYawOffset: kf.followYawOffset,
+                targetOffset:    [kf.targetOffset.x, kf.targetOffset.y, kf.targetOffset.z]
             )
         }
 
@@ -304,15 +305,20 @@ final class ProjectFile {
             print("[DEBUG] ProjectFile: no camera keyframes in project")
         } else {
             let camTrack = CameraKeyframeTrack()
-            for kf in data.cameraKeyframes {
+            for kfData in data.cameraKeyframes {
+                let savedOffset = kfData.targetOffset ?? [0, 0, 0]
+                let targetOff   = SIMD3<Float>(savedOffset.count >= 3 ? savedOffset[0] : 0,
+                                               savedOffset.count >= 3 ? savedOffset[1] : 0,
+                                               savedOffset.count >= 3 ? savedOffset[2] : 0)
                 camTrack.addKeyframe(CameraKeyframe(
-                    time:             kf.time,
-                    yaw:              kf.yaw,
-                    pitch:            kf.pitch,
-                    distance:         kf.distance,
-                    target:           SIMD3<Float>(kf.targetX, kf.targetY, kf.targetZ),
-                    followTargetName: kf.followTarget,
-                    followYawOffset:  kf.followYawOffset
+                    time:             kfData.time,
+                    yaw:              kfData.yaw,
+                    pitch:            kfData.pitch,
+                    distance:         kfData.distance,
+                    target:           SIMD3<Float>(kfData.targetX, kfData.targetY, kfData.targetZ),
+                    followTargetName: kfData.followTarget,
+                    followYawOffset:  kfData.followYawOffset,
+                    targetOffset:     targetOff
                 ))
             }
             vp.camera.keyframeTrack = camTrack

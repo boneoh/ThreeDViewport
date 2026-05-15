@@ -38,9 +38,9 @@ Hold for smooth repeat. Numpad equivalents: 4/6/8/2/+/−
 | **−** / **KP−** | Zoom out | Move backward (Z−) | Move light back (depth) |
 | **Option++** | — | Scale up 5% | — |
 | **Option+−** | — | Scale down 5% | — |
-| **[** | — | Roll left (Z−) | — |
-| **]** | — | Roll right (Z+) | — |
-| **R** | — | Reset rotation to loaded orientation | — |
+| **[** | Orbit yaw left | Roll left (Z−) | Rotate azimuth left |
+| **]** | Orbit yaw right | Roll right (Z+) | Rotate azimuth right |
+| **R** | Reset to defaults | Reset rotation to loaded orientation | Reset to default direction |
 
 ---
 

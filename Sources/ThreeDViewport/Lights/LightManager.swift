@@ -132,6 +132,23 @@ final class LightManager: ObservableObject {
         }
     }
 
+    // Resets the selected light's direction (or position for point lights) to its
+    // default orientation, leaving colour, intensity, and other settings intact.
+    func resetSelected() {
+        guard selectedIndex < lights.count else { return }
+        var light = lights[selectedIndex]
+        switch light.type {
+        case .directional, .spot, .laser:
+            light.direction = simd_normalize(SIMD3<Float>(0.5, -1.2, -0.8))
+        case .point:
+            light.position = SIMD3<Float>(0, 2, 2)
+        case .ambient:
+            break
+        }
+        lights[selectedIndex] = light
+        print("[DEBUG] LightManager: resetSelected — index=\(selectedIndex)")
+    }
+
     // Adjusts intensity of the selected light, clamped to [0, 20].
     func adjustSelectedIntensity(delta: Float) {
         guard selectedIndex < lights.count else { return }

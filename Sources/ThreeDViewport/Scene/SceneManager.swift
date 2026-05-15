@@ -100,13 +100,27 @@ final class SceneManager {
         return obj
     }
 
-    // Advance selectedIndex by one, wrapping around the object list.
+    /// Indices of root objects (parentIndex == nil) sorted alphabetically by name.
+    /// Used by cycleSelection() and by the Remove submenu.
+    var rootObjectIndicesSorted: [Int] {
+        return objects.indices
+            .filter  { objects[$0].parentIndex == nil }
+            .sorted  { objects[$0].name < objects[$1].name }
+    }
+
+    /// Advance selection to the next root object in alphabetical order, wrapping around.
+    /// Sub-objects (parentIndex != nil) are skipped — they are selectable only via the
+    /// Timeline Editor.
     func cycleSelection() {
-        guard objects.count > 1 else {
-            print("[DEBUG] SceneManager: cycleSelection — only one object")
+        let roots = rootObjectIndicesSorted
+        guard roots.count > 1 else {
+            print("[DEBUG] SceneManager: cycleSelection — fewer than two root objects")
             return
         }
-        selectedIndex = (selectedIndex + 1) % objects.count
+        // Find where the current selectedIndex falls in the sorted root list.
+        let currentPos = roots.firstIndex(of: selectedIndex) ?? -1
+        let nextPos    = (currentPos + 1) % roots.count
+        selectedIndex  = roots[nextPos]
         print("[DEBUG] SceneManager: cycled selection to index " + String(selectedIndex)
             + " ('" + (selectedObject?.name ?? "none") + "')")
     }
@@ -133,55 +147,80 @@ final class SceneManager {
         print("[DEBUG] SceneManager: removed object '" + name + "', remaining count = " + String(objects.count))
     }
 
+    /// Removes the object at `objectIndex` and all other objects that share its
+    /// groupID.  If the object has no groupID it is removed individually.
+    /// Also cleans up groupKeyframeTracks and groupTransforms for the affected group.
+    func removeGroup(containing objectIndex: Int) {
+        guard objectIndex >= 0, objectIndex < objects.count else {
+            print("[DEBUG] SceneManager: removeGroup — index " + String(objectIndex) + " out of range")
+            return
+        }
+        if let gid = objects[objectIndex].groupID {
+            let name = groupName(for: gid)
+            objects.removeAll { $0.groupID == gid }
+            groupKeyframeTracks.removeValue(forKey: gid)
+            groupTransforms.removeValue(forKey: gid)
+            print("[DEBUG] SceneManager: removed group gid=\(gid) '\(name)', remaining count = \(objects.count)")
+        } else {
+            remove(at: objectIndex)
+        }
+    }
+
     // MARK: - Camera follow helpers
 
-    /// Returns the world-space orbit anchor for the named object — the data needed
-    /// for camera-follow.
+    /// Returns the world-space follow state for the named object — the data needed
+    /// for camera-follow keyframes (both at creation time and at runtime).
     ///
-    /// `pos` — world translation (camera orbits around this point).
-    /// `behindYaw` — camera yaw that places the camera directly *behind* the object,
-    ///   i.e. on the side opposite to the object's -Z (GLTF forward) direction.
-    ///   Formula: atan2(columns.2.x, columns.2.z) of the object's world rotation.
+    /// `pos` — world position of the **named object itself** (the camera orbits /
+    ///   looks at this point).  For a head bone the camera will follow the head,
+    ///   for an ungrouped mesh it follows the mesh origin.
     ///
-    /// Uses the group transform for grouped objects (so the camera follows the whole
-    /// group as one unit, not just an individual part), or the object's own transform
-    /// for ungrouped objects.
+    /// `behindYaw` — camera yaw that places the camera directly *behind* the body,
+    ///   derived from the **group root's** world orientation (not the sub-part).
+    ///   This keeps the "behind" direction aligned with the whole character's facing
+    ///   direction even when the selected sub-part (e.g. a head) has its own local
+    ///   rotation.  Formula: atan2(columns.2.x, columns.2.z).
+    ///
+    /// Design note — two matrices, one per purpose:
+    ///   • `posMat`  : always the named object's own world transform → correct height
+    ///                 and lateral position (e.g. the head, not the feet).
+    ///   • `yawMat`  : group-root (or group keyframe) transform → body facing direction.
+    ///   When a group keyframe is present it drives both, because the group transform
+    ///   already represents the whole model's world pose.
     func worldOrbitAnchor(ofObjectNamed name: String)
         -> (pos: SIMD3<Float>, behindYaw: Float)? {
         guard let obj = objects.first(where: { $0.name == name }) else { return nil }
 
-        // Determine which transform to use as the orbit anchor.
-        //
-        // Priority:
-        //   1. Explicit group transform (driven by group keyframe animation) —
-        //      represents the whole-model pose, so it's the correct pivot.
-        //   2. Group root object's transform — used when no group keyframe has
-        //      been applied yet.  Keeps the camera orbiting around the model's
-        //      natural pivot regardless of which sub-part the user selected.
-        //      Without this, selecting a sub-part (e.g. chest panel) would put
-        //      the orbit anchor on the part's surface, pulling the camera inside
-        //      the model and making that part appear displaced in the viewport.
-        //   3. Object's own transform — for ungrouped root objects.
-        let mat: matrix_float4x4
+        let posMat:  matrix_float4x4   // for extracting world position of the target
+        let yawMat:  matrix_float4x4   // for extracting the body's facing direction
+
         if let gid = obj.groupID {
             if let groupMat = groupTransforms[gid] {
-                // Group has an active keyframe-animated transform.
-                mat = groupMat
+                // Group has a keyframe-animated transform — it represents the full
+                // model pose, so use it for both position and facing direction.
+                posMat = groupMat
+                yawMat = groupMat
             } else {
-                // No group keyframe yet — use the root node of this group so the
-                // camera orbits around the model's pivot, not the selected sub-part.
+                // No group keyframe yet.
+                //   pos  → the named object's own world transform (updated each frame
+                //          by Renderer.applyHierarchy), so a head bone tracks the head.
+                //   yaw  → the group root's transform so "behind" means "behind the
+                //          whole character body", regardless of head rotation.
                 let root = objects.first(where: { $0.groupID == gid && $0.parentIndex == nil })
-                mat = root?.transform ?? obj.transform
+                posMat = obj.transform
+                yawMat = root?.transform ?? obj.transform
             }
         } else {
-            mat = obj.transform
+            // Ungrouped object — its own transform covers both needs.
+            posMat = obj.transform
+            yawMat = obj.transform
         }
 
-        let pos = SIMD3<Float>(mat.columns.3.x, mat.columns.3.y, mat.columns.3.z)
+        let pos = SIMD3<Float>(posMat.columns.3.x, posMat.columns.3.y, posMat.columns.3.z)
         // "Behind yaw": the camera yaw that places the orbit eye on the +Z (local)
-        // side of the object.  In GLTF the -Z axis is forward, so +Z is behind.
+        // side of the body.  In GLTF the -Z axis is forward, so +Z is behind.
         // atan2(columns.2.x, columns.2.z) gives the world-space angle of that axis.
-        let behindYaw = atan2(mat.columns.2.x, mat.columns.2.z)
+        let behindYaw = atan2(yawMat.columns.2.x, yawMat.columns.2.z)
 
         return (pos: pos, behindYaw: behindYaw)
     }

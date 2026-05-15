@@ -40,6 +40,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
     private var kfEditSnapshot: KFEditSnapshot? = nil
 
+    // Explicitly-tracked main window frame.
+    // Updated by windowDidMove / windowDidResize so we always have the latest
+    // user-positioned frame, even if the NSWindow frame property lags.
+    private var trackedMainWindowFrame: NSRect?
+
+    // Frame we want the main window to be at after the next sheet dismissal.
+    // Set by applyWindowLayout so that windowDidEndSheet can re-apply the
+    // saved position after macOS's sheet-dismissal animation moves the window.
+    // Cleared by windowWillBeginSheet so stale values don't fire on unrelated sheets.
+    private var pendingMainWindowFrame: NSRect?
+
     // Tracks which secondary windows were hidden when the main window miniaturized.
     private var panelsHiddenByMiniaturize: Set<String> = []
 
@@ -75,8 +86,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             defer: false
         )
         window = w
-        w.title    = "ThreeDViewport"
-        w.delegate = self
+        w.title        = "ThreeDViewport"
+        w.delegate     = self
+        // Disable macOS's built-in window-state restoration so it never
+        // overrides our project-file-driven window layout.  Without this,
+        // macOS animates the window back to its OS-remembered position after
+        // every applyWindowLayout setFrame call.
+        w.isRestorable = false
         w.center()
 
         // ── Container ─────────────────────────────────────────────────────────
@@ -202,7 +218,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     /// Collects the current position and size of every managed window/panel.
     private func currentWindowLayout() -> WindowLayoutData {
         var layout = WindowLayoutData()
-        if let f = window?.frame {
+        // Prefer the delegate-tracked frame (updated on every move/resize) over
+        // reading window.frame directly, which can return a stale value in some
+        // macOS edge cases (e.g. right after sheet dismissal).
+        let trackedF = trackedMainWindowFrame
+        let liveF    = window?.frame
+        let f = trackedF ?? liveF
+
+        if let f = f {
             layout.mainWindow = WindowFrameData(x: f.origin.x, y: f.origin.y,
                                                 w: f.size.width, h: f.size.height)
         }
@@ -231,9 +254,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     /// Restores window/panel positions from a saved layout.
     private func applyWindowLayout(_ layout: WindowLayoutData) {
-        // Main window
+        // Main window — only restore if the saved frame is non-zero (older project files
+        // that pre-date the window-layout feature decode a default WindowFrameData with
+        // all-zero fields; applying that would collapse the window to zero size).
         let mf = layout.mainWindow
-        window?.setFrame(NSRect(x: mf.x, y: mf.y, width: mf.w, height: mf.h), display: true)
+        if mf.w > 0 && mf.h > 0 {
+            let restoredFrame = NSRect(x: mf.x, y: mf.y, width: mf.w, height: mf.h)
+            window?.setFrame(restoredFrame, display: true)
+            // Seed the tracked frame so currentWindowLayout() returns the restored
+            // position correctly even before the user moves the window again.
+            trackedMainWindowFrame = restoredFrame
+            // Remember the target frame so windowDidEndSheet can re-apply it after
+            // macOS's sheet-dismissal animation slides the window back to its
+            // pre-sheet position (overriding our setFrame above).
+            pendingMainWindowFrame = restoredFrame
+        }
 
         // Timeline editor — open and position if it was visible
         if let tf = layout.timelineEditor {
@@ -828,6 +863,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     func windowDidDeminiaturize(_ notification: Notification) {
         restoreHiddenPanels()
+    }
+
+    // Track every user-initiated move or resize so currentWindowLayout() always
+    // has an up-to-date frame, even if NSWindow.frame lags in some edge cases.
+    func windowDidMove(_ notification: Notification) {
+        guard notification.object as? NSWindow === window else { return }
+        trackedMainWindowFrame = window?.frame
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        guard notification.object as? NSWindow === window else { return }
+        trackedMainWindowFrame = window?.frame
+    }
+
+    // After a sheet opens, clear any stale pendingMainWindowFrame from a previous
+    // project load so the Save As (or any other) sheet closing doesn't try to
+    // restore an outdated position.
+    func windowWillBeginSheet(_ notification: Notification) {
+        guard notification.object as? NSWindow === window else { return }
+        pendingMainWindowFrame = nil
+    }
+
+    // macOS plays a sheet-dismissal animation on the parent window AFTER the
+    // completion handler fires.  That animation overrides the setFrame we called
+    // in applyWindowLayout.  windowDidEndSheet fires once the animation is done,
+    // giving us a clean moment to re-apply the saved position.
+    func windowDidEndSheet(_ notification: Notification) {
+        guard notification.object as? NSWindow === window else { return }
+        guard let frame = pendingMainWindowFrame else { return }
+        pendingMainWindowFrame = nil
+        window?.setFrame(frame, display: true)
+        trackedMainWindowFrame = frame
     }
 
     private func restoreHiddenPanels() {
@@ -1485,19 +1552,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard menu === removeSubmenu else { return }
         menu.removeAllItems()
         guard let scene = viewportView?.sceneManager else { return }
-        if scene.objects.isEmpty {
+
+        // Show only root objects (parentIndex == nil), sorted alphabetically.
+        // Sub-objects belong to groups and are managed through the Timeline Editor.
+        let parents = scene.rootObjectIndicesSorted   // already filtered + sorted
+
+        if parents.isEmpty {
             let empty = NSMenuItem(title: "No Objects", action: nil, keyEquivalent: "")
             empty.isEnabled = false
             menu.addItem(empty)
         } else {
-            for (index, obj) in scene.objects.enumerated() {
+            for idx in parents {
+                let obj  = scene.objects[idx]
+                // Display the group name (e.g. filename) for grouped models,
+                // or the object name for standalone objects.
+                let displayName: String
+                if let gid = obj.groupID {
+                    displayName = scene.groupName(for: gid)
+                } else {
+                    displayName = obj.name
+                }
                 let item = NSMenuItem(
-                    title: obj.name,
+                    title: displayName,
                     action: #selector(confirmRemoveObject(_:)),
                     keyEquivalent: ""
                 )
                 item.target = self
-                item.tag = index
+                item.tag    = idx   // index of the root object in sceneManager.objects
                 menu.addItem(item)
             }
         }
@@ -1507,18 +1588,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let scene = viewportView?.sceneManager else { return }
         let index = sender.tag
         guard index >= 0, index < scene.objects.count else { return }
-        let name = scene.objects[index].name
+
+        let obj = scene.objects[index]
+        let displayName: String
+        if let gid = obj.groupID {
+            displayName = scene.groupName(for: gid)
+        } else {
+            displayName = obj.name
+        }
 
         let alert = NSAlert()
-        alert.messageText = "Remove \"\(name)\"?"
-        alert.informativeText = "Are you sure you want to remove \(name) from the project?"
-        alert.alertStyle = .warning
+        alert.messageText     = "Remove \"\(displayName)\"?"
+        alert.informativeText = "Are you sure you want to remove \(displayName) from the project?"
+        alert.alertStyle      = .warning
         alert.addButton(withTitle: "Remove")
         alert.addButton(withTitle: "Cancel")
 
         let response = alert.runModal()
         if response == .alertFirstButtonReturn {
-            scene.remove(at: index)
+            // Removes the root and all sub-objects that share its groupID.
+            scene.removeGroup(containing: index)
             markDirty()
             timelineEditorWC?.updateWindowHeight()
         }

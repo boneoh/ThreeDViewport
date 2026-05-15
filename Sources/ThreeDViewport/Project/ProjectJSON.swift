@@ -288,6 +288,9 @@ struct CameraKeyframeData: Codable {
     /// Camera yaw stored as an offset from the object's "behind yaw" at creation time.
     /// nil = no yaw-relative follow (absolute yaw / position-only follow).
     var followYawOffset: Float?  = nil
+    /// World-space offset from the node origin to the camera target at creation time.
+    /// nil / absent in older project files — treated as (0, 0, 0) on load.
+    var targetOffset: [Float]? = nil
 
     // Custom decoder so files saved before camera-follow fields decode cleanly.
     init(from decoder: Decoder) throws {
@@ -299,13 +302,15 @@ struct CameraKeyframeData: Codable {
         targetX  = try  c.decode(Float.self,  forKey: .targetX)
         targetY  = try  c.decode(Float.self,  forKey: .targetY)
         targetZ  = try  c.decode(Float.self,  forKey: .targetZ)
-        followTarget    = try? c.decode(String.self, forKey: .followTarget)
-        followYawOffset = try? c.decode(Float.self,  forKey: .followYawOffset)
+        followTarget    = try? c.decode(String.self,  forKey: .followTarget)
+        followYawOffset = try? c.decode(Float.self,   forKey: .followYawOffset)
+        targetOffset    = try? c.decode([Float].self, forKey: .targetOffset)
     }
 
     init(time: Double, yaw: Float, pitch: Float, distance: Float,
          targetX: Float, targetY: Float, targetZ: Float,
-         followTarget: String? = nil, followYawOffset: Float? = nil) {
+         followTarget: String? = nil, followYawOffset: Float? = nil,
+         targetOffset: [Float]? = nil) {
         self.time            = time
         self.yaw             = yaw
         self.pitch           = pitch
@@ -315,6 +320,7 @@ struct CameraKeyframeData: Codable {
         self.targetZ         = targetZ
         self.followTarget    = followTarget
         self.followYawOffset = followYawOffset
+        self.targetOffset    = targetOffset
     }
 }
 

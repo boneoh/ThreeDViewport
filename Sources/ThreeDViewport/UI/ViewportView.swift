@@ -278,14 +278,25 @@ final class ViewportView: MTKView {
             objects.first?.name = baseName
 
             let isFirst = sceneManager.objects.isEmpty
+            // Offset every parentIndex in the new batch by the number of objects
+            // already in the scene.  GLTFLoader sets parentIndex relative to the
+            // local (per-file) array starting at 0; after appending they must refer
+            // to positions in the global sceneManager.objects array.
+            let offset = sceneManager.objects.count
+            for obj in objects where obj.parentIndex != nil {
+                obj.parentIndex! += offset
+            }
             sceneManager.objects.append(contentsOf: objects)
-            sceneManager.selectedIndex = sceneManager.objects.count - 1
+            // Select the root of the newly added model (first object with parentIndex == nil).
+            let firstRootLocal = objects.firstIndex(where: { $0.parentIndex == nil }) ?? 0
+            sceneManager.selectedIndex = offset + firstRootLocal
 
             if isFirst {
                 camera.fitToScene(boundingRadius: radius, center: center)
             }
 
-            syncOverlayState()
+            // Switch to Object mode so the user can immediately manipulate the new model.
+            setControlMode(.object)
 
             print("[DEBUG] ViewportView: addModelToScene complete — total objects=\(sceneManager.objects.count) groupID=\(gid.map { String($0) } ?? "none")")
         } else {
@@ -866,11 +877,13 @@ final class ViewportView: MTKView {
         // of the object right now.  At runtime, this offset is re-applied on top of
         // the object's current behind-yaw so the camera stays in the same relative
         // bearing regardless of how much the object has rotated.
-        let followYawOffset: Float?
+        // Also capture the offset from the node origin to the current camera target
+        // so the camera orbits the visual centre rather than the raw joint origin.
+        var followYawOffset: Float? = nil
+        var targetOffset = SIMD3<Float>(0, 0, 0)
         if let anchor = sceneManager.worldOrbitAnchor(ofObjectNamed: obj.name) {
             followYawOffset = camera.yaw - anchor.behindYaw
-        } else {
-            followYawOffset = nil
+            targetOffset    = camera.target - anchor.pos
         }
 
         let kf = CameraKeyframe(
@@ -880,7 +893,8 @@ final class ViewportView: MTKView {
             distance:         camera.distance,
             target:           camera.target,
             followTargetName: obj.name,
-            followYawOffset:  followYawOffset
+            followYawOffset:  followYawOffset,
+            targetOffset:     targetOffset
         )
         camera.keyframeTrack?.addKeyframe(kf)
 
@@ -901,11 +915,11 @@ final class ViewportView: MTKView {
             camera.keyframeTrack = CameraKeyframeTrack()
             print("[DEBUG] ViewportView: created new CameraKeyframeTrack")
         }
-        let followYawOffset: Float?
+        var followYawOffset: Float? = nil
+        var targetOffset = SIMD3<Float>(0, 0, 0)
         if let anchor = sceneManager.worldOrbitAnchor(ofObjectNamed: targetName) {
             followYawOffset = camera.yaw - anchor.behindYaw
-        } else {
-            followYawOffset = nil
+            targetOffset    = camera.target - anchor.pos
         }
         let kf = CameraKeyframe(
             time:             timeline.currentTime,
@@ -914,7 +928,8 @@ final class ViewportView: MTKView {
             distance:         camera.distance,
             target:           camera.target,
             followTargetName: targetName,
-            followYawOffset:  followYawOffset
+            followYawOffset:  followYawOffset,
+            targetOffset:     targetOffset
         )
         camera.keyframeTrack?.addKeyframe(kf)
 
@@ -1151,6 +1166,38 @@ final class ViewportView: MTKView {
             // Right drag: free-look on both axes (unchanged).
             camera.freeLook(deltaYaw: dx * sensitivity, deltaPitch: dy * sensitivity)
         }
+    }
+
+    /// Rotates `obj` by quaternion `q` around its bounding-box centre (world space),
+    /// so the object spins in-place rather than orbiting the world origin.
+    /// Matches the right-drag rotation logic; call syncLocalTransform internally.
+    private func rotateAroundBoundingCenter(_ obj: SceneObject, by q: simd_quatf) {
+        let localCentre = (obj.boundingMin + obj.boundingMax) * 0.5
+        let wc4   = obj.transform * SIMD4<Float>(localCentre, 1)
+        let pivot = SIMD3<Float>(wc4.x, wc4.y, wc4.z)
+
+        let rot = rotationMatrix4x4(q)
+
+        // Rotate the orientation columns (w=0 so translation is unaffected).
+        let c0 = rot * SIMD4<Float>(obj.transform.columns.0.x,
+                                     obj.transform.columns.0.y,
+                                     obj.transform.columns.0.z, 0)
+        let c1 = rot * SIMD4<Float>(obj.transform.columns.1.x,
+                                     obj.transform.columns.1.y,
+                                     obj.transform.columns.1.z, 0)
+        let c2 = rot * SIMD4<Float>(obj.transform.columns.2.x,
+                                     obj.transform.columns.2.y,
+                                     obj.transform.columns.2.z, 0)
+        obj.transform.columns.0 = SIMD4<Float>(c0.x, c0.y, c0.z, 0)
+        obj.transform.columns.1 = SIMD4<Float>(c1.x, c1.y, c1.z, 0)
+        obj.transform.columns.2 = SIMD4<Float>(c2.x, c2.y, c2.z, 0)
+
+        // Reposition so the local bounding centre stays at its world-space pivot.
+        let mc4    = obj.transform * SIMD4<Float>(localCentre, 0)
+        let newPos = pivot - SIMD3<Float>(mc4.x, mc4.y, mc4.z)
+        obj.transform.columns.3 = SIMD4<Float>(newPos.x, newPos.y, newPos.z, 1)
+
+        syncLocalTransform(obj)
     }
 
     private func rotationMatrix4x4(_ q: simd_quatf) -> matrix_float4x4 {
@@ -1434,11 +1481,17 @@ final class ViewportView: MTKView {
                 return
 
             case KC.r:
-                // R — reset the selected object's rotation to its original loaded orientation.
-                // Position and scale are preserved; only the rotation is replaced.
+                // R — reset rotation / orientation to defaults.
+                //   Object/Model : restore original loaded rotation (position/scale preserved).
+                //   Camera       : reset to default yaw/pitch/distance/target.
+                //   Light        : reset selected light's direction to its default.
                 if controlMode == .object,
                    let obj = sceneManager.selectedObject ?? sceneManager.primaryObject {
                     resetObjectOrientation(obj)
+                } else if controlMode == .camera {
+                    camera.reset()
+                } else if controlMode == .light {
+                    lightManager.resetSelected()
                 }
                 return
 
@@ -1464,12 +1517,11 @@ final class ViewportView: MTKView {
             case .object:
                 if let obj = sceneManager.selectedObject {
                     if event.modifierFlags.contains(.shift) {
-                        let q = simd_quatf(angle: -rotStep, axis: SIMD3<Float>(0, 1, 0))
-                        obj.transform = rotationMatrix4x4(q) * obj.transform
+                        rotateAroundBoundingCenter(obj, by: simd_quatf(angle: -rotStep, axis: SIMD3<Float>(0, 1, 0)))
                     } else {
                         obj.transform.columns.3.x -= translateStep
+                        syncLocalTransform(obj)
                     }
-                    syncLocalTransform(obj)
                 }
             case .model:
                 let parts = groupParts()
@@ -1495,12 +1547,11 @@ final class ViewportView: MTKView {
             case .object:
                 if let obj = sceneManager.selectedObject {
                     if event.modifierFlags.contains(.shift) {
-                        let q = simd_quatf(angle: rotStep, axis: SIMD3<Float>(0, 1, 0))
-                        obj.transform = rotationMatrix4x4(q) * obj.transform
+                        rotateAroundBoundingCenter(obj, by: simd_quatf(angle: rotStep, axis: SIMD3<Float>(0, 1, 0)))
                     } else {
                         obj.transform.columns.3.x += translateStep
+                        syncLocalTransform(obj)
                     }
-                    syncLocalTransform(obj)
                 }
             case .model:
                 let parts = groupParts()
@@ -1526,12 +1577,11 @@ final class ViewportView: MTKView {
             case .object:
                 if let obj = sceneManager.selectedObject {
                     if event.modifierFlags.contains(.shift) {
-                        let q = simd_quatf(angle: rotStep, axis: SIMD3<Float>(1, 0, 0))
-                        obj.transform = rotationMatrix4x4(q) * obj.transform
+                        rotateAroundBoundingCenter(obj, by: simd_quatf(angle: rotStep, axis: SIMD3<Float>(1, 0, 0)))
                     } else {
                         obj.transform.columns.3.y += translateStep
+                        syncLocalTransform(obj)
                     }
-                    syncLocalTransform(obj)
                 }
             case .model:
                 let parts = groupParts()
@@ -1557,12 +1607,11 @@ final class ViewportView: MTKView {
             case .object:
                 if let obj = sceneManager.selectedObject {
                     if event.modifierFlags.contains(.shift) {
-                        let q = simd_quatf(angle: -rotStep, axis: SIMD3<Float>(1, 0, 0))
-                        obj.transform = rotationMatrix4x4(q) * obj.transform
+                        rotateAroundBoundingCenter(obj, by: simd_quatf(angle: -rotStep, axis: SIMD3<Float>(1, 0, 0)))
                     } else {
                         obj.transform.columns.3.y -= translateStep
+                        syncLocalTransform(obj)
                     }
-                    syncLocalTransform(obj)
                 }
             case .model:
                 let parts = groupParts()
@@ -1576,21 +1625,26 @@ final class ViewportView: MTKView {
 
         // ── [ / { — roll left (object or group) ───────────────────────────────
         case KC.leftBracket:
-            if controlMode == .object, let obj = sceneManager.selectedObject {
-                let q = simd_quatf(angle: -rotStep, axis: SIMD3<Float>(0, 0, 1))
-                obj.transform = rotationMatrix4x4(q) * obj.transform
-                syncLocalTransform(obj)
+            // Object/Model: roll left (Z−).  Camera: orbit yaw left.  Light: rotate azimuth left.
+            if controlMode == .camera {
+                camera.yaw -= rotStep
+            } else if controlMode == .light {
+                lightManager.rotateSelected(deltaAzimuth: -lightStep, deltaElevation: 0)
+            } else if controlMode == .object, let obj = sceneManager.selectedObject {
+                rotateAroundBoundingCenter(obj, by: simd_quatf(angle: -rotStep, axis: SIMD3<Float>(0, 0, 1)))
             } else if controlMode == .model {
                 let parts = groupParts()
                 rotateGroup(parts, by: simd_quatf(angle: -rotStep, axis: SIMD3<Float>(0, 0, 1)), around: groupCenter(parts))
             }
 
-        // ── ] / } — roll right (object or group) ──────────────────────────────
+        // ── ] / } — roll right (object or group); orbit yaw right (camera); azimuth right (light)
         case KC.rightBracket:
-            if controlMode == .object, let obj = sceneManager.selectedObject {
-                let q = simd_quatf(angle: rotStep, axis: SIMD3<Float>(0, 0, 1))
-                obj.transform = rotationMatrix4x4(q) * obj.transform
-                syncLocalTransform(obj)
+            if controlMode == .camera {
+                camera.yaw += rotStep
+            } else if controlMode == .light {
+                lightManager.rotateSelected(deltaAzimuth: lightStep, deltaElevation: 0)
+            } else if controlMode == .object, let obj = sceneManager.selectedObject {
+                rotateAroundBoundingCenter(obj, by: simd_quatf(angle: rotStep, axis: SIMD3<Float>(0, 0, 1)))
             } else if controlMode == .model {
                 let parts = groupParts()
                 rotateGroup(parts, by: simd_quatf(angle: rotStep, axis: SIMD3<Float>(0, 0, 1)), around: groupCenter(parts))

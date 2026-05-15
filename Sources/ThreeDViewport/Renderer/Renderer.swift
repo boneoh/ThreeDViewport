@@ -359,6 +359,11 @@ final class Renderer: NSObject, MTKViewDelegate {
         // of a parent (e.g. rotating an upper arm) propagates to children
         // immediately regardless of whether animation is playing.
         applyHierarchy()
+        // Camera follow is evaluated AFTER applyHierarchy so that sub-part world
+        // transforms (e.g. a head bone) are fully up-to-date before worldOrbitAnchor
+        // reads them.  Also runs every frame — not just when time changes — so the
+        // camera stays locked to a moving target while playback is active.
+        applyCameraFollow()
 
         view.clearColor = backgroundConfig.clearColor
 
@@ -917,24 +922,15 @@ final class Renderer: NSObject, MTKViewDelegate {
             }
         }
 
-        // ── Camera ────────────────────────────────────────────────────────────
+        // ── Camera (base evaluation) ──────────────────────────────────────────
+        // The follow override is applied separately in applyCameraFollow(), called
+        // after applyHierarchy() so sub-part world transforms are fully up-to-date.
         if let camTrack = camera.keyframeTrack, !camTrack.keyframes.isEmpty {
             if let state = camTrack.evaluate(at: timeline.currentTime) {
                 camera.yaw      = state.yaw
                 camera.pitch    = state.pitch
                 camera.distance = state.distance
                 camera.target   = state.target
-            }
-            // Camera-follow override: replace target (and yaw when yaw-relative follow
-            // is active) so the camera tracks the object's position and orientation.
-            if let follow = camTrack.resolveFollowCamera(
-                at:              timeline.currentTime,
-                getObjectState:  { [weak self] name in
-                    self?.sceneManager.worldOrbitAnchor(ofObjectNamed: name)
-                }
-            ) {
-                camera.target = follow.target
-                if let yaw = follow.yaw { camera.yaw = yaw }
             }
         }
 
@@ -967,6 +963,24 @@ final class Renderer: NSObject, MTKViewDelegate {
             guard let parentIdx = obj.parentIndex,
                   parentIdx < objects.count else { continue }
             obj.transform = objects[parentIdx].transform * obj.localTransform
+        }
+    }
+
+    /// Applies the camera-follow override using the world transforms that were
+    /// just computed by applyHierarchy().  Must be called every frame after
+    /// applyHierarchy() — NOT inside applyAnimation() — so that sub-part
+    /// transforms (e.g. a head bone) are fully propagated before they are read.
+    private func applyCameraFollow() {
+        guard let camTrack = camera.keyframeTrack,
+              !camTrack.keyframes.isEmpty else { return }
+        if let follow = camTrack.resolveFollowCamera(
+            at:             timeline.currentTime,
+            getObjectState: { [weak self] name in
+                self?.sceneManager.worldOrbitAnchor(ofObjectNamed: name)
+            }
+        ) {
+            camera.target = follow.target
+            if let yaw = follow.yaw { camera.yaw = yaw }
         }
     }
 }
