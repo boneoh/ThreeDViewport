@@ -74,16 +74,15 @@ final class LightManager: ObservableObject {
 
     // MARK: - Keyboard control (Phase 6/7)
 
-    // Rotates/moves the selected light according to its type.
-    //   • Directional / spot / laser — rotates direction vector
-    //   • Point — moves position horizontally and vertically
-    //   • Ambient — no-op
+    // Rotates the selected light's direction vector.
+    //   • Directional / spot / laser — rotates direction
+    //   • Point / ambient — no-op (no direction to rotate)
     func rotateSelected(deltaAzimuth: Float, deltaElevation: Float) {
         guard selectedIndex < lights.count else { return }
         var light = lights[selectedIndex]
 
         switch light.type {
-        case .ambient:
+        case .ambient, .point:
             return
 
         case .directional, .spot, .laser:
@@ -108,41 +107,21 @@ final class LightManager: ObservableObject {
                 + String(format: "%.2f", light.direction.x) + ","
                 + String(format: "%.2f", light.direction.y) + ","
                 + String(format: "%.2f", light.direction.z) + ")")
-
-        case .point:
-            light.position.x += deltaAzimuth  * 0.3
-            light.position.y -= deltaElevation * 0.3
-            print("[DEBUG] LightManager: position=("
-                + String(format: "%.2f", light.position.x) + ","
-                + String(format: "%.2f", light.position.y) + ","
-                + String(format: "%.2f", light.position.z) + ")")
         }
 
         lights[selectedIndex] = light
     }
 
-    // Moves the selected light laterally (arrow keys, no modifier).
-    // Positional lights (point/spot/laser) translate in X/Y.
-    // Directional lights have no position — no-op (use Shift+arrow to rotate direction).
-    func moveSelectedLateral(deltaX: Float, deltaY: Float) {
+    // Translates the selected light's position by a world-space delta.
+    // Callers supply the delta in whatever frame they want (camera-relative is typical).
+    // No-op for ambient and directional lights (they have no position).
+    func translateSelected(by delta: SIMD3<Float>) {
         guard selectedIndex < lights.count else { return }
         switch lights[selectedIndex].type {
         case .ambient, .directional:
             return
         case .point, .spot, .laser:
-            lights[selectedIndex].position.x += deltaX
-            lights[selectedIndex].position.y += deltaY
-        }
-    }
-
-    // Moves the selected positional light in/out along its direction (+/- keys).
-    func moveSelectedDepth(delta: Float) {
-        guard selectedIndex < lights.count else { return }
-        switch lights[selectedIndex].type {
-        case .point, .spot, .laser:
-            lights[selectedIndex].position += lights[selectedIndex].direction * delta
-        default:
-            break
+            lights[selectedIndex].position += delta
         }
     }
 

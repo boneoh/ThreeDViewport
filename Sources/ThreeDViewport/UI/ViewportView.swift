@@ -1082,7 +1082,10 @@ final class ViewportView: MTKView {
             translateGroup(parts, by: move)
 
         } else if controlMode == .light {
-            // Light mode: axis-locked lateral move.
+            // Light mode: axis-locked drag.
+            //   Directional → steer (rotate direction)
+            //   Point / spot / laser → translate position camera-relative
+            //   Ambient → no-op
             if dragLockAxis == .none {
                 dragAccumX += dx
                 dragAccumY += dy
@@ -1091,11 +1094,21 @@ final class ViewportView: MTKView {
                 dragLockAxis = abs(dragAccumX) >= abs(dragAccumY) ? .horizontal : .vertical
             }
 
-            let scale = camera.distance * 0.001
-            switch dragLockAxis {
-            case .horizontal: lightManager.moveSelectedLateral(deltaX:  dx * scale, deltaY: 0)
-            case .vertical:   lightManager.moveSelectedLateral(deltaX: 0, deltaY:  dy * scale)
-            case .none:       return
+            let lockedDx: Float = (dragLockAxis == .horizontal) ? dx : 0
+            let lockedDy: Float = (dragLockAxis == .vertical)   ? dy : 0
+
+            switch lightManager.selectedLight?.type {
+            case .directional:
+                let sensitivity: Float = 0.005
+                lightManager.rotateSelected(deltaAzimuth:   -lockedDx * sensitivity,
+                                            deltaElevation: -lockedDy * sensitivity)
+            case .point, .spot, .laser:
+                let scale = camera.distance * 0.001
+                let d = camera.rightVector * (lockedDx * scale)
+                      + camera.upVector    * (lockedDy * scale)
+                lightManager.translateSelected(by: d)
+            default:
+                break
             }
 
         } else {
@@ -1277,9 +1290,11 @@ final class ViewportView: MTKView {
             return
         }
 
-        // Light mode: move the selected light toward / away from the scene.
+        // Light mode: move the selected light toward / away from the scene
+        // (along the camera's forward axis — "into / out of the screen").
         if controlMode == .light, !timeline.isPlaying {
-            lightManager.moveSelectedDepth(delta: delta * camera.distance * 0.05)
+            let move = delta * camera.distance * 0.05
+            lightManager.translateSelected(by: camera.forwardVector * move)
             return
         }
 
@@ -1353,6 +1368,141 @@ final class ViewportView: MTKView {
             if let t = sorted.last(where: { $0 < cur - eps }) { timeline.seek(to: t) }
         } else {
             if let t = sorted.first(where: { $0 > cur + eps }) { timeline.seek(to: t) }
+        }
+    }
+
+    // MARK: - Arrow-key dispatch
+    //
+    // Plain arrow = primary action; Shift+arrow = secondary.
+    //   • Camera primary  : `camera.pan` (truck/pedestal)
+    //   • Camera secondary: `camera.freeLook` (aim rotation)
+    //   • Object/Model primary  : translate, camera-relative
+    //   • Object/Model secondary: rotate (rotateInPlace around world axes)
+    //   • Light primary  : steer (directional) or translate position camera-relative (point/spot/laser)
+    //   • Light secondary: rotate direction (directional/spot/laser); no-op for point/ambient
+    //
+    // (dx, dy) ∈ {(±1, 0), (0, ±1)} — screen-space direction (right = +x, up = +y).
+
+    private func applyArrow(dx: Int, dy: Int, shift: Bool) {
+        let dxF   = Float(dx)
+        let dyF   = Float(dy)
+        let right = camera.rightVector
+        let up    = camera.upVector
+
+        switch controlMode {
+        case .camera:
+            if shift {
+                // Free-look (aim rotates).  Sign convention matches the previous
+                // Shift+arrow behavior: dx>0 → free-look yaw +rotStep, dy>0 → +pitch.
+                camera.freeLook(deltaYaw: dxF * rotStep, deltaPitch: dyF * rotStep)
+            } else {
+                // Truck / pedestal.  Sign convention matches the previous plain-arrow
+                // behavior: dx>0 (→) calls camera.pan(deltaX: -panStep, 0), and
+                // dx<0 (←) calls camera.pan(deltaX: +panStep, 0).
+                camera.pan(deltaX: -dxF * panStep, deltaY: dyF * panStep)
+            }
+
+        case .light:
+            let translateDelta = (right * dxF + up * dyF) * translateStep
+            if shift {
+                // Secondary: rotate direction (directional/spot/laser).  point/ambient: no-op.
+                lightManager.rotateSelected(deltaAzimuth:   -dxF * lightStep,
+                                            deltaElevation: -dyF * lightStep)
+            } else {
+                // Primary: steer for directional only; translate for point/spot/laser.
+                switch lightManager.selectedLight?.type {
+                case .directional:
+                    lightManager.rotateSelected(deltaAzimuth:   -dxF * lightStep,
+                                                deltaElevation: -dyF * lightStep)
+                case .point, .spot, .laser:
+                    lightManager.translateSelected(by: translateDelta)
+                default:
+                    break
+                }
+            }
+
+        case .object:
+            guard let obj = sceneManager.selectedObject else { return }
+            if shift {
+                // Secondary: rotate around world Y (for ←/→) or world X (for ↑/↓).
+                if dx != 0 {
+                    rotateInPlace(obj, by: simd_quatf(angle:  dxF * rotStep,
+                                                       axis: SIMD3<Float>(0, 1, 0)))
+                }
+                if dy != 0 {
+                    rotateInPlace(obj, by: simd_quatf(angle: -dyF * rotStep,
+                                                       axis: SIMD3<Float>(1, 0, 0)))
+                }
+            } else {
+                // Primary: camera-relative translation.
+                let d = (right * dxF + up * dyF) * translateStep
+                obj.transform.columns.3.x += d.x
+                obj.transform.columns.3.y += d.y
+                obj.transform.columns.3.z += d.z
+                syncLocalTransform(obj)
+            }
+
+        case .model:
+            let parts = groupParts()
+            guard !parts.isEmpty else { return }
+            if shift {
+                let pivot = groupCenter(parts)
+                if dx != 0 {
+                    rotateGroup(parts,
+                                by: simd_quatf(angle:  dxF * rotStep,
+                                               axis: SIMD3<Float>(0, 1, 0)),
+                                around: pivot)
+                }
+                if dy != 0 {
+                    rotateGroup(parts,
+                                by: simd_quatf(angle: -dyF * rotStep,
+                                               axis: SIMD3<Float>(1, 0, 0)),
+                                around: pivot)
+                }
+            } else {
+                translateGroup(parts, by: (right * dxF + up * dyF) * translateStep)
+            }
+        }
+    }
+
+    /// `+` / `−` keys: depth movement along camera-forward, or scale (with Option).
+    /// Camera mode is unaffected by Option.
+    private func applyDepthKey(positive: Bool, optionDown: Bool) {
+        let sign: Float = positive ? 1 : -1
+        let fwd = camera.forwardVector
+
+        switch controlMode {
+        case .camera:
+            camera.dolly(delta: sign * zoomStep / 0.05)
+
+        case .light:
+            lightManager.translateSelected(by: fwd * (sign * translateStep * 2))
+
+        case .object:
+            guard let obj = sceneManager.selectedObject else { return }
+            if optionDown {
+                let factor: Float = positive ? scaleStep : 1.0 / scaleStep
+                let sv = SIMD4<Float>(factor, factor, factor, 1)
+                obj.transform.columns.0 *= sv
+                obj.transform.columns.1 *= sv
+                obj.transform.columns.2 *= sv
+            } else {
+                let d = fwd * (sign * translateStep)
+                obj.transform.columns.3.x += d.x
+                obj.transform.columns.3.y += d.y
+                obj.transform.columns.3.z += d.z
+            }
+            syncLocalTransform(obj)
+
+        case .model:
+            let parts = groupParts()
+            guard !parts.isEmpty else { return }
+            if optionDown {
+                let factor: Float = positive ? scaleStep : 1.0 / scaleStep
+                scaleGroup(parts, by: factor, around: groupCenter(parts))
+            } else {
+                translateGroup(parts, by: fwd * (sign * translateStep))
+            }
         }
     }
 
@@ -1571,139 +1721,19 @@ final class ViewportView: MTKView {
 
         // ── Left arrow / KP4 ─────────────────────────────────────────────────
         case KC.left, KC.kp4:
-            switch controlMode {
-            case .camera:
-                if event.modifierFlags.contains(.shift) {
-                    camera.freeLook(deltaYaw: -rotStep, deltaPitch: 0)
-                } else {
-                    camera.pan(deltaX: panStep, deltaY: 0)
-                }
-            case .light:
-                if event.modifierFlags.contains(.shift) {
-                    lightManager.rotateSelected(deltaAzimuth: lightStep, deltaElevation: 0)
-                } else {
-                    lightManager.moveSelectedLateral(deltaX: -lightStep, deltaY: 0)
-                }
-            case .object:
-                if let obj = sceneManager.selectedObject {
-                    if event.modifierFlags.contains(.shift) {
-                        rotateInPlace(obj, by: simd_quatf(angle: -rotStep, axis: SIMD3<Float>(0, 1, 0)))
-                    } else {
-                        obj.transform.columns.3.x -= translateStep
-                        syncLocalTransform(obj)
-                    }
-                }
-            case .model:
-                let parts = groupParts()
-                if event.modifierFlags.contains(.shift) {
-                    let pivot = groupCenter(parts)
-                    rotateGroup(parts, by: simd_quatf(angle: -rotStep, axis: SIMD3<Float>(0, 1, 0)), around: pivot)
-                } else {
-                    translateGroup(parts, by: SIMD3<Float>(-translateStep, 0, 0))
-                }
-            }
+            applyArrow(dx: -1, dy: 0, shift: event.modifierFlags.contains(.shift))
 
         // ── Right arrow / KP6 ────────────────────────────────────────────────
         case KC.right, KC.kp6:
-            switch controlMode {
-            case .camera:
-                if event.modifierFlags.contains(.shift) {
-                    camera.freeLook(deltaYaw: rotStep, deltaPitch: 0)
-                } else {
-                    camera.pan(deltaX: -panStep, deltaY: 0)
-                }
-            case .light:
-                if event.modifierFlags.contains(.shift) {
-                    lightManager.rotateSelected(deltaAzimuth: -lightStep, deltaElevation: 0)
-                } else {
-                    lightManager.moveSelectedLateral(deltaX: lightStep, deltaY: 0)
-                }
-            case .object:
-                if let obj = sceneManager.selectedObject {
-                    if event.modifierFlags.contains(.shift) {
-                        rotateInPlace(obj, by: simd_quatf(angle: rotStep, axis: SIMD3<Float>(0, 1, 0)))
-                    } else {
-                        obj.transform.columns.3.x += translateStep
-                        syncLocalTransform(obj)
-                    }
-                }
-            case .model:
-                let parts = groupParts()
-                if event.modifierFlags.contains(.shift) {
-                    let pivot = groupCenter(parts)
-                    rotateGroup(parts, by: simd_quatf(angle: rotStep, axis: SIMD3<Float>(0, 1, 0)), around: pivot)
-                } else {
-                    translateGroup(parts, by: SIMD3<Float>(translateStep, 0, 0))
-                }
-            }
+            applyArrow(dx: 1, dy: 0, shift: event.modifierFlags.contains(.shift))
 
         // ── Up arrow / KP8 ───────────────────────────────────────────────────
         case KC.up, KC.kp8:
-            switch controlMode {
-            case .camera:
-                if event.modifierFlags.contains(.shift) {
-                    camera.freeLook(deltaYaw: 0, deltaPitch: rotStep)
-                } else {
-                    camera.pan(deltaX: 0, deltaY: panStep)
-                }
-            case .light:
-                if event.modifierFlags.contains(.shift) {
-                    lightManager.rotateSelected(deltaAzimuth: 0, deltaElevation: -lightStep)
-                } else {
-                    lightManager.moveSelectedLateral(deltaX: 0, deltaY: lightStep)
-                }
-            case .object:
-                if let obj = sceneManager.selectedObject {
-                    if event.modifierFlags.contains(.shift) {
-                        rotateInPlace(obj, by: simd_quatf(angle: -rotStep, axis: SIMD3<Float>(1, 0, 0)))
-                    } else {
-                        obj.transform.columns.3.y += translateStep
-                        syncLocalTransform(obj)
-                    }
-                }
-            case .model:
-                let parts = groupParts()
-                if event.modifierFlags.contains(.shift) {
-                    let pivot = groupCenter(parts)
-                    rotateGroup(parts, by: simd_quatf(angle: rotStep, axis: SIMD3<Float>(1, 0, 0)), around: pivot)
-                } else {
-                    translateGroup(parts, by: SIMD3<Float>(0, translateStep, 0))
-                }
-            }
+            applyArrow(dx: 0, dy: 1, shift: event.modifierFlags.contains(.shift))
 
         // ── Down arrow / KP2 ─────────────────────────────────────────────────
         case KC.down, KC.kp2:
-            switch controlMode {
-            case .camera:
-                if event.modifierFlags.contains(.shift) {
-                    camera.freeLook(deltaYaw: 0, deltaPitch: -rotStep)
-                } else {
-                    camera.pan(deltaX: 0, deltaY: -panStep)
-                }
-            case .light:
-                if event.modifierFlags.contains(.shift) {
-                    lightManager.rotateSelected(deltaAzimuth: 0, deltaElevation: lightStep)
-                } else {
-                    lightManager.moveSelectedLateral(deltaX: 0, deltaY: -lightStep)
-                }
-            case .object:
-                if let obj = sceneManager.selectedObject {
-                    if event.modifierFlags.contains(.shift) {
-                        rotateInPlace(obj, by: simd_quatf(angle: rotStep, axis: SIMD3<Float>(1, 0, 0)))
-                    } else {
-                        obj.transform.columns.3.y -= translateStep
-                        syncLocalTransform(obj)
-                    }
-                }
-            case .model:
-                let parts = groupParts()
-                if event.modifierFlags.contains(.shift) {
-                    let pivot = groupCenter(parts)
-                    rotateGroup(parts, by: simd_quatf(angle: -rotStep, axis: SIMD3<Float>(1, 0, 0)), around: pivot)
-                } else {
-                    translateGroup(parts, by: SIMD3<Float>(0, -translateStep, 0))
-                }
-            }
+            applyArrow(dx: 0, dy: -1, shift: event.modifierFlags.contains(.shift))
 
         // ── [ / { — roll left (object or group) ───────────────────────────────
         case KC.leftBracket:
@@ -1734,60 +1764,11 @@ final class ViewportView: MTKView {
 
         // ── Plus / KP+ ────────────────────────────────────────────────────────
         case KC.kpPlus, KC.regEqual:
-            switch controlMode {
-            case .camera:
-                camera.dolly(delta: zoomStep / 0.05)
-            case .light:
-                lightManager.moveSelectedDepth(delta: translateStep * 2)
-            case .object:
-                if let obj = sceneManager.selectedObject {
-                    if event.modifierFlags.contains(.option) {
-                        let sv = SIMD4<Float>(scaleStep, scaleStep, scaleStep, 1)
-                        obj.transform.columns.0 *= sv
-                        obj.transform.columns.1 *= sv
-                        obj.transform.columns.2 *= sv
-                    } else {
-                        obj.transform.columns.3.z += translateStep
-                    }
-                    syncLocalTransform(obj)
-                }
-            case .model:
-                let parts = groupParts()
-                if event.modifierFlags.contains(.option) {
-                    scaleGroup(parts, by: scaleStep, around: groupCenter(parts))
-                } else {
-                    translateGroup(parts, by: SIMD3<Float>(0, 0, translateStep))
-                }
-            }
+            applyDepthKey(positive: true, optionDown: event.modifierFlags.contains(.option))
 
         // ── Minus / KP− ───────────────────────────────────────────────────────
         case KC.kpMinus, KC.regMinus:
-            switch controlMode {
-            case .camera:
-                camera.dolly(delta: -(zoomStep / 0.05))
-            case .light:
-                lightManager.moveSelectedDepth(delta: -translateStep * 2)
-            case .object:
-                if let obj = sceneManager.selectedObject {
-                    if event.modifierFlags.contains(.option) {
-                        let s: Float = 1.0 / scaleStep
-                        let sv = SIMD4<Float>(s, s, s, 1)
-                        obj.transform.columns.0 *= sv
-                        obj.transform.columns.1 *= sv
-                        obj.transform.columns.2 *= sv
-                    } else {
-                        obj.transform.columns.3.z -= translateStep
-                    }
-                    syncLocalTransform(obj)
-                }
-            case .model:
-                let parts = groupParts()
-                if event.modifierFlags.contains(.option) {
-                    scaleGroup(parts, by: 1.0 / scaleStep, around: groupCenter(parts))
-                } else {
-                    translateGroup(parts, by: SIMD3<Float>(0, 0, -translateStep))
-                }
-            }
+            applyDepthKey(positive: false, optionDown: event.modifierFlags.contains(.option))
 
         default:
             // Forward unrecognised keys to the Timeline Editor (if present and not

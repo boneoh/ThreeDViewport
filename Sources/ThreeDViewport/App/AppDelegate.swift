@@ -1123,7 +1123,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let inspectorView = LightsInspectorPanel(
             lightManager:     viewport.lightManager,
             backgroundConfig: viewport.backgroundConfig,
-            renderSettings:   viewport.renderSettings
+            renderSettings:   viewport.renderSettings,
+            camera:           viewport.camera
         )
 
         let hostingView = NSHostingView(rootView: inspectorView)

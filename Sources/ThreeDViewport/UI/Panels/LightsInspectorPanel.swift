@@ -34,6 +34,7 @@ struct LightsInspectorPanel: View {
     @ObservedObject var lightManager:     LightManager
     @ObservedObject var backgroundConfig: BackgroundConfig
     @ObservedObject var renderSettings:   RenderSettings
+    let camera: CameraController
 
     var body: some View {
         ScrollView {
@@ -345,13 +346,41 @@ struct LightsInspectorPanel: View {
     // MARK: - Helpers
 
     private func addLight(type: LightType) {
+        let base: LightConfig
         switch type {
-        case .ambient:     lightManager.addLight(.defaultAmbient)
-        case .directional: lightManager.addLight(.defaultDirectional)
-        case .point:       lightManager.addLight(.defaultPoint)
-        case .spot:        lightManager.addLight(.defaultSpot)
-        case .laser:       lightManager.addLight(.defaultLaser)
+        case .ambient:     base = .defaultAmbient
+        case .directional: base = .defaultDirectional
+        case .point:       base = .defaultPoint
+        case .spot:        base = .defaultSpot
+        case .laser:       base = .defaultLaser
         }
+        lightManager.addLight(placedForCamera(base))
+    }
+
+    /// Positions a new light slightly above and to the right of the camera and
+    /// aims it at the camera's current target (one-click scene-setup).
+    /// • Ambient — returned unchanged (no position or direction).
+    /// • Directional — only direction is set (it has no position).
+    /// • Point — only position is set (it has no direction).
+    /// • Spot / Laser — both position and direction are set.
+    private func placedForCamera(_ light: LightConfig) -> LightConfig {
+        var l = light
+        let offset = camera.distance * 0.2
+        let pos    = camera.eyePosition
+                   + camera.rightVector * offset
+                   + camera.upVector    * offset
+        switch l.type {
+        case .ambient:
+            return l
+        case .directional:
+            l.direction = simd_normalize(camera.target - pos)
+        case .point:
+            l.position = pos
+        case .spot, .laser:
+            l.position  = pos
+            l.direction = simd_normalize(camera.target - pos)
+        }
+        return l
     }
 
     private func normalizeDirection(at i: Int) {

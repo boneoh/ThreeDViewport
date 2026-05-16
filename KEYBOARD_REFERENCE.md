@@ -14,7 +14,7 @@
 | **O** | Object mode (press again to cycle to next object) |
 | **P** | Play / Pause |
 | **W** | Wireframe toggle |
-| **Delete** | Delete selected keypoint(s) |
+| **D** / **Delete** / **Forward Delete** | Delete selected keyframe(s) |
 | **End** | Jump playhead to end |
 | **Home** | Jump playhead to start |
 | **Return** | Commit keyframe edit |
@@ -30,20 +30,20 @@ Hold for smooth repeat. Numpad equivalents: 4/6/8/2/+/−
 
 | Key | Camera | Object / Model | Lights |
 |-----|--------|----------------|--------|
-| **←** | Pan left | Move left (X−) | Move left (positional) / Steer left (directional) |
-| **→** | Pan right | Move right (X+) | Move right (positional) / Steer right (directional) |
-| **↑** | Pan up | Move up (Y+) | Move up (positional) / Steer up (directional) |
-| **↓** | Pan down | Move down (Y−) | Move down (positional) / Steer down (directional) |
-| **Shift+←** | Look left (free-look yaw) | Rotate left (Y−, yaw) | Rotate azimuth left |
-| **Shift+→** | Look right (free-look yaw) | Rotate right (Y+, yaw) | Rotate azimuth right |
-| **Shift+↑** | Look up (free-look pitch) | Rotate up (X+, pitch) | Rotate elevation up |
-| **Shift+↓** | Look down (free-look pitch) | Rotate down (X−, pitch) | Rotate elevation down |
-| **+** / **KP+** | Dolly in (move camera forward) | Move forward (Z+) | Move light forward (depth) |
-| **−** / **KP−** | Dolly out (move camera backward) | Move backward (Z−) | Move light back (depth) |
+| **←** | Truck left | Move left (screen-relative) | Truck left (positional) / Pan left (directional) |
+| **→** | Truck right | Move right (screen-relative) | Truck right (positional) / Pan right (directional) |
+| **↑** | Pedestal up | Move up (screen-relative) | Pedestal up (positional) / Tilt up (directional) |
+| **↓** | Pedestal down | Move down (screen-relative) | Pedestal down (positional) / Tilt down (directional) |
+| **Shift+←** | Pan left | Rotate left (Y−, yaw) | Pan left (directional/spot/laser) |
+| **Shift+→** | Pan right | Rotate right (Y+, yaw) | Pan right (directional/spot/laser) |
+| **Shift+↑** | Tilt up | Rotate up (X+, pitch) | Tilt up (directional/spot/laser) |
+| **Shift+↓** | Tilt down | Rotate down (X−, pitch) | Tilt down (directional/spot/laser) |
+| **+** / **KP+** | Dolly in | Move away (increase distance) | Dolly in (positional only) |
+| **−** / **KP−** | Dolly out | Move toward (decrease distance) | Dolly out (positional only) |
 | **Option++** | — | Scale up 5% | — |
 | **Option+−** | — | Scale down 5% | — |
-| **[** | Orbit yaw left | Roll left (Z−) | Rotate azimuth left |
-| **]** | Orbit yaw right | Roll right (Z+) | Rotate azimuth right |
+| **[** | Orbit yaw left | Roll left (Z−) | Pan left |
+| **]** | Orbit yaw right | Roll right (Z+) | Pan right |
 | **R** | Reset to defaults | Reset rotation to loaded orientation | Reset to default direction |
 
 <div style="page-break-after: always;"></div>
@@ -53,10 +53,10 @@ Hold for smooth repeat. Numpad equivalents: 4/6/8/2/+/−
 
 | Button | Camera | Object / Model | Lights |
 |--------|--------|----------------|--------|
-| **Left drag** | Axis-locked pan | Axis-locked translate | Axis-locked lateral move |
-| **Right drag** | Free-look (both axes) | Free rotate (both axes) | Free rotate (azimuth + elevation) |
+| **Left drag** | Axis-locked Truck + Pedestal | Axis-locked translate (screen-relative) | Axis-locked Truck + Pedestal (positional) / Pan + Tilt (directional) |
+| **Right drag** | Free Pan + Tilt | Free rotate (both axes) | Free Pan + Tilt (directional/spot/laser only) |
 | **Space + Left drag** | Free orbit (all modes) | Free orbit (all modes) | Free orbit (all modes) |
-| **Scroll wheel** | Lens zoom in/out (FOV) | Move forward / backward | Move light forward / backward (depth) |
+| **Scroll wheel** | Zoom in/out (FOV) | Move away / toward (screen depth) | Dolly in / out (positional only) |
 
 ## Timeline Editor
 
