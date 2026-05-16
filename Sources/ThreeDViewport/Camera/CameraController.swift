@@ -20,7 +20,7 @@ final class CameraController {
     // yaw / pitch / distance / target.  Manual orbit is preserved when paused.
     var keyframeTrack: CameraKeyframeTrack?
 
-    let fovYRadians: Float = Float.pi / 3.0   // 60°
+    var fovYRadians: Float = 27.0 * Float.pi / 180.0   // 27° ≈ 50mm full-frame equivalent
     let nearPlane: Float   = 0.01
     let farPlane: Float    = 2000.0
 
@@ -80,6 +80,27 @@ final class CameraController {
         distance = max(0.05, min(5000.0, distance))
     }
 
+    /// Dolly: slide both eye and target along the current forward direction so the
+    /// camera physically moves through the scene.  Unlike lens zoom (which changes FOV),
+    /// dolly physically repositions the camera.
+    /// Step size is proportional to max(distance, 1.0) so it never freezes at small radii.
+    func dolly(delta: Float) {
+        let sensitivity: Float = 0.05
+        let step = delta * sensitivity * max(distance, 1.0)
+        target += forwardVector * step
+    }
+
+    /// Lens zoom: change the field of view to simulate a zoom lens.
+    /// Scroll up (positive delta) narrows the FOV (zoom in); scroll down widens it (zoom out).
+    /// Clamped to 10°–90° to avoid unusable extremes.
+    func lensZoom(delta: Float) {
+        let sensitivity: Float = 0.02   // radians per scroll unit
+        fovYRadians -= delta * sensitivity
+        let minFOV = Float.pi / 18.0    // 10°
+        let maxFOV = Float.pi / 2.0     // 90°
+        fovYRadians = max(minFOV, min(maxFOV, fovYRadians))
+    }
+
     // Pan in the plane perpendicular to the view direction
     func pan(deltaX: Float, deltaY: Float) {
         let sensitivity: Float = 0.001
@@ -108,10 +129,11 @@ final class CameraController {
     // MARK: - Convenience
 
     func reset() {
-        yaw      = 0
-        pitch    = 0.4
-        distance = 5.0
-        target   = SIMD3<Float>(0, 0, 0)
+        yaw         = 0
+        pitch       = 0.4
+        distance    = 5.0
+        target      = SIMD3<Float>(0, 0, 0)
+        fovYRadians = 27.0 * Float.pi / 180.0
         print("[DEBUG] CameraController: reset to defaults")
     }
 

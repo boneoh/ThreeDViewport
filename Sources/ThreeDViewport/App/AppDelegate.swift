@@ -57,6 +57,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // Tracks the last saved/opened project URL for ⌘S "save in place".
     private var currentProjectURL: URL?
 
+    // When the launch or New-Project flow loaded `template.3dvp`, this holds the
+    // pre-filled name ("Project N") for the next Save-As panel. Cleared whenever
+    // the project is actually saved or a different project is opened.
+    private var suggestedProjectName: String?
+
     // True whenever the project has unsaved changes.
     private var isDirty: Bool = false
 
@@ -171,6 +176,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             + " timeline=" + String(Int(windowWidth)) + "x" + String(Int(timelinePanelHeight)))
 
         subscribeToSettingsChanges(viewport)
+
+        applyTemplateIfPresent()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -625,6 +632,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         return base
     }
 
+    // MARK: - Template projects
+
+    /// If `template.3dvp` exists in the Projects folder, load it as the starting
+    /// scene for a fresh session, then detach so Save acts as Save-As and
+    /// pre-fill the name with the next available "Project N".
+    private func applyTemplateIfPresent() {
+        let templateURL = defaultDirectory(for: "Projects")
+            .appendingPathComponent("template.3dvp")
+        guard FileManager.default.fileExists(atPath: templateURL.path) else { return }
+
+        loadProject(from: templateURL)
+
+        let name = nextProjectName()
+        currentProjectURL    = nil
+        isDirty              = false
+        suggestedProjectName = name
+        window?.title        = "ThreeDViewport — " + name
+        print("[DEBUG] AppDelegate: template loaded as " + name)
+    }
+
+    /// Scans the Projects folder for files named "Project <int>.3dvp" and
+    /// returns "Project N" where N = max(found) + 1, or "Project 1" if none exist.
+    private func nextProjectName() -> String {
+        let dir = defaultDirectory(for: "Projects")
+        let entries = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        var maxN = 0
+        for name in entries where name.hasSuffix(".3dvp") {
+            let stem = (name as NSString).deletingPathExtension
+            guard stem.hasPrefix("Project ") else { continue }
+            let tail = stem.dropFirst("Project ".count)
+            if let n = Int(tail), n > maxN { maxN = n }
+        }
+        return "Project " + String(maxN + 1)
+    }
+
     // MARK: - New Project
 
     @objc private func newProject(_ sender: Any) {
@@ -650,10 +692,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     private func performNewProject() {
         viewportView?.newProject()
-        currentProjectURL = nil
-        window?.title = "ThreeDViewport"
+        currentProjectURL    = nil
+        suggestedProjectName = nil
+        window?.title        = "ThreeDViewport"
         timelineEditorWC?.updateWindowHeight()
         print("[DEBUG] AppDelegate: new project")
+
+        applyTemplateIfPresent()
     }
 
     // MARK: - Open Model (adds to scene; use New Project to start fresh)
@@ -811,7 +856,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         do {
             let data = try ProjectFile.load(from: url, into: viewport,
                                             missingModelResolver: resolver)
-            currentProjectURL = url
+            currentProjectURL    = url
+            suggestedProjectName = nil
             isDirty = false
             window?.title = "ThreeDViewport — " + url.deletingPathExtension().lastPathComponent
             // Resize the timeline editor if the number of tracks changed.
@@ -848,22 +894,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         let panel = NSSavePanel()
         panel.title                = "Save Project"
-        panel.nameFieldStringValue = "project.3dvp"
         panel.canCreateDirectories = true
         panel.directoryURL         = defaultDirectory(for: "Projects")
 
-        // Suggest the first loaded model's name as a project name default.
-        if let firstURL = viewport.sceneManager.objects.first?.sourceURL {
+        // Default filename: template-derived "Project N" wins over first-model name
+        // wins over the plain "project.3dvp" fallback.
+        if let suggested = suggestedProjectName {
+            panel.nameFieldStringValue = suggested + ".3dvp"
+        } else if let firstURL = viewport.sceneManager.objects.first?.sourceURL {
             panel.nameFieldStringValue = firstURL.deletingPathExtension().lastPathComponent + ".3dvp"
+        } else {
+            panel.nameFieldStringValue = "project.3dvp"
         }
 
         panel.beginSheetModal(for: window) { [weak self] response in
-            guard response == .OK, let url = panel.url else { return }
+            guard response == .OK, var url = panel.url else { return }
             guard let self = self else { return }
+            // Ensure the file always gets the .3dvp extension even if the user omitted it.
+            if url.pathExtension.lowercased() != "3dvp" {
+                url = url.appendingPathExtension("3dvp")
+            }
             do {
                 try ProjectFile.save(to: url, viewport: viewport,
                                      windowLayout: self.currentWindowLayout())
-                self.currentProjectURL = url
+                self.currentProjectURL    = url
+                self.suggestedProjectName = nil
                 self.isDirty = false
                 self.window?.title = "ThreeDViewport — "
                     + url.deletingPathExtension().lastPathComponent

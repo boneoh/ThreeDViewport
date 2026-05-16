@@ -1189,9 +1189,30 @@ final class ViewportView: MTKView {
         }
     }
 
+    /// Rotates `obj` by quaternion `q` in-place: only the 3×3 orientation block
+    /// is updated; the translation (columns.3) is left unchanged.  This is what
+    /// keyboard Shift+arrow / bracket rotation uses so the object spins without
+    /// any position drift.
+    private func rotateInPlace(_ obj: SceneObject, by q: simd_quatf) {
+        let rot = rotationMatrix4x4(q)
+        let c0 = rot * SIMD4<Float>(obj.transform.columns.0.x,
+                                     obj.transform.columns.0.y,
+                                     obj.transform.columns.0.z, 0)
+        let c1 = rot * SIMD4<Float>(obj.transform.columns.1.x,
+                                     obj.transform.columns.1.y,
+                                     obj.transform.columns.1.z, 0)
+        let c2 = rot * SIMD4<Float>(obj.transform.columns.2.x,
+                                     obj.transform.columns.2.y,
+                                     obj.transform.columns.2.z, 0)
+        obj.transform.columns.0 = SIMD4<Float>(c0.x, c0.y, c0.z, 0)
+        obj.transform.columns.1 = SIMD4<Float>(c1.x, c1.y, c1.z, 0)
+        obj.transform.columns.2 = SIMD4<Float>(c2.x, c2.y, c2.z, 0)
+        syncLocalTransform(obj)
+    }
+
     /// Rotates `obj` by quaternion `q` around its bounding-box centre (world space),
     /// so the object spins in-place rather than orbiting the world origin.
-    /// Matches the right-drag rotation logic; call syncLocalTransform internally.
+    /// Used by right-drag (fine increments); keyboard rotation uses rotateInPlace.
     private func rotateAroundBoundingCenter(_ obj: SceneObject, by q: simd_quatf) {
         let localCentre = (obj.boundingMin + obj.boundingMax) * 0.5
         let wc4   = obj.transform * SIMD4<Float>(localCentre, 1)
@@ -1248,6 +1269,18 @@ final class ViewportView: MTKView {
                 }
                 return
             }
+        }
+
+        // Camera mode: lens zoom (change FOV), not a physical move.
+        if controlMode == .camera, !timeline.isPlaying {
+            camera.lensZoom(delta: delta)
+            return
+        }
+
+        // Light mode: move the selected light toward / away from the scene.
+        if controlMode == .light, !timeline.isPlaying {
+            lightManager.moveSelectedDepth(delta: delta * camera.distance * 0.05)
+            return
         }
 
         guard controlMode == .object,
@@ -1554,7 +1587,7 @@ final class ViewportView: MTKView {
             case .object:
                 if let obj = sceneManager.selectedObject {
                     if event.modifierFlags.contains(.shift) {
-                        rotateAroundBoundingCenter(obj, by: simd_quatf(angle: -rotStep, axis: SIMD3<Float>(0, 1, 0)))
+                        rotateInPlace(obj, by: simd_quatf(angle: -rotStep, axis: SIMD3<Float>(0, 1, 0)))
                     } else {
                         obj.transform.columns.3.x -= translateStep
                         syncLocalTransform(obj)
@@ -1588,7 +1621,7 @@ final class ViewportView: MTKView {
             case .object:
                 if let obj = sceneManager.selectedObject {
                     if event.modifierFlags.contains(.shift) {
-                        rotateAroundBoundingCenter(obj, by: simd_quatf(angle: rotStep, axis: SIMD3<Float>(0, 1, 0)))
+                        rotateInPlace(obj, by: simd_quatf(angle: rotStep, axis: SIMD3<Float>(0, 1, 0)))
                     } else {
                         obj.transform.columns.3.x += translateStep
                         syncLocalTransform(obj)
@@ -1622,7 +1655,7 @@ final class ViewportView: MTKView {
             case .object:
                 if let obj = sceneManager.selectedObject {
                     if event.modifierFlags.contains(.shift) {
-                        rotateAroundBoundingCenter(obj, by: simd_quatf(angle: -rotStep, axis: SIMD3<Float>(1, 0, 0)))
+                        rotateInPlace(obj, by: simd_quatf(angle: -rotStep, axis: SIMD3<Float>(1, 0, 0)))
                     } else {
                         obj.transform.columns.3.y += translateStep
                         syncLocalTransform(obj)
@@ -1656,7 +1689,7 @@ final class ViewportView: MTKView {
             case .object:
                 if let obj = sceneManager.selectedObject {
                     if event.modifierFlags.contains(.shift) {
-                        rotateAroundBoundingCenter(obj, by: simd_quatf(angle: rotStep, axis: SIMD3<Float>(1, 0, 0)))
+                        rotateInPlace(obj, by: simd_quatf(angle: rotStep, axis: SIMD3<Float>(1, 0, 0)))
                     } else {
                         obj.transform.columns.3.y -= translateStep
                         syncLocalTransform(obj)
@@ -1680,7 +1713,7 @@ final class ViewportView: MTKView {
             } else if controlMode == .light {
                 lightManager.rotateSelected(deltaAzimuth: lightStep, deltaElevation: 0)
             } else if controlMode == .object, let obj = sceneManager.selectedObject {
-                rotateAroundBoundingCenter(obj, by: simd_quatf(angle: -rotStep, axis: SIMD3<Float>(0, 0, 1)))
+                rotateInPlace(obj, by: simd_quatf(angle: -rotStep, axis: SIMD3<Float>(0, 0, 1)))
             } else if controlMode == .model {
                 let parts = groupParts()
                 rotateGroup(parts, by: simd_quatf(angle: -rotStep, axis: SIMD3<Float>(0, 0, 1)), around: groupCenter(parts))
@@ -1693,7 +1726,7 @@ final class ViewportView: MTKView {
             } else if controlMode == .light {
                 lightManager.rotateSelected(deltaAzimuth: -lightStep, deltaElevation: 0)
             } else if controlMode == .object, let obj = sceneManager.selectedObject {
-                rotateAroundBoundingCenter(obj, by: simd_quatf(angle: rotStep, axis: SIMD3<Float>(0, 0, 1)))
+                rotateInPlace(obj, by: simd_quatf(angle: rotStep, axis: SIMD3<Float>(0, 0, 1)))
             } else if controlMode == .model {
                 let parts = groupParts()
                 rotateGroup(parts, by: simd_quatf(angle: rotStep, axis: SIMD3<Float>(0, 0, 1)), around: groupCenter(parts))
@@ -1703,7 +1736,7 @@ final class ViewportView: MTKView {
         case KC.kpPlus, KC.regEqual:
             switch controlMode {
             case .camera:
-                camera.zoom(delta: camera.distance * zoomStep / 0.05)
+                camera.dolly(delta: zoomStep / 0.05)
             case .light:
                 lightManager.moveSelectedDepth(delta: translateStep * 2)
             case .object:
@@ -1731,7 +1764,7 @@ final class ViewportView: MTKView {
         case KC.kpMinus, KC.regMinus:
             switch controlMode {
             case .camera:
-                camera.zoom(delta: -(camera.distance * zoomStep / 0.05))
+                camera.dolly(delta: -(zoomStep / 0.05))
             case .light:
                 lightManager.moveSelectedDepth(delta: -translateStep * 2)
             case .object:
