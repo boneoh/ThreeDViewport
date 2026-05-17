@@ -1416,13 +1416,18 @@ final class TimelineEditorView: NSView {
         // ── Camera ────────────────────────────────────────────────────────────
         case (.camera(let src), .camera):
             if camera?.keyframeTrack == nil { camera?.keyframeTrack = CameraKeyframeTrack() }
+            // Preserve follow metadata so a copied follow keyframe pastes as a
+            // follow keyframe, not a free camera keyframe.
             camera?.keyframeTrack?.addKeyframe(CameraKeyframe(
-                time:     t,
-                yaw:      src.yaw,
-                pitch:    src.pitch,
-                distance: src.distance,
-                target:   src.target,
-                fov:      src.fov))
+                time:             t,
+                yaw:              src.yaw,
+                pitch:            src.pitch,
+                distance:         src.distance,
+                target:           src.target,
+                fov:              src.fov,
+                followTargetName: src.followTargetName,
+                followYawOffset:  src.followYawOffset,
+                targetOffset:     src.targetOffset))
 
         // ── Object (any object lane accepts an object clipboard) ──────────────
         case (.object(let src), .object(let i)):
@@ -1478,13 +1483,18 @@ final class TimelineEditorView: NSView {
         switch (clip, ref) {
         case (.camera(let src), .camera):
             if camera?.keyframeTrack == nil { camera?.keyframeTrack = CameraKeyframeTrack() }
+            // Preserve follow metadata so a copied follow keyframe pastes as a
+            // follow keyframe, not a free camera keyframe.
             camera?.keyframeTrack?.addKeyframe(CameraKeyframe(
-                time:     t,
-                yaw:      src.yaw,
-                pitch:    src.pitch,
-                distance: src.distance,
-                target:   src.target,
-                fov:      src.fov))
+                time:             t,
+                yaw:              src.yaw,
+                pitch:            src.pitch,
+                distance:         src.distance,
+                target:           src.target,
+                fov:              src.fov,
+                followTargetName: src.followTargetName,
+                followYawOffset:  src.followYawOffset,
+                targetOffset:     src.targetOffset))
         case (.object(let src), .object(let i)):
             guard let obj = sceneManager?.objects[safe: i] else { return }
             if obj.keyframeTrack == nil { obj.keyframeTrack = KeyframeTrack() }

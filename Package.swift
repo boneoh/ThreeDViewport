@@ -19,7 +19,9 @@ let package = Package(
             resources: [
                 .process("Renderer/Shaders.metal"),
                 .process("Renderer/FeedbackShaders.metal"),
-                .process("Renderer/LaserBeamShaders.metal")
+                .process("Renderer/LaserBeamShaders.metal"),
+                .process("Renderer/WidgetShaders.metal"),
+                .process("Renderer/ColorGradeShaders.metal")
             ],
             linkerSettings: [
                 .linkedFramework("AVFoundation"),

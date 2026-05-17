@@ -355,6 +355,12 @@ final class ProjectFile {
         // triggering fitToScene on the second+ object, and sets sourceURL.
         vp.sceneManager.clear()
 
+        // Map from "saved-filename" → "loaded-filename" for any models the user
+        // re-located via the missingModelResolver.  Used by applyGroupKeyframes
+        // below so group tracks saved under the original filename still find
+        // their now-renamed group on load.
+        var substitutedFilenames: [String: String] = [:]
+
         var loadedCount = 0
         for pathStr in paths {
             let modelURL: URL
@@ -363,6 +369,11 @@ final class ProjectFile {
             } else if let resolved = missingModelResolver?(pathStr) {
                 print("[DEBUG] ProjectFile: missing model resolved by user — " + resolved.lastPathComponent)
                 modelURL = resolved
+                let savedFileName    = (pathStr as NSString).lastPathComponent
+                let resolvedFileName = resolved.lastPathComponent
+                if savedFileName != resolvedFileName {
+                    substitutedFilenames[savedFileName] = resolvedFileName
+                }
             } else {
                 print("[DEBUG] ProjectFile: model file not found at " + pathStr)
                 continue
@@ -455,7 +466,8 @@ final class ProjectFile {
         applyLightKeyframes(data.lightKeyframeTracks, to: vp)
 
         // ── Group keyframe tracks (v14 / Phase 2) ─────────────────────────────
-        applyGroupKeyframes(data.groupKeyframeTracks, to: vp)
+        applyGroupKeyframes(data.groupKeyframeTracks, to: vp,
+                            substitutedFilenames: substitutedFilenames)
 
         // Sync HUD with restored scene.
         vp.syncOverlayState()
@@ -480,11 +492,25 @@ final class ProjectFile {
     // Matches objects by name.  Both are handled in one pass so baseTransform
     // is always set before the renderer evaluates the first animation delta.
     private static func applyKeyframes(_ objectsData: [ObjectData], to vp: ViewportView) {
-        for obj in vp.sceneManager.objects {
-            guard let saved = objectsData.first(where: { $0.name == obj.name }) else {
-                print("[DEBUG] ProjectFile: no saved data for object '" + obj.name + "'")
-                continue
-            }
+        // Match saved object data to live scene objects by **position**, not by name.
+        // The save format writes objects in scene order, and on load addModelToScene
+        // appends in file order — so objectsData[i] corresponds to scene.objects[i]
+        // by construction.  Position-based matching preserves keyframes through
+        // missing-model substitution (user picks robot2.glb to replace robot1.glb)
+        // and through replaceSelectedModel + save + reload, neither of which can
+        // rely on name equality because the live names come from the new file.
+        let objects = vp.sceneManager.objects
+        let n = min(objects.count, objectsData.count)
+        if objects.count != objectsData.count {
+            print("[DEBUG] ProjectFile: object count mismatch on load —"
+                + " saved=" + String(objectsData.count)
+                + " loaded=" + String(objects.count)
+                + " (extras get no keyframes)")
+        }
+
+        for i in 0..<n {
+            let obj   = objects[i]
+            let saved = objectsData[i]
 
             // ── v4: restore baseTransform so manual repositioning survives reload ──
             if let m = decodeMatrix(saved.baseTransformMatrix) {
@@ -497,7 +523,8 @@ final class ProjectFile {
                 } else {
                     obj.transform = m   // root: m is the world transform
                 }
-                print("[DEBUG] ProjectFile: baseTransform restored for '" + obj.name + "'")
+                print("[DEBUG] ProjectFile: baseTransform restored for '" + obj.name
+                    + "' (saved as '" + saved.name + "')")
             }
 
             // ── Keyframe track ────────────────────────────────────────────────────
@@ -519,7 +546,8 @@ final class ProjectFile {
             obj.keyframeTrack = track
 
             print("[DEBUG] ProjectFile: restored " + String(saved.keyframes.count)
-                + " keyframes for '" + obj.name + "'")
+                + " keyframes for '" + obj.name + "'"
+                + (obj.name == saved.name ? "" : " (saved as '" + saved.name + "')"))
         }
     }
 
@@ -565,8 +593,14 @@ final class ProjectFile {
     /// Restores group-level animation tracks saved in v14+ project files.
     /// Tracks are keyed by source filename; we walk the live sceneManager to find
     /// the runtime groupID that corresponds to each saved filename.
+    ///
+    /// `substitutedFilenames` carries any renames the user did via the
+    /// missing-model resolver — entries of `originalSavedName → loadedReplacementName`.
+    /// We augment the file→gid map with alias entries so a group track saved as
+    /// "robot 1.glb" still finds the group that loaded from "robot 2.glb".
     private static func applyGroupKeyframes(_ tracksData: [GroupTrackData],
-                                             to vp: ViewportView) {
+                                             to vp: ViewportView,
+                                             substitutedFilenames: [String: String] = [:]) {
         guard !tracksData.isEmpty else { return }
         let sm = vp.sceneManager
 
@@ -577,6 +611,14 @@ final class ProjectFile {
                   let fileName = obj.sourceURL?.lastPathComponent
             else { continue }
             fileToGID[fileName] = gid
+        }
+        // Alias substituted filenames: original saved name → gid of the file the
+        // user picked as a replacement.  This is what preserves group-level
+        // keyframes through the missing-model resolver flow.
+        for (savedName, loadedName) in substitutedFilenames {
+            if let gid = fileToGID[loadedName] {
+                fileToGID[savedName] = gid
+            }
         }
 
         for trackData in tracksData {
