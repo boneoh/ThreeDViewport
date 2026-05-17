@@ -6,20 +6,21 @@
 |-----|--------|
 | **B** | Nudge selected keyframe 1 frame backward |
 | **C** | Camera mode |
+| **D** / **Delete** / **Backspace** | Delete selected keyframe(s) |
+| **E** / **End** | Jump playhead to end |
 | **F** | Nudge selected keyframe 1 frame forward |
 | **G** | Greyscale Toggle |
-| **I** or **Insert** | Stamp keyframe for active mode |
+| **H** / **Home** | Jump playhead to start |
+| **I** / **Insert** | Stamp keyframe for active mode |
 | **L** | Light mode (press again to cycle to next light) |
 | **M** | Model mode (move/rotate whole group as one unit) |
 | **O** | Object mode (press again to cycle to next object) |
 | **P** | Play / Pause |
-| **S** | Toggle Scene mode (Director's POV — see camera, lights, models from above and behind) |
+| **R** | Reset current object, light, or camera orientation |
 | **⌘R** | Re-auto-fit Director (only in Scene mode) |
-| **⌘+** / **⌘−** | Dolly Director in / out (only in Scene mode) |
+| **S** | Toggle Scene mode (Director's POV — see camera, lights, models from above and behind) |
 | **W** | Wireframe toggle |
-| **D** / **Delete** / **Forward Delete** | Delete selected keyframe(s) |
-| **End** or **E** | Jump playhead to end |
-| **Home** or **H** | Jump playhead to start |
+| **⌘+** / **⌘−** | Dolly Director in / out (only in Scene mode) |
 | **Return** | Commit keyframe edit |
 | **Shift+Tab** | Previous keyframe on active track |
 | **Tab** | Next keyframe on active track |
