@@ -927,10 +927,11 @@ final class Renderer: NSObject, MTKViewDelegate {
         // after applyHierarchy() so sub-part world transforms are fully up-to-date.
         if let camTrack = camera.keyframeTrack, !camTrack.keyframes.isEmpty {
             if let state = camTrack.evaluate(at: timeline.currentTime) {
-                camera.yaw      = state.yaw
-                camera.pitch    = state.pitch
-                camera.distance = state.distance
-                camera.target   = state.target
+                camera.yaw         = state.yaw
+                camera.pitch       = state.pitch
+                camera.distance    = state.distance
+                camera.target      = state.target
+                camera.fovYRadians = state.fov
             }
         }
 

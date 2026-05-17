@@ -96,7 +96,8 @@ final class ProjectFile {
             distance: cam.distance,
             targetX:  cam.target.x,
             targetY:  cam.target.y,
-            targetZ:  cam.target.z
+            targetZ:  cam.target.z,
+            fov:      cam.fovYRadians
         )
 
         // ── Timeline ──────────────────────────────────────────────────────────
@@ -158,6 +159,7 @@ final class ProjectFile {
                 targetX:         kf.target.x,
                 targetY:         kf.target.y,
                 targetZ:         kf.target.z,
+                fov:             kf.fov,
                 followTarget:    kf.followTargetName,
                 followYawOffset: kf.followYawOffset,
                 targetOffset:    [kf.targetOffset.x, kf.targetOffset.y, kf.targetOffset.z]
@@ -301,6 +303,15 @@ final class ProjectFile {
         vp.timeline.isPlaying   = false
         print("[DEBUG] ProjectFile: timeline duration=" + String(format: "%.2f", data.timeline.duration))
 
+        // Backfill FOV for older project files that predate focal-length persistence.
+        // If the saved static camera has no `fov`, fall back to the codebase default
+        // (27° — keep in sync with CameraController.swift's `fovYRadians` initializer).
+        // Per-keyframe FOV is then backfilled to this same value, so older projects
+        // play back at a constant, known FOV instead of leaving the camera at whatever
+        // FOV was set before load.
+        let defaultFovRadians: Float = 27.0 * Float.pi / 180.0
+        let effectiveStaticFov: Float = data.camera.fov ?? defaultFovRadians
+
         // ── Camera keyframes (Phase 5) — restored before model load ───────────
         if data.cameraKeyframes.isEmpty {
             vp.camera.keyframeTrack = nil
@@ -318,6 +329,7 @@ final class ProjectFile {
                     pitch:            kfData.pitch,
                     distance:         kfData.distance,
                     target:           SIMD3<Float>(kfData.targetX, kfData.targetY, kfData.targetZ),
+                    fov:              kfData.fov ?? effectiveStaticFov,
                     followTargetName: kfData.followTarget,
                     followYawOffset:  kfData.followYawOffset,
                     targetOffset:     targetOff
@@ -429,13 +441,15 @@ final class ProjectFile {
 
         // ── Camera static state — applied LAST so it overrides any fitToScene ─
         let c = data.camera
-        vp.camera.yaw      = c.yaw
-        vp.camera.pitch    = c.pitch
-        vp.camera.distance = c.distance
-        vp.camera.target   = SIMD3<Float>(c.targetX, c.targetY, c.targetZ)
+        vp.camera.yaw         = c.yaw
+        vp.camera.pitch       = c.pitch
+        vp.camera.distance    = c.distance
+        vp.camera.target      = SIMD3<Float>(c.targetX, c.targetY, c.targetZ)
+        vp.camera.fovYRadians = effectiveStaticFov
         print("[DEBUG] ProjectFile: camera restored — yaw=" + String(format: "%.3f", c.yaw)
             + " pitch=" + String(format: "%.3f", c.pitch)
-            + " dist="  + String(format: "%.3f", c.distance))
+            + " dist="  + String(format: "%.3f", c.distance)
+            + " fov="   + String(format: "%.3f", effectiveStaticFov))
 
         // ── Light keyframe tracks (v6) ────────────────────────────────────────
         applyLightKeyframes(data.lightKeyframeTracks, to: vp)

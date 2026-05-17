@@ -230,6 +230,34 @@ struct CameraData: Codable {
     var targetX:  Float
     var targetY:  Float
     var targetZ:  Float
+    /// Vertical FOV in radians at save time. Absent in project files saved before
+    /// the focal-length-persistence change; loader backfills with the codebase
+    /// default (27°) so older projects play back at a known FOV.
+    var fov:      Float? = nil
+
+    // Custom decoder so files without `fov` (pre-FOV-persistence) decode cleanly.
+    init(from decoder: Decoder) throws {
+        let c    = try decoder.container(keyedBy: CodingKeys.self)
+        yaw      = try  c.decode(Float.self, forKey: .yaw)
+        pitch    = try  c.decode(Float.self, forKey: .pitch)
+        distance = try  c.decode(Float.self, forKey: .distance)
+        targetX  = try  c.decode(Float.self, forKey: .targetX)
+        targetY  = try  c.decode(Float.self, forKey: .targetY)
+        targetZ  = try  c.decode(Float.self, forKey: .targetZ)
+        fov      = try? c.decode(Float.self, forKey: .fov)
+    }
+
+    init(yaw: Float, pitch: Float, distance: Float,
+         targetX: Float, targetY: Float, targetZ: Float,
+         fov: Float? = nil) {
+        self.yaw      = yaw
+        self.pitch    = pitch
+        self.distance = distance
+        self.targetX  = targetX
+        self.targetY  = targetY
+        self.targetZ  = targetZ
+        self.fov      = fov
+    }
 }
 
 struct ObjectData: Codable {
@@ -283,6 +311,10 @@ struct CameraKeyframeData: Codable {
     var targetX:      Float
     var targetY:      Float
     var targetZ:      Float
+    /// Vertical FOV (focal length) at this keyframe, in radians.
+    /// Absent in older project files — loader backfills with the static
+    /// CameraData.fov (or the codebase default, 27°).
+    var fov:          Float? = nil
     /// nil = free camera (default, absent in older project files).
     var followTarget:    String? = nil
     /// Camera yaw stored as an offset from the object's "behind yaw" at creation time.
@@ -292,7 +324,7 @@ struct CameraKeyframeData: Codable {
     /// nil / absent in older project files — treated as (0, 0, 0) on load.
     var targetOffset: [Float]? = nil
 
-    // Custom decoder so files saved before camera-follow fields decode cleanly.
+    // Custom decoder so files saved before camera-follow / FOV fields decode cleanly.
     init(from decoder: Decoder) throws {
         let c    = try decoder.container(keyedBy: CodingKeys.self)
         time     = try  c.decode(Double.self, forKey: .time)
@@ -302,6 +334,7 @@ struct CameraKeyframeData: Codable {
         targetX  = try  c.decode(Float.self,  forKey: .targetX)
         targetY  = try  c.decode(Float.self,  forKey: .targetY)
         targetZ  = try  c.decode(Float.self,  forKey: .targetZ)
+        fov             = try? c.decode(Float.self,   forKey: .fov)
         followTarget    = try? c.decode(String.self,  forKey: .followTarget)
         followYawOffset = try? c.decode(Float.self,   forKey: .followYawOffset)
         targetOffset    = try? c.decode([Float].self, forKey: .targetOffset)
@@ -309,6 +342,7 @@ struct CameraKeyframeData: Codable {
 
     init(time: Double, yaw: Float, pitch: Float, distance: Float,
          targetX: Float, targetY: Float, targetZ: Float,
+         fov: Float? = nil,
          followTarget: String? = nil, followYawOffset: Float? = nil,
          targetOffset: [Float]? = nil) {
         self.time            = time
@@ -318,6 +352,7 @@ struct CameraKeyframeData: Codable {
         self.targetX         = targetX
         self.targetY         = targetY
         self.targetZ         = targetZ
+        self.fov             = fov
         self.followTarget    = followTarget
         self.followYawOffset = followYawOffset
         self.targetOffset    = targetOffset

@@ -144,7 +144,7 @@ final class TimelineEditorView: NSView {
 
     // ── Layout constants ──────────────────────────────────────────────────────
 
-    private let labelWidth:      CGFloat = 160
+    private let labelWidth:      CGFloat = 240
     private let rulerHeight:     CGFloat = 24
     private let laneHeight:      CGFloat = 28
     private let diamondHalfSize: CGFloat = 5
@@ -499,7 +499,9 @@ final class TimelineEditorView: NSView {
                 // with an easing popup in the right portion.  Indented rows are
                 // inset by an extra 12 px to show hierarchy visually.
                 nameX    = row.isIndented ? 20 : 8
-                maxNameW = labelWidth - popupReserved   // same popup reservation for both
+                // Subtract nameX so the name area ends a 3-px gap before the popup,
+                // even for indented rows (otherwise the indent eats into the gap).
+                maxNameW = labelWidth - popupReserved - nameX
             } else {
                 nameX    = 8
                 maxNameW = labelWidth - 12
@@ -1421,7 +1423,8 @@ final class TimelineEditorView: NSView {
                 yaw:      src.yaw,
                 pitch:    src.pitch,
                 distance: src.distance,
-                target:   src.target))
+                target:   src.target,
+                fov:      src.fov))
 
         // ── Object (any object lane accepts an object clipboard) ──────────────
         case (.object(let src), .object(let i)):
@@ -1482,7 +1485,8 @@ final class TimelineEditorView: NSView {
                 yaw:      src.yaw,
                 pitch:    src.pitch,
                 distance: src.distance,
-                target:   src.target))
+                target:   src.target,
+                fov:      src.fov))
         case (.object(let src), .object(let i)):
             guard let obj = sceneManager?.objects[safe: i] else { return }
             if obj.keyframeTrack == nil { obj.keyframeTrack = KeyframeTrack() }

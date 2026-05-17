@@ -846,7 +846,8 @@ final class ViewportView: MTKView {
             yaw:      camera.yaw,
             pitch:    camera.pitch,
             distance: camera.distance,
-            target:   camera.target
+            target:   camera.target,
+            fov:      camera.fovYRadians
         )
         camera.keyframeTrack?.addKeyframe(kf)
 
@@ -854,7 +855,8 @@ final class ViewportView: MTKView {
             + String(format: "%.3f", timeline.currentTime)
             + " yaw=" + String(format: "%.4f", camera.yaw)
             + " pitch=" + String(format: "%.4f", camera.pitch)
-            + " distance=" + String(format: "%.4f", camera.distance))
+            + " distance=" + String(format: "%.4f", camera.distance)
+            + " fov=" + String(format: "%.4f", camera.fovYRadians))
     }
 
     /// Adds a camera follow keyframe at the current playhead time.
@@ -892,6 +894,7 @@ final class ViewportView: MTKView {
             pitch:            camera.pitch,
             distance:         camera.distance,
             target:           camera.target,
+            fov:              camera.fovYRadians,
             followTargetName: obj.name,
             followYawOffset:  followYawOffset,
             targetOffset:     targetOffset
@@ -927,6 +930,7 @@ final class ViewportView: MTKView {
             pitch:            camera.pitch,
             distance:         camera.distance,
             target:           camera.target,
+            fov:              camera.fovYRadians,
             followTargetName: targetName,
             followYawOffset:  followYawOffset,
             targetOffset:     targetOffset
@@ -1284,9 +1288,10 @@ final class ViewportView: MTKView {
             }
         }
 
-        // Camera mode: lens zoom (change FOV), not a physical move.
+        // Camera mode: scroll wheel dollies the rig (translates along forward).
+        // Focal-length / FOV change is on the +/− keys instead.
         if controlMode == .camera, !timeline.isPlaying {
-            camera.lensZoom(delta: delta)
+            camera.dolly(delta: delta)
             return
         }
 
@@ -1473,7 +1478,8 @@ final class ViewportView: MTKView {
 
         switch controlMode {
         case .camera:
-            camera.dolly(delta: sign * zoomStep / 0.05)
+            // +/− changes focal length (FOV). Scroll wheel handles dolly.
+            camera.lensZoom(delta: sign * zoomStep / 0.05)
 
         case .light:
             lightManager.translateSelected(by: fwd * (sign * translateStep * 2))

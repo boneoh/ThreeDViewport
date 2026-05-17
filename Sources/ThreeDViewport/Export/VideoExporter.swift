@@ -1063,10 +1063,11 @@ final class VideoExporter {
         // writing its properties from the export background queue is safe.
         if let camTrack = camera.keyframeTrack, !camTrack.keyframes.isEmpty {
             if let state = camTrack.evaluate(at: time) {
-                camera.yaw      = state.yaw
-                camera.pitch    = state.pitch
-                camera.distance = state.distance
-                camera.target   = state.target
+                camera.yaw         = state.yaw
+                camera.pitch       = state.pitch
+                camera.distance    = state.distance
+                camera.target      = state.target
+                camera.fovYRadians = state.fov
             }
             // Camera-follow override: replace target and yaw so the exported video
             // matches playback — camera tracks the object's position and orientation.

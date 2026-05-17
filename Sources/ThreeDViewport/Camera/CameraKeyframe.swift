@@ -13,6 +13,9 @@ struct CameraKeyframe {
     var pitch:            Float
     var distance:         Float
     var target:           SIMD3<Float>
+    /// Vertical FOV in radians at this keyframe ("focal length" in the UI).
+    /// Stored absolutely and linearly interpolated between adjacent keyframes.
+    var fov:              Float
     /// nil = free camera (default).  non-nil = name of the SceneObject to follow.
     var followTargetName: String? = nil
     /// When followTargetName is set, the offset between the camera yaw and the
@@ -27,6 +30,7 @@ struct CameraKeyframe {
 
     init(time: Double, yaw: Float, pitch: Float,
          distance: Float, target: SIMD3<Float>,
+         fov: Float,
          followTargetName: String? = nil,
          followYawOffset:  Float?  = nil,
          targetOffset:     SIMD3<Float> = SIMD3<Float>(0, 0, 0)) {
@@ -35,6 +39,7 @@ struct CameraKeyframe {
         self.pitch            = pitch
         self.distance         = distance
         self.target           = target
+        self.fov              = fov
         self.followTargetName = followTargetName
         self.followYawOffset  = followYawOffset
         self.targetOffset     = targetOffset
@@ -109,7 +114,8 @@ final class CameraKeyframeTrack {
                 yaw:      lerpAngle(a.yaw,      b.yaw,      t),
                 pitch:    lerpFloat(a.pitch,    b.pitch,    t),
                 distance: lerpFloat(a.distance, b.distance, t),
-                target:   lerpVec3 (a.target,   b.target,   t)
+                target:   lerpVec3 (a.target,   b.target,   t),
+                fov:      lerpFloat(a.fov,      b.fov,      t)
             )
         }
         return keyframes.last!

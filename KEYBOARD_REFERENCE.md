@@ -1,6 +1,6 @@
 # ThreeDViewport Keyboard Reference
 
-## Mode Switching (global)
+## Primary Keyboard Commands
 
 | Key | Action |
 |-----|--------|
@@ -24,7 +24,7 @@
 <div style="page-break-after: always;"></div>
 
 
-## Directional Keys
+## Movement and Directional Keys
 
 Hold for smooth repeat. Numpad equivalents: 4/6/8/2/+/−
 
@@ -38,8 +38,8 @@ Hold for smooth repeat. Numpad equivalents: 4/6/8/2/+/−
 | **Shift+→** | Pan right | Rotate right (Y+, yaw) | Pan right (directional/spot/laser) |
 | **Shift+↑** | Tilt up | Rotate up (X+, pitch) | Tilt up (directional/spot/laser) |
 | **Shift+↓** | Tilt down | Rotate down (X−, pitch) | Tilt down (directional/spot/laser) |
-| **+** / **KP+** | Dolly in | Move away (increase distance) | Dolly in (positional only) |
-| **−** / **KP−** | Dolly out | Move toward (decrease distance) | Dolly out (positional only) |
+| **+** / **KP+** | Focal Length increase | Move away (increase distance) | Dolly in (positional only) |
+| **−** / **KP−** | Focal Length decrease | Move toward (decrease distance) | Dolly out (positional only) |
 | **Option++** | — | Scale up 5% | — |
 | **Option+−** | — | Scale down 5% | — |
 | **[** | Orbit yaw left | Roll left (Z−) | Pan left |
@@ -56,12 +56,13 @@ Hold for smooth repeat. Numpad equivalents: 4/6/8/2/+/−
 | **Left drag** | Axis-locked Truck + Pedestal | Axis-locked translate (screen-relative) | Axis-locked Truck + Pedestal (positional) / Pan + Tilt (directional) |
 | **Right drag** | Free Pan + Tilt | Free rotate (both axes) | Free Pan + Tilt (directional/spot/laser only) |
 | **Space + Left drag** | Free orbit (all modes) | Free orbit (all modes) | Free orbit (all modes) |
-| **Scroll wheel** | Zoom in/out (FOV) | Move away / toward (screen depth) | Dolly in / out (positional only) |
+| **Scroll wheel** | Dolly in/out | Move away / toward (screen depth) | Dolly in / out (positional only) |
 
 ## Timeline Editor
 
 | Command | Operation |
 |---------| --------- |
+| **Mouse Left Click** | Select object row or single keyframe |
 | **Control+Left drag** | Select multiple keyframes |
 | **Control+C** | Copy keyframe(s) |
 | **Control+V** | Paste keyframe(s) at scrub position |

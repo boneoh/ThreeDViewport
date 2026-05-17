@@ -39,7 +39,7 @@ struct SceneOverlayView: View {
         .background(Color.black.opacity(0.55))
         .cornerRadius(7)
         .padding(12)
-        .frame(maxWidth: 220, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: 600, maxHeight: .infinity, alignment: .topLeading)
         .allowsHitTesting(false)  // clicks pass through to Metal
     }
 
