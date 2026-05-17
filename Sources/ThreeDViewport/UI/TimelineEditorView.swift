@@ -968,12 +968,10 @@ final class TimelineEditorView: NSView {
             seekToAdjacentKeyframe(backward: event.modifierFlags.contains(.shift),
                                    tracks: tracks)
 
-        case 123:       // Left arrow → always forward to viewport.
-            guard !isEditingKeyframe else { super.keyDown(with: event); return }
+        case 123:       // Left arrow → always forward to viewport (incl. edit mode).
             forwardToViewport(event)
 
-        case 124:       // Right arrow → always forward to viewport.
-            guard !isEditingKeyframe else { super.keyDown(with: event); return }
+        case 124:       // Right arrow → always forward to viewport (incl. edit mode).
             forwardToViewport(event)
 
         case 3:         // F → nudge selected diamond one frame forward.

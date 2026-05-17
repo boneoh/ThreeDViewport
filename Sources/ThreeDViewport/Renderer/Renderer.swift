@@ -29,6 +29,21 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     let sceneManager:     SceneManager
     let camera:           CameraController
+    /// Director's-POV camera used for rendering when `sceneModeActive` is true.
+    /// Separate from `camera` so the scene camera (the one being recorded /
+    /// animated) is untouched while the user looks at the scene from above.
+    let director:         CameraController
+    /// When true, the renderer draws from the director's POV instead of the
+    /// scene camera.  Scene-camera animation / follow logic continues to run
+    /// (so the scene camera moves on its track), but the *view* is the director's.
+    var sceneModeActive:  Bool = false
+
+    /// The camera whose `viewMatrix` / `viewProjectionMatrix` / `eyePosition`
+    /// the renderer should sample this frame.  Centralises the "scene mode swap"
+    /// so individual draw paths don't have to branch.
+    private var viewCamera: CameraController {
+        return sceneModeActive ? director : camera
+    }
     let lightManager:     LightManager
     let backgroundConfig: BackgroundConfig
     let timeline:         Timeline
@@ -51,6 +66,10 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     // Spark particle pipeline (additive, instanced billboards)
     private var sparkPipelineState:     MTLRenderPipelineState?
+
+    // Scene-mode widget pipeline (solid colour lines, depth-tested no write).
+    // Lazy: built by `buildPipeline()`; used only while `sceneModeActive`.
+    private var widgetPipelineState:    MTLRenderPipelineState?
 
     // MARK: - Feedback (optional — set by ViewportView after init)
 
@@ -84,6 +103,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     init?(device: MTLDevice,
           sceneManager: SceneManager,
           camera: CameraController,
+          director: CameraController,
           lightManager: LightManager,
           backgroundConfig: BackgroundConfig,
           timeline: Timeline) {
@@ -91,6 +111,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         self.device           = device
         self.sceneManager     = sceneManager
         self.camera           = camera
+        self.director         = director
         self.lightManager     = lightManager
         self.backgroundConfig = backgroundConfig
         self.timeline         = timeline
@@ -295,6 +316,28 @@ final class Renderer: NSObject, MTKViewDelegate {
         } catch {
             print("[DEBUG] Renderer: color grade pipeline failed — " + error.localizedDescription)
         }
+
+        // ── Scene-mode widget pipeline (lines, depth-tested no write, no blend) ─
+        guard let widgetVertFn = library.makeFunction(name: "widget_vertex"),
+              let widgetFragFn = library.makeFunction(name: "widget_fragment") else {
+            print("[DEBUG] Renderer: widget shaders not found")
+            return
+        }
+        let widgetDesc = MTLRenderPipelineDescriptor()
+        widgetDesc.label                           = "SceneWidget"
+        widgetDesc.vertexFunction                  = widgetVertFn
+        widgetDesc.fragmentFunction                = widgetFragFn
+        widgetDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
+        widgetDesc.depthAttachmentPixelFormat      = .depth32Float
+        // Opaque widget colour, no blending — overwrite scene pixels where the
+        // line passes the depth test.  (The line is one pixel wide and rasterised
+        // along the primitive edges; tinting via blending isn't useful here.)
+        do {
+            widgetPipelineState = try device.makeRenderPipelineState(descriptor: widgetDesc)
+            print("[DEBUG] Renderer: widget pipeline created")
+        } catch {
+            print("[DEBUG] Renderer: widget pipeline failed — " + error.localizedDescription)
+        }
     }
 
     private func buildDummyBuffers() {
@@ -311,7 +354,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     // MARK: - MTKViewDelegate
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
-        camera.aspectRatio = Float(size.width / size.height)
+        let aspect = Float(size.width / size.height)
+        camera.aspectRatio   = aspect
+        director.aspectRatio = aspect
         // Cap feedback textures at 1920×1080 to avoid excess GPU memory on Retina displays.
         let fw = min(Int(size.width),  1920)
         let fh = min(Int(size.height), 1080)
@@ -445,8 +490,8 @@ final class Renderer: NSObject, MTKViewDelegate {
                                      length: MemoryLayout<LightUniforms>.stride,
                                      index: 3)
 
-            let vp  = camera.viewProjectionMatrix
-            let eye = camera.eyePosition
+            let vp  = viewCamera.viewProjectionMatrix
+            let eye = viewCamera.eyePosition
 
             for object in visibleObjects {
                 guard let posBuffer = object.positionBuffer,
@@ -525,6 +570,14 @@ final class Renderer: NSObject, MTKViewDelegate {
             drawLaserHitsInEncoder(encoder, screenSize: screenSize,
                                    hitEffectTime: hitEffectTime, excludedOnly: true)
             drawSparksInEncoder(encoder, sparkGPUData: sparkGPUData)
+        }
+
+        // ── Scene-mode widgets (camera frustum + light gizmos) ────────────────
+        // Drawn last in the main pass so they layer above geometry where depth
+        // permits.  When feedback is active the trail will capture widgets too —
+        // acceptable for an editing-only view.
+        if sceneModeActive {
+            drawSceneWidgets(encoder: encoder)
         }
 
         encoder.endEncoding()
@@ -620,7 +673,8 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         // Project world X/Y/Z axes through the camera's rotation (no translation).
         // The view matrix upper-left 3×3 maps world dirs to camera screen coords.
-        let vm = camera.viewMatrix
+        // Uses the active rendering camera so the gizmo orientation matches what's drawn.
+        let vm = viewCamera.viewMatrix
         // World axes projected: column index selects the axis (X=0, Y=1, Z=2).
         // vm.columns.n.x = camera-right component; .y = camera-up component.
         let xDir = SIMD2<Float>(vm.columns.0.x, vm.columns.0.y)
@@ -697,7 +751,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         if let ds = laserBeamDepthState { encoder.setDepthStencilState(ds) }
         encoder.setCullMode(.none)
 
-        let vp = camera.viewProjectionMatrix
+        let vp = viewCamera.viewProjectionMatrix
         for (slotIndex, laser) in indexedBeams {
             let start = laser.position
             // If the beam is hitting an object, stop it at the surface.
@@ -750,7 +804,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             enc.setRenderPipelineState(pipeline)
             if let ds = laserBeamDepthState { enc.setDepthStencilState(ds) }
             enc.setCullMode(.none)
-            let vp = camera.viewProjectionMatrix
+            let vp = viewCamera.viewProjectionMatrix
             for (slotIndex, laser) in excludedBeams {
                 let start = laser.position
                 let effectiveRange = laserHitSystem.hits[slotIndex].map {
@@ -788,7 +842,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                                          hitEffectTime:  Float,
                                          excludedOnly:   Bool) {
         guard let pipeline = laserHitPipelineState else { return }
-        let vp = camera.viewProjectionMatrix
+        let vp = viewCamera.viewProjectionMatrix
         var pipelineSet = false
 
         for (i, laser) in lightManager.lights.enumerated() {
@@ -833,14 +887,124 @@ final class Renderer: NSObject, MTKViewDelegate {
         encoder.setCullMode(.none)
 
         var su = SparkUniforms(
-            viewProjectionMatrix: camera.viewProjectionMatrix,
-            cameraRight: SIMD4<Float>(camera.rightVector, 0),
-            cameraUp:    SIMD4<Float>(camera.upVector,    0)
+            viewProjectionMatrix: viewCamera.viewProjectionMatrix,
+            cameraRight: SIMD4<Float>(viewCamera.rightVector, 0),
+            cameraUp:    SIMD4<Float>(viewCamera.upVector,    0)
         )
         encoder.setVertexBuffer(sparkBuf, offset: 0, index: 0)
         encoder.setVertexBytes(&su, length: MemoryLayout<SparkUniforms>.stride, index: 1)
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0,
                                vertexCount: 4, instanceCount: sparkGPUData.count)
+    }
+
+    // MARK: - Scene-mode widgets
+
+    /// Draws Phase-2 / Phase-3 widgets (camera frustum, light gizmos) onto the
+    /// main pass.  Only called when `sceneModeActive` is true.  Uses the laser
+    /// beam depth state (depth-test on, depth-write off) so widgets occlude
+    /// behind scene geometry but don't write to depth themselves.
+    private func drawSceneWidgets(encoder: MTLRenderCommandEncoder) {
+        guard let pipeline = widgetPipelineState else { return }
+
+        encoder.setRenderPipelineState(pipeline)
+        if let ds = laserBeamDepthState { encoder.setDepthStencilState(ds) }
+        encoder.setCullMode(.none)
+
+        let vp = viewCamera.viewProjectionMatrix
+
+        // Shared widget scale — small enough to read at close-in framings,
+        // large enough to remain visible when the Director zooms out.  Tied
+        // to the scene camera's distance so all widgets scale together.
+        let scale = max(0.25, min(camera.distance * 0.25, 1.0))
+
+        // ── Scene-camera frustum (white) ──────────────────────────────────────
+        var camVerts = SceneWidgets.cameraFrustum(eye:     camera.eyePosition,
+                                                  forward: camera.forwardVector,
+                                                  right:   camera.rightVector,
+                                                  up:      camera.upVector,
+                                                  fovY:    camera.fovYRadians,
+                                                  aspect:  camera.aspectRatio,
+                                                  depth:   scale)
+        drawWidgetLines(encoder: encoder,
+                        vertices: &camVerts,
+                        viewProjection: vp,
+                        color: SIMD4<Float>(1.0, 1.0, 1.0, 1.0))
+
+        // ── Light gizmos ──────────────────────────────────────────────────────
+        // Each light renders in its own configured colour so the user can map
+        // the widget back to a light in the inspector.  Per-type shape so even
+        // colour-blind users can distinguish types at a glance.
+        for light in lightManager.lights where light.isEnabled {
+            let color = SIMD4<Float>(light.color, 1.0)
+
+            switch light.type {
+            case .ambient:
+                // No geometry — ambient has no position or direction.
+                break
+
+            case .directional:
+                // Arrow at the scene-camera target showing which way the light
+                // shines.  Length tracks the shared widget scale.
+                var verts = SceneWidgets.directionalArrow(
+                    anchor:    camera.target,
+                    direction: light.direction,
+                    length:    scale * 1.5)
+                drawWidgetLines(encoder: encoder,
+                                vertices: &verts,
+                                viewProjection: vp,
+                                color: color)
+
+            case .point:
+                // Small wireframe sphere at the light's position.
+                var verts = SceneWidgets.sphereWireframe(
+                    center:   light.position,
+                    radius:   scale * 0.25)
+                drawWidgetLines(encoder: encoder,
+                                vertices: &verts,
+                                viewProjection: vp,
+                                color: color)
+
+            case .spot, .laser:
+                // Apex sphere + cone showing position, direction, and outer
+                // cone angle (i.e. the beam's actual spread).  Cone length
+                // capped so a long-range laser doesn't shoot off-screen.
+                var apexSphere = SceneWidgets.sphereWireframe(
+                    center:   light.position,
+                    radius:   scale * 0.15)
+                drawWidgetLines(encoder: encoder,
+                                vertices: &apexSphere,
+                                viewProjection: vp,
+                                color: color)
+
+                let coneLength = min(light.range * 0.5, scale * 3.0)
+                var coneVerts = SceneWidgets.cone(
+                    apex:      light.position,
+                    direction: light.direction,
+                    length:    coneLength,
+                    halfAngle: light.outerConeAngle)
+                drawWidgetLines(encoder: encoder,
+                                vertices: &coneVerts,
+                                viewProjection: vp,
+                                color: color)
+            }
+        }
+    }
+
+    /// Helper: uploads a line-segment vertex list (every pair = one segment)
+    /// and uniform colour, then issues a single line-list draw call.
+    /// Vertex data uses setVertexBytes (small, regenerated each frame).
+    private func drawWidgetLines(encoder:        MTLRenderCommandEncoder,
+                                 vertices:       inout [SIMD3<Float>],
+                                 viewProjection: matrix_float4x4,
+                                 color:          SIMD4<Float>) {
+        guard !vertices.isEmpty else { return }
+        let byteCount = MemoryLayout<SIMD3<Float>>.stride * vertices.count
+        encoder.setVertexBytes(&vertices, length: byteCount, index: 0)
+
+        var u = WidgetUniforms(viewProjectionMatrix: viewProjection, color: color)
+        encoder.setVertexBytes(&u, length: MemoryLayout<WidgetUniforms>.stride, index: 1)
+
+        encoder.drawPrimitives(type: .line, vertexStart: 0, vertexCount: vertices.count)
     }
 
     // MARK: - Material helpers
@@ -972,6 +1136,14 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// applyHierarchy() — NOT inside applyAnimation() — so that sub-part
     /// transforms (e.g. a head bone) are fully propagated before they are read.
     private func applyCameraFollow() {
+        // Suspended during edit mode for camera-follow keyframes so the user's
+        // live adjustments to target/yaw aren't overwritten each frame.
+        guard !camera.followSuspended else { return }
+        // Also suspended in Scene mode while the timeline is paused so the user
+        // can freely arrange the scene camera from the Director's POV.  When
+        // playback resumes (or Scene mode exits), follow re-engages and the
+        // wedge tracks its target normally.
+        if sceneModeActive && !timeline.isPlaying { return }
         guard let camTrack = camera.keyframeTrack,
               !camTrack.keyframes.isEmpty else { return }
         if let follow = camTrack.resolveFollowCamera(

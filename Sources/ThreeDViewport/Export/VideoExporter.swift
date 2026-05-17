@@ -1071,7 +1071,10 @@ final class VideoExporter {
             }
             // Camera-follow override: replace target and yaw so the exported video
             // matches playback — camera tracks the object's position and orientation.
-            if let follow = camTrack.resolveFollowCamera(
+            // (Honor camera.followSuspended for symmetry with live rendering, even
+            // though edit mode shouldn't be active during an export.)
+            if !camera.followSuspended,
+               let follow = camTrack.resolveFollowCamera(
                 at:             time,
                 getObjectState: { [self] name in sceneManager.worldOrbitAnchor(ofObjectNamed: name) }
             ) {

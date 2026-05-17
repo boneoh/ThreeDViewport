@@ -70,10 +70,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     private let timelinePanelHeight: CGFloat = 80
 
-    // Height reserved for the scene HUD overlay in the top-left of the viewport.
-    // Tall enough for ~8 objects in the list before it clips.
+    // Bounding box for the scene HUD overlay in the top-left of the viewport.
+    // The HUD itself shrinks to fit its content; these dimensions just set the
+    // upper limit (and the hit-testing-disabled SwiftUI passes clicks through to
+    // Metal in the empty area).  Width is generous so 50-char .glb part names
+    // don't get middle-truncated by a cramped NSHostingView frame.
     private let overlayHeight: CGFloat = 270
-    private let overlayWidth:  CGFloat = 230
+    private let overlayWidth:  CGFloat = 1100
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         print("[DEBUG] AppDelegate: applicationDidFinishLaunching")
@@ -1318,6 +1321,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     )
                 }
                 viewport.setControlMode(.camera)
+                // Suspend the follow override so the user's adjustments to target /
+                // yaw stick during edit instead of being overwritten each frame.
+                // Reset on commit/cancel.  Free (non-follow) keyframes leave it false.
+                viewport.camera.followSuspended = (rawFollowName != nil)
                 print("[DEBUG] AppDelegate: entered camera keyframe edit at t="
                     + String(format: "%.3f", kfTime)
                     + (rawFollowName.map { " follow='\($0)'" } ?? " (free)"))
@@ -1428,6 +1435,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
             case .camera(_, _, _, _, let followTargetName, let kfTime):
                 viewport.timeline.seek(to: kfTime)
+                // Resume follow override before re-stamping so the new keyframe is
+                // computed against the live anchor state, then applyCameraFollow
+                // runs normally on subsequent frames.
+                viewport.camera.followSuspended = false
                 if let name = followTargetName {
                     // Preserve follow: re-add as a follow keyframe for the same target,
                     // recomputing the yaw offset from the new camera position.
@@ -1477,6 +1488,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 c.pitch    = pitch
                 c.distance = distance
                 c.target   = target
+                // Resume follow override; on the next frame applyCameraFollow will
+                // re-place the camera using the stored offsets — same as before edit.
+                c.followSuspended = false
                 print("[DEBUG] AppDelegate: cancelled camera keyframe edit"
                     + " t=" + String(format: "%.3f", kfTime))
 

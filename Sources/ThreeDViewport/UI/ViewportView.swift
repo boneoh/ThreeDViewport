@@ -29,9 +29,22 @@ final class ViewportView: MTKView {
     // Owned scene objects
     let sceneManager:     SceneManager
     let camera:           CameraController
+    /// Director's-POV camera used in Scene mode (read-only view of the whole
+    /// scene from a fly-cam position above and behind the recording camera).
+    /// Independent state — never animated, never saved with the project.
+    let director:         CameraController
     let lightManager:     LightManager
     let backgroundConfig: BackgroundConfig
     let timeline:         Timeline
+
+    /// True while Scene mode is active.  The Renderer mirrors this flag so its
+    /// `viewCamera` swap kicks in.  When false, behaviour is unchanged.
+    var sceneModeActive: Bool = false {
+        didSet { renderer?.sceneModeActive = sceneModeActive }
+    }
+    /// First-time-per-session auto-fit guard.  Toggling Scene off then on does
+    /// NOT re-fit; the user has to press ⌘R to refit.
+    private var directorEverFit: Bool = false
     var renderer: Renderer?
 
     // Phase 8: observable rendering settings (color / greyscale / gizmo)
@@ -107,6 +120,7 @@ final class ViewportView: MTKView {
     init(frame: NSRect) {
         sceneManager     = SceneManager()
         camera           = CameraController()
+        director         = CameraController()
         lightManager     = LightManager()
         backgroundConfig = BackgroundConfig()
         timeline         = Timeline()
@@ -132,6 +146,7 @@ final class ViewportView: MTKView {
             device:           metalDevice,
             sceneManager:     sceneManager,
             camera:           camera,
+            director:         director,
             lightManager:     lightManager,
             backgroundConfig: backgroundConfig,
             timeline:         timeline
@@ -416,7 +431,8 @@ final class ViewportView: MTKView {
     // Rebuilds the minimal HUD state from live scene data.
     // Call after any mode change or selection change.
     func syncOverlayState() {
-        overlayState.controlMode = controlMode
+        overlayState.controlMode     = controlMode
+        overlayState.sceneModeActive = sceneModeActive
         switch controlMode {
         case .camera:
             overlayState.selectedItemName = ""
@@ -494,6 +510,77 @@ final class ViewportView: MTKView {
         syncLocalTransform(obj)
 
         print("[DEBUG] ViewportView: resetObjectOrientation — " + obj.name)
+    }
+
+    // MARK: - Director auto-fit (Scene mode)
+
+    /// Computes a bounding sphere over the scene contents (objects + positional
+    /// lights + scene camera eye) and positions `director` to frame it from
+    /// above and behind the recording camera.
+    ///
+    /// Called the first time the user enters Scene mode and again on ⌘R.  The
+    /// resulting pose persists for the session unless the user explicitly refits.
+    func autoFitDirector() {
+        // Seed with the scene camera's eye so we always have at least one point.
+        let camEye = camera.eyePosition
+        var wMin = camEye
+        var wMax = camEye
+
+        // ── Objects: world-space bounding boxes ────────────────────────────────
+        for obj in sceneManager.objects {
+            let groupT = obj.groupID.flatMap { sceneManager.groupTransforms[$0] }
+                ?? matrix_identity_float4x4
+            let rendered = groupT * obj.transform
+            let corners: [SIMD3<Float>] = [
+                SIMD3(obj.boundingMin.x, obj.boundingMin.y, obj.boundingMin.z),
+                SIMD3(obj.boundingMax.x, obj.boundingMin.y, obj.boundingMin.z),
+                SIMD3(obj.boundingMin.x, obj.boundingMax.y, obj.boundingMin.z),
+                SIMD3(obj.boundingMax.x, obj.boundingMax.y, obj.boundingMin.z),
+                SIMD3(obj.boundingMin.x, obj.boundingMin.y, obj.boundingMax.z),
+                SIMD3(obj.boundingMax.x, obj.boundingMin.y, obj.boundingMax.z),
+                SIMD3(obj.boundingMin.x, obj.boundingMax.y, obj.boundingMax.z),
+                SIMD3(obj.boundingMax.x, obj.boundingMax.y, obj.boundingMax.z),
+            ]
+            for c in corners {
+                let w4 = rendered * SIMD4<Float>(c, 1)
+                let w  = SIMD3<Float>(w4.x, w4.y, w4.z)
+                wMin = simd_min(wMin, w)
+                wMax = simd_max(wMax, w)
+            }
+        }
+
+        // ── Positional lights: their world position ────────────────────────────
+        for light in lightManager.lights {
+            switch light.type {
+            case .point, .spot, .laser:
+                wMin = simd_min(wMin, light.position)
+                wMax = simd_max(wMax, light.position)
+            case .ambient, .directional:
+                break   // no position to include
+            }
+        }
+
+        // ── Derive sphere ──────────────────────────────────────────────────────
+        let center     = (wMin + wMax) * 0.5
+        let halfExtent = (wMax - wMin) * 0.5
+        let radius     = max(simd_length(halfExtent), 0.5)
+
+        // ── Place director above and behind the scene camera ───────────────────
+        // Same yaw as the scene camera so the director is on the camera's "side"
+        // of the scene; pitch elevated so we're looking down on it.
+        director.target      = center
+        director.distance    = radius * 3.0
+        director.yaw         = camera.yaw
+        director.pitch       = max(camera.pitch + 0.5, 0.5)   // ≥ ~29° above horizon
+        director.fovYRadians = 50.0 * Float.pi / 180.0        // wider than scene cam
+        directorEverFit      = true
+
+        print("[DEBUG] ViewportView: director auto-fit — center=("
+            + String(format: "%.2f", center.x) + ","
+            + String(format: "%.2f", center.y) + ","
+            + String(format: "%.2f", center.z) + ")"
+            + " radius=" + String(format: "%.2f", radius)
+            + " distance=" + String(format: "%.2f", director.distance))
     }
 
     // MARK: - Load error alert
@@ -1030,9 +1117,14 @@ final class ViewportView: MTKView {
         lastMouseLocation = loc
 
         if isSpaceDown {
-            // Space+drag: free orbit around target — no axis lock so the user can
-            // freely position the view angle in a single stroke.
-            camera.orbit(deltaX: dx, deltaY: dy)
+            // Space+drag: free orbit.  In Scene mode this navigates the Director
+            // (the rendering camera in that mode); otherwise it orbits the scene
+            // camera.  Either way it orbits whatever you're currently looking through.
+            if sceneModeActive {
+                director.orbit(deltaX: dx, deltaY: dy)
+            } else {
+                camera.orbit(deltaX: dx, deltaY: dy)
+            }
 
         } else if controlMode == .object {
             // Object mode: axis-locked translation.
@@ -1524,6 +1616,7 @@ final class ViewportView: MTKView {
         static let o:        UInt16 = 31   // object mode / cycle
         static let p:        UInt16 = 35   // play / pause
         static let r:        UInt16 = 15   // reset object orientation to base
+        static let s:        UInt16 = 1    // toggle Scene mode (Director view)
         // Regular arrow keys
         static let left:     UInt16 = 123
         static let right:    UInt16 = 124
@@ -1553,6 +1646,9 @@ final class ViewportView: MTKView {
         // Playhead navigation
         static let home:         UInt16 = 115  // Home
         static let end:          UInt16 = 119  // End
+        // Letter aliases for laptops without dedicated Home / End keys.
+        static let h:            UInt16 = 4    // H — alias for Home
+        static let e:            UInt16 = 14   // E — alias for End
         static let tab:          UInt16 = 48   // Tab
     }
 
@@ -1595,14 +1691,14 @@ final class ViewportView: MTKView {
             return
         }
 
-        // ── Home — jump playhead to start ─────────────────────────────────────
-        if kc == KC.home, !event.isARepeat {
+        // ── Home / H — jump playhead to start ─────────────────────────────────
+        if (kc == KC.home || kc == KC.h), !event.isARepeat {
             timeline.seek(to: 0)
             return
         }
 
-        // ── End — jump playhead to end ────────────────────────────────────────
-        if kc == KC.end, !event.isARepeat {
+        // ── End / E — jump playhead to end ────────────────────────────────────
+        if (kc == KC.end || kc == KC.e), !event.isARepeat {
             timeline.seek(to: timeline.duration)
             return
         }
@@ -1674,8 +1770,8 @@ final class ViewportView: MTKView {
                     lightManager.cycleSelection()
                 } else {
                     controlMode = .light
-                    syncOverlayState()
                 }
+                syncOverlayState()
                 onControlModeChanged?(.light(lightManager.selectedIndex))
                 return
 
@@ -1704,9 +1800,17 @@ final class ViewportView: MTKView {
 
             case KC.r:
                 // R — reset rotation / orientation to defaults.
+                //   ⌘R while in Scene mode: re-auto-fit the Director.
                 //   Object/Model : restore original loaded rotation (position/scale preserved).
                 //   Camera       : reset to default yaw/pitch/distance/target.
                 //   Light        : reset selected light's direction to its default.
+                if event.modifierFlags.contains(.command) {
+                    if sceneModeActive {
+                        autoFitDirector()
+                        print("[DEBUG] ViewportView: Director re-auto-fit")
+                    }
+                    return
+                }
                 if controlMode == .object,
                    let obj = sceneManager.selectedObject ?? sceneManager.primaryObject {
                     resetObjectOrientation(obj)
@@ -1715,6 +1819,18 @@ final class ViewportView: MTKView {
                 } else if controlMode == .light {
                     lightManager.resetSelected()
                 }
+                return
+
+            case KC.s:
+                // S — toggle Scene mode (view from Director's POV).
+                //   First entry in this session auto-fits the Director to the scene.
+                //   Subsequent toggles keep the last Director pose (⌘R to re-fit).
+                sceneModeActive.toggle()
+                if sceneModeActive && !directorEverFit {
+                    autoFitDirector()
+                }
+                syncOverlayState()
+                print("[DEBUG] ViewportView: Scene mode = " + (sceneModeActive ? "ON" : "OFF"))
                 return
 
             default:
@@ -1770,11 +1886,21 @@ final class ViewportView: MTKView {
 
         // ── Plus / KP+ ────────────────────────────────────────────────────────
         case KC.kpPlus, KC.regEqual:
-            applyDepthKey(positive: true, optionDown: event.modifierFlags.contains(.option))
+            // ⌘+ in Scene mode dollies the Director in.  Otherwise standard +/− behaviour.
+            if sceneModeActive && event.modifierFlags.contains(.command) {
+                director.dolly(delta: zoomStep / 0.05)
+            } else {
+                applyDepthKey(positive: true, optionDown: event.modifierFlags.contains(.option))
+            }
 
         // ── Minus / KP− ───────────────────────────────────────────────────────
         case KC.kpMinus, KC.regMinus:
-            applyDepthKey(positive: false, optionDown: event.modifierFlags.contains(.option))
+            // ⌘− in Scene mode dollies the Director out.  Otherwise standard +/− behaviour.
+            if sceneModeActive && event.modifierFlags.contains(.command) {
+                director.dolly(delta: -(zoomStep / 0.05))
+            } else {
+                applyDepthKey(positive: false, optionDown: event.modifierFlags.contains(.option))
+            }
 
         default:
             // Forward unrecognised keys to the Timeline Editor (if present and not

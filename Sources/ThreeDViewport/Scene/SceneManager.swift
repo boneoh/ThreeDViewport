@@ -196,9 +196,15 @@ final class SceneManager {
 
         if let gid = obj.groupID {
             if let groupMat = groupTransforms[gid] {
-                // Group has a keyframe-animated transform — it represents the full
-                // model pose, so use it for both position and facing direction.
-                posMat = groupMat
+                // Group has a keyframe-animated transform.  The rendered position
+                // of any part is `groupMat × obj.transform` — the group matrix is
+                // a multiplier on top of each part's hierarchical transform, not
+                // a complete pose by itself.  So compose them for `posMat` so that
+                // following a sub-part (e.g. a head bone) tracks the sub-part's
+                // actual rendered position when the group is also keyframed.
+                // `yawMat` stays at groupMat because the body-facing direction
+                // comes from the model as a whole, not the sub-part.
+                posMat = groupMat * obj.transform
                 yawMat = groupMat
             } else {
                 // No group keyframe yet.

@@ -24,6 +24,12 @@ final class CameraController {
     let nearPlane: Float   = 0.01
     let farPlane: Float    = 2000.0
 
+    /// When true, the renderer (and exporter) skip `applyCameraFollow` and leave
+    /// `target` / `yaw` alone.  Used during edit mode for a camera-follow keyframe
+    /// so the user's adjustments to position and aim aren't immediately overwritten
+    /// by the follow-resolved values each frame.
+    var followSuspended: Bool = false
+
     init() {
         print("[DEBUG] CameraController: initialized, distance=" + String(distance))
     }

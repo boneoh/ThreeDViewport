@@ -13,10 +13,13 @@
 | **M** | Model mode (move/rotate whole group as one unit) |
 | **O** | Object mode (press again to cycle to next object) |
 | **P** | Play / Pause |
+| **S** | Toggle Scene mode (Director's POV — see camera, lights, models from above and behind) |
+| **⌘R** | Re-auto-fit Director (only in Scene mode) |
+| **⌘+** / **⌘−** | Dolly Director in / out (only in Scene mode) |
 | **W** | Wireframe toggle |
 | **D** / **Delete** / **Forward Delete** | Delete selected keyframe(s) |
-| **End** | Jump playhead to end |
-| **Home** | Jump playhead to start |
+| **End** or **E** | Jump playhead to end |
+| **Home** or **H** | Jump playhead to start |
 | **Return** | Commit keyframe edit |
 | **Shift+Tab** | Previous keyframe on active track |
 | **Tab** | Next keyframe on active track |
@@ -55,7 +58,7 @@ Hold for smooth repeat. Numpad equivalents: 4/6/8/2/+/−
 |--------|--------|----------------|--------|
 | **Left drag** | Axis-locked Truck + Pedestal | Axis-locked translate (screen-relative) | Axis-locked Truck + Pedestal (positional) / Pan + Tilt (directional) |
 | **Right drag** | Free Pan + Tilt | Free rotate (both axes) | Free Pan + Tilt (directional/spot/laser only) |
-| **Space + Left drag** | Free orbit (all modes) | Free orbit (all modes) | Free orbit (all modes) |
+| **Space + Left drag** | Free orbit (orbits Director in Scene mode, scene camera otherwise) | Free orbit | Free orbit |
 | **Scroll wheel** | Dolly in/out | Move away / toward (screen depth) | Dolly in / out (positional only) |
 
 ## Timeline Editor

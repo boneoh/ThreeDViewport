@@ -194,3 +194,15 @@ struct SparkUniforms {
     var cameraRight: SIMD4<Float>
     var cameraUp:    SIMD4<Float>
 }
+
+// ── Scene-mode widget uniforms (buffer index 1 in widget pass) ───────────────
+// Must match `struct WidgetUniforms` in WidgetShaders.metal exactly.
+// Layout:
+//   viewProjectionMatrix  float4x4   64
+//   color                 float4     16  (linear RGBA, unpremultiplied)
+//   ─────────────────────────────────────
+//   Total                             80
+struct WidgetUniforms {
+    var viewProjectionMatrix: matrix_float4x4
+    var color: SIMD4<Float>
+}

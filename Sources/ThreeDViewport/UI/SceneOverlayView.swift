@@ -8,6 +8,10 @@ final class SceneOverlayState: ObservableObject {
     @Published var controlMode:     ControlMode = .camera
     /// Name of the currently selected item — object name, "Camera", or "Light N".
     @Published var selectedItemName: String     = "Camera"
+    /// True while the Director's-POV view is active (Scene mode).  The HUD
+    /// prepends a "SCENE" badge so it's visually obvious you're not looking
+    /// through the recording camera.
+    @Published var sceneModeActive:  Bool       = false
 
     init() {
         print("[DEBUG] SceneOverlayState: initialized")
@@ -24,6 +28,17 @@ struct SceneOverlayView: View {
 
     var body: some View {
         HStack(spacing: 6) {
+            // SCENE badge — only when the Director's-POV view is active.
+            if state.sceneModeActive {
+                Text("SCENE")
+                    .font(.system(size: 10, weight: .heavy, design: .monospaced))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.white.opacity(0.18))
+                    .cornerRadius(4)
+            }
+
             Image(systemName: modeIcon)
                 .foregroundColor(modeColor)
                 .font(.system(size: 11, weight: .semibold))
@@ -39,7 +54,9 @@ struct SceneOverlayView: View {
         .background(Color.black.opacity(0.55))
         .cornerRadius(7)
         .padding(12)
-        .frame(maxWidth: 600, maxHeight: .infinity, alignment: .topLeading)
+        // No maxWidth cap — let the HUD grow to fit any object name.  The
+        // surrounding viewport (1920×1080 at MVP) bounds it naturally.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .allowsHitTesting(false)  // clicks pass through to Metal
     }
 
