@@ -1,0 +1,13 @@
+A few things worth knowing:
+
+Adding a new shape — add a builder function to generate_models.py and append it to SHAPES. generate_all.py picks it up automatically.
+
+Adding a new molecule with multi-color support — also add a build_X_scene function and register it in MOLECULE_BUILDERS.
+
+The venv — the scripts need /tmp/glb_env/bin/python3. That venv lives in /tmp and won't survive a reboot, so you may need to recreate it with 
+	
+	python3 -m venv /tmp/glb_env && /tmp/glb_env/bin/pip install trimesh pillow numpy.
+	
+The to run:
+
+	/tmp/glb_env/bin/python3 generate_all.py  

@@ -44,6 +44,7 @@ import sys
 import numpy as np
 import trimesh
 import trimesh.transformations as tf
+import trimesh.visual.material
 from PIL import Image
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -340,10 +341,15 @@ def uv_box(mesh):
 
 # ─────────────────────────────────────────────────────── mesh primitives ──
 
-def textured(mesh, png_bytes, uv_fn=None):
-    """Apply a texture + UV map to a mesh in-place."""
-    mat = trimesh.visual.texture.SimpleMaterial(
-        image=Image.open(io.BytesIO(png_bytes)).convert("RGB")
+def textured(mesh, png_bytes, uv_fn=None, metalness=0.0, roughness=0.8,
+             emissive_png=None, emissive_factor=None):
+    """Apply a PBR material + UV map to a mesh in-place."""
+    mat = trimesh.visual.material.PBRMaterial(
+        baseColorTexture=Image.open(io.BytesIO(png_bytes)).convert("RGB"),
+        metallicFactor=metalness,
+        roughnessFactor=roughness,
+        emissiveTexture=Image.open(io.BytesIO(emissive_png)).convert("RGB") if emissive_png else None,
+        emissiveFactor=emissive_factor,
     )
     uv = uv_fn(mesh) if uv_fn else uv_box(mesh)
     mesh.visual = trimesh.visual.TextureVisuals(uv=uv, material=mat)
@@ -351,6 +357,19 @@ def textured(mesh, png_bytes, uv_fn=None):
 
 
 # ──────────────────────────────────────────────────────── character build ──
+
+# Per-surface PBR defaults passed as keyword args to textured()
+_METAL = dict(metalness=0.80, roughness=0.45)
+_HEAD  = dict(metalness=0.50, roughness=0.50)
+_GLASS = dict(metalness=0.00, roughness=0.08)
+_JOINT = dict(metalness=0.05, roughness=0.88)
+_FOOT  = dict(metalness=0.05, roughness=0.92)
+
+
+def _GLOW(emissive_png):
+    return dict(metalness=0.00, roughness=1.00,
+                emissive_png=emissive_png, emissive_factor=[1.0, 1.0, 1.0])
+
 
 def build_robot(body_fn=None, head_fn=None, arm_fn=None, leg_fn=None):
     """
@@ -412,50 +431,50 @@ def build_robot(body_fn=None, head_fn=None, arm_fn=None, leg_fn=None):
 
     # ── HIPS ─────────────────────────────────────────────────────────────
     hips = trimesh.creation.box([0.40, 0.13, 0.24])
-    textured(hips, T_body_metal, uv_box)
+    textured(hips, T_body_metal, uv_box, **_METAL)
     add("hips", hips, parent=None, node_xyz=[0, 0.08, 0], mesh_xyz=None)
 
     # ── TORSO ────────────────────────────────────────────────────────────
     torso = trimesh.creation.box([0.44, 0.46, 0.27])
-    textured(torso, T_body_metal, uv_box)
+    textured(torso, T_body_metal, uv_box, **_METAL)
     add("torso", torso, "hips", [0, 0.065, 0], [0, 0.230, 0])
 
     panel = trimesh.creation.box([0.26, 0.22, 0.025])
-    textured(panel, T_body_visor, uv_box)
+    textured(panel, T_body_visor, uv_box, **_GLASS)
     add("chest_panel", panel, "torso", [0, 0, 0], [0, 0.245, 0.148])
 
     # ── NECK ─────────────────────────────────────────────────────────────
     neck = trimesh.creation.cylinder(radius=0.065, height=0.09, sections=12)
-    textured(neck, T_body_joint, lambda m: uv_cylinder(m.vertices))
+    textured(neck, T_body_joint, lambda m: uv_cylinder(m.vertices), **_JOINT)
     add("neck", neck, "torso", [0, 0.455, 0], [0, 0.045, 0])
 
     # ── HEAD ─────────────────────────────────────────────────────────────
     head = trimesh.creation.icosphere(3, radius=0.185)
-    textured(head, T_head_main, lambda m: uv_sphere(m.vertices))
+    textured(head, T_head_main, lambda m: uv_sphere(m.vertices), **_HEAD)
     add("head", head, "neck", [0, 0.09, 0], [0, 0.190, 0])
 
     visor = trimesh.creation.icosphere(3, radius=0.12)
     visor.apply_scale([1.5, 0.55, 0.25])
-    textured(visor, T_head_visor, lambda m: uv_sphere(m.vertices))
+    textured(visor, T_head_visor, lambda m: uv_sphere(m.vertices), **_GLASS)
     add("visor", visor, "head", [0, 0, 0], [0, 0.185, 0.155])
 
     for label, ex in [("eye_L", -0.065), ("eye_R", 0.065)]:
         eye = trimesh.creation.icosphere(2, radius=0.025)
-        textured(eye, T_head_glow, lambda m: uv_sphere(m.vertices))
+        textured(eye, T_head_glow, lambda m: uv_sphere(m.vertices), **_GLOW(T_head_glow))
         add(label, eye, "head", [0, 0, 0], [ex, 0.195, 0.185])
 
     for label, sx in [("ear_L", -1), ("ear_R", 1)]:
         ear = trimesh.creation.cylinder(radius=0.03, height=0.04, sections=8)
-        textured(ear, T_head_joint, lambda m: uv_cylinder(m.vertices))
+        textured(ear, T_head_joint, lambda m: uv_cylinder(m.vertices), **_JOINT)
         ear.apply_transform(tf.rotation_matrix(np.radians(90), [0, 1, 0]))
         add(label, ear, "head", [0, 0, 0], [sx * 0.21, 0.190, 0])
 
     pole = trimesh.creation.cylinder(radius=0.014, height=0.13, sections=8)
-    textured(pole, T_head_joint, lambda m: uv_cylinder(m.vertices))
+    textured(pole, T_head_joint, lambda m: uv_cylinder(m.vertices), **_METAL)
     add("antenna_pole", pole, "head", [0, 0, 0], [0, 0.410, 0])
 
     ball = trimesh.creation.icosphere(2, radius=0.038)
-    textured(ball, T_head_glow, lambda m: uv_sphere(m.vertices))
+    textured(ball, T_head_glow, lambda m: uv_sphere(m.vertices), **_GLOW(T_head_glow))
     add("antenna_ball", ball, "head", [0, 0, 0], [0, 0.495, 0])
 
     # ── ARMS & LEGS (mirrored L / R) ─────────────────────────────────────
@@ -463,56 +482,56 @@ def build_robot(body_fn=None, head_fn=None, arm_fn=None, leg_fn=None):
 
         # ── Shoulder sphere ───────────────────────────────────────────────
         sh = trimesh.creation.icosphere(2, radius=0.105)
-        textured(sh, T_arm_metal, lambda m: uv_sphere(m.vertices))
+        textured(sh, T_arm_metal, lambda m: uv_sphere(m.vertices), **_METAL)
         add(f"shoulder_{side}", sh, "torso", [sx * 0.305, 0.420, 0], None)
 
         # ── Upper arm ─────────────────────────────────────────────────────
         ua = trimesh.creation.cylinder(radius=0.068, height=0.24, sections=12)
-        textured(ua, T_arm_metal, lambda m: uv_cylinder(m.vertices))
+        textured(ua, T_arm_metal, lambda m: uv_cylinder(m.vertices), **_METAL)
         ua.apply_transform(tf.rotation_matrix(np.radians(90), [1, 0, 0]))
         add(f"upper_arm_{side}", ua, f"shoulder_{side}", [0, 0, 0], [0, -0.210, 0])
 
         # ── Elbow sphere ──────────────────────────────────────────────────
         el = trimesh.creation.icosphere(2, radius=0.075)
-        textured(el, T_arm_joint, lambda m: uv_sphere(m.vertices))
+        textured(el, T_arm_joint, lambda m: uv_sphere(m.vertices), **_JOINT)
         add(f"elbow_{side}", el, f"upper_arm_{side}", [0, -0.350, 0], None)
 
         # ── Forearm ───────────────────────────────────────────────────────
         fa = trimesh.creation.cylinder(radius=0.057, height=0.22, sections=12)
-        textured(fa, T_arm_metal, lambda m: uv_cylinder(m.vertices))
+        textured(fa, T_arm_metal, lambda m: uv_cylinder(m.vertices), **_METAL)
         fa.apply_transform(tf.rotation_matrix(np.radians(90), [1, 0, 0]))
         add(f"forearm_{side}", fa, f"elbow_{side}", [0, 0, 0], [0, -0.130, 0])
 
         # ── Hand ──────────────────────────────────────────────────────────
         hand = trimesh.creation.box([0.105, 0.13, 0.085])
-        textured(hand, T_arm_joint, uv_box)
+        textured(hand, T_arm_joint, uv_box, **_JOINT)
         add(f"hand_{side}", hand, f"forearm_{side}", [0, -0.240, 0], [0, -0.065, 0])
 
         # ── Upper leg ─────────────────────────────────────────────────────
         ul = trimesh.creation.cylinder(radius=0.085, height=0.28, sections=12)
-        textured(ul, T_leg_metal, lambda m: uv_cylinder(m.vertices))
+        textured(ul, T_leg_metal, lambda m: uv_cylinder(m.vertices), **_METAL)
         ul.apply_transform(tf.rotation_matrix(np.radians(90), [1, 0, 0]))
         add(f"upper_leg_{side}", ul, "hips", [sx * 0.135, -0.105, 0], [0, -0.140, 0])
 
         # ── Knee sphere ───────────────────────────────────────────────────
         kn = trimesh.creation.icosphere(2, radius=0.09)
-        textured(kn, T_leg_joint, lambda m: uv_sphere(m.vertices))
+        textured(kn, T_leg_joint, lambda m: uv_sphere(m.vertices), **_JOINT)
         add(f"knee_{side}", kn, f"upper_leg_{side}", [0, -0.300, 0], None)
 
         # ── Lower leg ─────────────────────────────────────────────────────
         ll = trimesh.creation.cylinder(radius=0.072, height=0.27, sections=12)
-        textured(ll, T_leg_metal, lambda m: uv_cylinder(m.vertices))
+        textured(ll, T_leg_metal, lambda m: uv_cylinder(m.vertices), **_METAL)
         ll.apply_transform(tf.rotation_matrix(np.radians(90), [1, 0, 0]))
         add(f"lower_leg_{side}", ll, f"knee_{side}", [0, 0, 0], [0, -0.150, 0])
 
         # ── Ankle sphere ──────────────────────────────────────────────────
         an = trimesh.creation.icosphere(2, radius=0.065)
-        textured(an, T_leg_joint, lambda m: uv_sphere(m.vertices))
+        textured(an, T_leg_joint, lambda m: uv_sphere(m.vertices), **_JOINT)
         add(f"ankle_{side}", an, f"lower_leg_{side}", [0, -0.300, 0], None)
 
         # ── Foot ──────────────────────────────────────────────────────────
         foot = trimesh.creation.box([0.13, 0.085, 0.22])
-        textured(foot, T_leg_foot, uv_box)
+        textured(foot, T_leg_foot, uv_box, **_FOOT)
         add(f"foot_{side}", foot, f"ankle_{side}", [0, 0, 0], [0, -0.060, 0.040])
 
     return scene

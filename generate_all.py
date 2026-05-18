@@ -1,0 +1,127 @@
+"""
+generate_all.py  —  Batch-generate every colour × material combination.
+
+Shape output  : ~/Documents/ThreeDViewport/Models/<shape>/
+Robot output  : ~/Documents/ThreeDViewport/Models/robot/
+
+Filenames
+  shapes : {shape}-{colour}-{material}.glb   (150 per shape, 1 650 total)
+  robot  : robot-{colour}.glb                (30 uniform-colour)
+           robot-{body-colour}-{head-colour}.glb  (900 two-tone, opt-in)
+
+Usage:
+    python3 generate_all.py               # shapes + 30 uniform robots
+    python3 generate_all.py --two-tone    # also generates 900 two-tone robots
+    python3 generate_all.py --shapes-only
+    python3 generate_all.py --robot-only
+"""
+
+import os
+import sys
+
+from generate_models import (
+    GREY_RANGES, PALETTES, MATERIAL_PRESETS, SHAPES, SHAPE_OUTPUT_DIRS,
+    MOLECULE_BUILDERS, palette_molecule_colors,
+    apply_palette, apply_tonal_range, apply_texture, make_png_bytes,
+)
+from generate_character import build_robot
+
+MODELS_ROOT = os.path.expanduser("~/Documents/ThreeDViewport/Models")
+
+
+def all_colors():
+    """Yield (label, colorizer_fn, palette_key, variant) for all 30 named colour options.
+
+    palette_key and variant are None for greyscale and normal palette entries.
+    For C1/C2 palette entries, palette_key is the PALETTES dict key ("7"–"14")
+    and variant is "c1" or "c2" — used by molecule scene builders.
+    """
+    for _, (name, (low, high)) in GREY_RANGES.items():
+        label = name.lower().replace(" ", "-")
+        yield label, lambda g, lo=low, hi=high: apply_tonal_range(g, lo, hi), None, None
+
+    for key, (name, base_stops, comp1, (comp2a, comp2b)) in PALETTES.items():
+        base = name.lower().replace(" ", "-")
+        yield base,         lambda g, s=base_stops:                     apply_palette(g, s), key, None
+        yield base + "-c1", lambda g, s=[(0, comp1)] + base_stops[1:]:  apply_palette(g, s), key, "c1"
+        c2 = [(0, comp2a), (96, comp2b)] + base_stops[1:]
+        yield base + "-c2", lambda g, s=c2:                             apply_palette(g, s), key, "c2"
+
+
+def generate_shapes():
+    colors    = list(all_colors())
+    materials = [(n.lower().replace(" ", "-"), metal, rough)
+                 for _, (n, metal, rough) in MATERIAL_PRESETS.items()]
+    total = len(SHAPES) * len(colors) * len(materials)
+    done  = 0
+
+    for shape_name, builder, _ in SHAPES:
+        out_dir = os.path.join(MODELS_ROOT, SHAPE_OUTPUT_DIRS.get(shape_name, shape_name))
+        os.makedirs(out_dir, exist_ok=True)
+        print(f"  {shape_name}  ({len(colors) * len(materials)} files)")
+
+        mol_builder = MOLECULE_BUILDERS.get(shape_name)
+
+        for color_label, colorizer, palette_key, variant in colors:
+            for mat_label, metalness, roughness in materials:
+                stem = f"{shape_name}-{color_label}-{mat_label}"
+                out  = os.path.join(out_dir, f"{stem}.glb")
+
+                if mol_builder and palette_key and variant in ("c1", "c2"):
+                    heavy, h, bond = palette_molecule_colors(palette_key, variant)
+                    mol_builder(heavy, h, bond, metalness, roughness).export(out)
+                else:
+                    mesh, uv, gray = builder()
+                    apply_texture(mesh, uv, make_png_bytes(colorizer(gray)),
+                                  metalness, roughness).export(out)
+
+                done += 1
+                print(f"\r    {done}/{total}  {stem}.glb", end="", flush=True)
+
+    print(f"\r  {done} shape files written.{' ' * 60}")
+
+
+def generate_robot(two_tone=False):
+    colors  = list(all_colors())
+    out_dir = os.path.join(MODELS_ROOT, "robot")
+    os.makedirs(out_dir, exist_ok=True)
+
+    print(f"  Uniform colour  ({len(colors)} files)")
+    for i, (label, fn, *_) in enumerate(colors, 1):
+        out = os.path.join(out_dir, f"robot-{label}.glb")
+        build_robot(fn, fn, fn, fn).export(out)
+        print(f"\r    {i}/{len(colors)}  robot-{label}.glb", end="", flush=True)
+    print(f"\r  {len(colors)} uniform robot files written.{' ' * 60}")
+
+    if not two_tone:
+        return
+
+    # body+legs = one colour, head+arms = another
+    pairs = [(bl, bf, hl, hf)
+             for bl, bf, *_ in colors
+             for hl, hf, *_ in colors]
+    print(f"  Two-tone  ({len(pairs)} files)")
+    for i, (bl, bf, hl, hf) in enumerate(pairs, 1):
+        stem = f"robot-{bl}-{hl}"
+        out  = os.path.join(out_dir, f"{stem}.glb")
+        build_robot(bf, hf, hf, bf).export(out)
+        print(f"\r    {i}/{len(pairs)}  {stem}.glb", end="", flush=True)
+    print(f"\r  {len(pairs)} two-tone robot files written.{' ' * 60}")
+
+
+if __name__ == "__main__":
+    two_tone    = "--two-tone"    in sys.argv
+    shapes_only = "--shapes-only" in sys.argv
+    robot_only  = "--robot-only"  in sys.argv
+
+    if not robot_only:
+        shape_total = len(list(all_colors())) * len(MATERIAL_PRESETS) * len(SHAPES)
+        print(f"\nGenerating shapes ({shape_total:,} files)...")
+        generate_shapes()
+
+    if not shapes_only:
+        robot_total = 30 + (900 if two_tone else 0)
+        print(f"\nGenerating robots ({robot_total} files)...")
+        generate_robot(two_tone=two_tone)
+
+    print("\nDone.")

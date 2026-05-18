@@ -13,6 +13,7 @@ Filenames include the chosen palette, e.g. sphere-sunset-c2.glb
 import sys
 import numpy as np
 import trimesh
+import trimesh.visual.material
 from PIL import Image
 import io
 import os
@@ -86,6 +87,31 @@ PALETTES = {
            [(  0, ( 30,  10,   5)), (128, (170,  90,  30)), (255, (240, 190,  80))],
            ( 15,  45, 120),
            ((  8,  25,  75), ( 25,  60, 150))),
+}
+
+
+def palette_molecule_colors(palette_key, variant):
+    """
+    Return (heavy_rgb, h_rgb, bond_rgb) for a C1 or C2 palette molecule variant.
+
+    C1:  heavy = palette bright · H = comp1        · bond = palette mid
+    C2:  heavy = palette bright · H = comp2b       · bond = comp2a
+    """
+    _, base_stops, comp1, (comp2a, comp2b) = PALETTES[palette_key]
+    bright = base_stops[-1][1]
+    mid    = base_stops[1][1]
+    if variant == "c1":
+        return bright, comp1, mid
+    return bright, comp2b, comp2a   # "c2"
+
+
+# Keys "p","b","m","c","r": PBR material presets — (display_name, metallicFactor, roughnessFactor)
+MATERIAL_PRESETS = {
+    "p": ("Polished Metal", 1.00, 0.10),
+    "b": ("Brushed Metal",  0.90, 0.45),
+    "m": ("Matte Plastic",  0.00, 0.85),
+    "c": ("Ceramic",        0.05, 0.40),
+    "r": ("Rubber",         0.00, 0.95),
 }
 
 
@@ -222,6 +248,44 @@ def prompt_color(shape_name, pattern_name):
         print("  Please enter 1–14 (optionally with c1/c2 and/or 'a'), Enter, or 'a'.")
 
 
+def prompt_material(shape_name):
+    """
+    Show the material preset menu for one shape.
+    Returns (metalness, roughness, label | None, apply_all).
+
+    Input syntax:
+      Enter      Matte Plastic default, this shape only
+      p b m c r  preset key
+      Append 'a' to apply to all remaining shapes
+      a          default for this shape AND all remaining
+    """
+    print(f"\n  {'─' * 46}")
+    print(f"  Material for: {shape_name}")
+    print(f"  {'─' * 46}")
+    for key, (name, metal, rough) in MATERIAL_PRESETS.items():
+        print(f"   {key}  {name:<16}  metal {metal:.2f}  rough {rough:.2f}")
+    print("  Append 'a' to apply to all remaining.  Enter = Matte Plastic")
+
+    while True:
+        raw = input("  > ").strip().lower()
+
+        if raw == "":
+            return 0.0, 0.85, None, False
+
+        if raw == "a":
+            return 0.0, 0.85, None, True
+
+        apply_all = raw.endswith("a")
+        key       = raw[:-1] if apply_all else raw
+
+        if key in MATERIAL_PRESETS:
+            name, metal, rough = MATERIAL_PRESETS[key]
+            label = name.lower().replace(" ", "-")
+            return metal, rough, label, apply_all
+
+        print("  Please enter p, b, m, c, or r (optionally with 'a'), Enter, or 'a'.")
+
+
 # ---------------------------------------------------------------------------
 # Texture generators  (return 2D uint8 greyscale arrays)
 # ---------------------------------------------------------------------------
@@ -334,12 +398,113 @@ def uv_spherical(vertices):
 
 
 # ---------------------------------------------------------------------------
+# Geometry helpers  (used by molecule and tube builders)
+# ---------------------------------------------------------------------------
+
+def _align_to(direction, midpoint):
+    """4×4 matrix: rotate Z axis to direction, translate to midpoint."""
+    d = np.asarray(direction, float)
+    d = d / np.linalg.norm(d)
+    z = np.array([0.0, 0.0, 1.0])
+    dot = float(np.clip(np.dot(z, d), -1.0, 1.0))
+    if dot > 1.0 - 1e-9:
+        R = np.eye(3)
+    elif dot < -1.0 + 1e-9:
+        R = np.diag([1.0, -1.0, -1.0])
+    else:
+        axis  = np.cross(z, d);  axis /= np.linalg.norm(axis)
+        angle = np.arccos(dot)
+        K = np.array([[ 0,        -axis[2],  axis[1]],
+                      [ axis[2],   0,        -axis[0]],
+                      [-axis[1],   axis[0],   0      ]])
+        R = np.eye(3) + np.sin(angle) * K + (1 - np.cos(angle)) * (K @ K)
+    T = np.eye(4);  T[:3, :3] = R;  T[:3, 3] = midpoint
+    return T
+
+
+def _bond(p0, p1, radius=0.028):
+    """Cylinder mesh connecting two 3D points."""
+    p0, p1 = np.asarray(p0, float), np.asarray(p1, float)
+    v      = p1 - p0
+    cyl    = trimesh.creation.cylinder(radius=radius,
+                                       height=float(np.linalg.norm(v)),
+                                       sections=10)
+    cyl.apply_transform(_align_to(v, (p0 + p1) * 0.5))
+    return cyl
+
+
+def _tube(pts, radius, sections=14, closed=True):
+    """Sweep a circular cross-section along a 3D path.
+    Returns (trimesh.Trimesh, uv_array) where uv is per-vertex.
+    """
+    pts = np.asarray(pts, float)
+    N   = len(pts)
+
+    # Tangents via central differences
+    if closed:
+        tang = np.roll(pts, -1, axis=0) - np.roll(pts, 1, axis=0)
+    else:
+        tang = np.zeros_like(pts)
+        tang[1:-1] = pts[2:] - pts[:-2]
+        tang[0]    = pts[1]  - pts[0]
+        tang[-1]   = pts[-1] - pts[-2]
+    nrm  = np.linalg.norm(tang, axis=1, keepdims=True)
+    tang /= np.where(nrm > 1e-10, nrm, 1.0)
+
+    # Rotation-minimizing (parallel-transport) frame
+    ref = np.array([0, 0, 1.0]) if abs(tang[0, 2]) < 0.9 else np.array([1, 0, 0.0])
+    n0  = np.cross(tang[0], ref);  n0 /= np.linalg.norm(n0)
+    normals = [n0]
+    for i in range(1, N):
+        v  = pts[i] - pts[i - 1]
+        c1 = float(np.dot(v, v))
+        if c1 > 1e-12:
+            nL = normals[-1] - (2 / c1) * np.dot(v, normals[-1]) * v
+            tL = tang[i - 1]  - (2 / c1) * np.dot(v, tang[i - 1])  * v
+            v2 = tang[i] - tL;  c2 = float(np.dot(v2, v2))
+            n  = nL - (2 / c2) * np.dot(v2, nL) * v2 if c2 > 1e-12 else nL
+        else:
+            n = normals[-1]
+        normals.append(n / np.linalg.norm(n))
+    normals = np.array(normals)
+    binorm  = np.cross(tang, normals)
+
+    # Ring vertices
+    theta = np.linspace(0, 2 * np.pi, sections, endpoint=False)
+    ct, st = np.cos(theta), np.sin(theta)
+    rings = (pts[:, None, :]
+             + radius * (ct[None, :, None] * normals[:, None, :]
+                         + st[None, :, None] * binorm[:, None, :]))
+    verts = rings.reshape(-1, 3)
+
+    # Quad faces
+    faces = []
+    Nf = N if closed else N - 1
+    for i in range(Nf):
+        ni = (i + 1) % N
+        for j in range(sections):
+            nj = (j + 1) % sections
+            a, b = i * sections + j,  ni * sections + j
+            c, d = ni * sections + nj, i * sections + nj
+            faces += [[a, b, c], [a, c, d]]
+    mesh = trimesh.Trimesh(vertices=verts, faces=np.array(faces), process=True)
+
+    # UVs: u along path, v around tube (both per vertex)
+    u_vals = np.arange(N) / (N if closed else N - 1)
+    uv = np.column_stack([np.repeat(u_vals, sections),
+                          np.tile(np.arange(sections) / sections, N)])
+    return mesh, uv
+
+
+# ---------------------------------------------------------------------------
 # Mesh builders  — return (mesh, uv, gray_array) tuples
 # ---------------------------------------------------------------------------
 
-def apply_texture(mesh, uv, png_bytes):
-    mat = trimesh.visual.texture.SimpleMaterial(
-        image=Image.open(io.BytesIO(png_bytes)).convert("RGB")
+def apply_texture(mesh, uv, png_bytes, metalness=0.0, roughness=0.85):
+    mat = trimesh.visual.material.PBRMaterial(
+        baseColorTexture=Image.open(io.BytesIO(png_bytes)).convert("RGB"),
+        metallicFactor=metalness,
+        roughnessFactor=roughness,
     )
     mesh.visual = trimesh.visual.TextureVisuals(uv=uv, material=mat)
     return mesh
@@ -409,6 +574,121 @@ def build_mobius():
     mesh = trimesh.Trimesh(vertices=verts, faces=np.array(faces), process=False)
     return mesh, uv_arr, tex_spiral()
 
+# ---------------------------------------------------------------------------
+# Molecule builders
+# ---------------------------------------------------------------------------
+
+def build_water():
+    bl   = 0.38
+    half = np.radians(104.5) / 2
+    O    = np.zeros(3)
+    H1   = np.array([ np.sin(half), -np.cos(half), 0]) * bl
+    H2   = np.array([-np.sin(half), -np.cos(half), 0]) * bl
+    o    = trimesh.creation.icosphere(3, 0.13)
+    parts = [o]
+    for H in (H1, H2):
+        h = trimesh.creation.icosphere(2, 0.09);  h.apply_translation(H)
+        parts += [h, _bond(O, H, 0.032)]
+    mesh = trimesh.util.concatenate(parts)
+    return mesh, uv_spherical(mesh.vertices), tex_radial_gradient()
+
+
+def build_methane():
+    bl   = 0.40
+    tips = np.array([[1,1,1],[1,-1,-1],[-1,1,-1],[-1,-1,1]], float)
+    tips = tips / np.linalg.norm(tips[0]) * bl
+    C    = np.zeros(3)
+    parts = [trimesh.creation.icosphere(3, 0.12)]
+    for H in tips:
+        h = trimesh.creation.icosphere(2, 0.085);  h.apply_translation(H)
+        parts += [h, _bond(C, H, 0.028)]
+    mesh = trimesh.util.concatenate(parts)
+    return mesh, uv_spherical(mesh.vertices), tex_marble()
+
+
+def build_benzene():
+    Cr     = 0.33
+    Hr     = 0.53
+    angles = np.linspace(0, 2 * np.pi, 6, endpoint=False)
+    C_pos  = np.column_stack([Cr * np.cos(angles), Cr * np.sin(angles), np.zeros(6)])
+    H_pos  = np.column_stack([Hr * np.cos(angles), Hr * np.sin(angles), np.zeros(6)])
+    parts  = []
+    for i in range(6):
+        c = trimesh.creation.icosphere(2, 0.075);  c.apply_translation(C_pos[i])
+        h = trimesh.creation.icosphere(2, 0.055);  h.apply_translation(H_pos[i])
+        parts += [c, h,
+                  _bond(C_pos[i], H_pos[i], 0.022),
+                  _bond(C_pos[i], C_pos[(i + 1) % 6], 0.027)]
+    mesh = trimesh.util.concatenate(parts)
+    return mesh, uv_box(mesh), tex_angular_stripes()
+
+
+# ---------------------------------------------------------------------------
+# Mathematical shape builders
+# ---------------------------------------------------------------------------
+
+def build_trefoil():
+    t   = np.linspace(0, 2 * np.pi, 180, endpoint=False)
+    pts = np.column_stack([np.sin(t) + 2 * np.sin(2 * t),
+                           np.cos(t) - 2 * np.cos(2 * t),
+                           -np.sin(3 * t)])
+    pts = pts / np.abs(pts).max() * 0.55
+    mesh, uv = _tube(pts, 0.055, sections=14, closed=True)
+    return mesh, uv, tex_diagonal_stripes()
+
+
+def build_helix():
+    turns = 3
+    t     = np.linspace(0, turns * 2 * np.pi, 200, endpoint=False)
+    r, pitch = 0.38, 0.16
+    pts   = np.column_stack([r * np.cos(t),
+                              r * np.sin(t),
+                              pitch * t / (2 * np.pi) - pitch * turns / 2])
+    mesh, uv = _tube(pts, 0.055, sections=12, closed=False)
+    return mesh, uv, tex_wood_grain()
+
+
+def build_hyperboloid():
+    U, V  = 64, 32
+    a, c  = 0.26, 0.52
+    t_max = 1.15
+    u     = np.linspace(0, 2 * np.pi, U, endpoint=False)
+    v     = np.linspace(-t_max, t_max, V)
+    uu, vv = np.meshgrid(u, v)
+    x = a * np.cosh(vv) * np.cos(uu)
+    y = a * np.cosh(vv) * np.sin(uu)
+    z = c * np.sinh(vv)
+    verts  = np.column_stack([x.ravel(), y.ravel(), z.ravel()])
+    uv_arr = np.column_stack([uu.ravel() / (2 * np.pi),
+                               (vv.ravel() - vv.min()) / (vv.max() - vv.min())])
+    faces  = []
+    for i in range(V - 1):
+        for j in range(U):
+            nj = (j + 1) % U
+            a_i, b_i = i*U+j,     i*U+nj
+            c_i, d_i = (i+1)*U+nj, (i+1)*U+j
+            faces += [[a_i, b_i, c_i], [a_i, c_i, d_i]]
+    mesh = trimesh.Trimesh(vertices=verts, faces=np.array(faces), process=True)
+    return mesh, uv_arr, tex_concentric_rings()
+
+
+# ---------------------------------------------------------------------------
+# Buckyball builders  (icospheres at three resolutions)
+# ---------------------------------------------------------------------------
+
+def build_buckyball_162():
+    mesh = trimesh.creation.icosphere(subdivisions=2, radius=0.6)
+    return mesh, uv_spherical(mesh.vertices), tex_marble()
+
+def build_buckyball_642():
+    mesh = trimesh.creation.icosphere(subdivisions=3, radius=0.6)
+    return mesh, uv_spherical(mesh.vertices), tex_concentric_rings()
+
+def build_buckyball_2562():
+    mesh = trimesh.creation.icosphere(subdivisions=4, radius=0.6)
+    return mesh, uv_spherical(mesh.vertices), tex_spiral()
+
+
 def build_star():
     n = 5
     outer_r, inner_r, height = 0.6, 0.25, 0.4
@@ -441,22 +721,143 @@ def build_star():
 
 
 # ---------------------------------------------------------------------------
+# Molecule scene builders  (C1 / C2 palette variants only)
+# Each returns a trimesh.Scene with three solid-colour nodes:
+#   "heavy"    — O or C spheres
+#   "hydrogen" — H spheres
+#   "bonds"    — all bond cylinders
+# ---------------------------------------------------------------------------
+
+def _apply_solid_color(mesh, rgb, metalness, roughness):
+    r, g, b = [c / 255.0 for c in rgb]
+    mat = trimesh.visual.material.PBRMaterial(
+        baseColorFactor=[r, g, b, 1.0],
+        metallicFactor=metalness,
+        roughnessFactor=roughness,
+    )
+    mesh.visual = trimesh.visual.TextureVisuals(material=mat)
+
+
+def build_water_scene(heavy_rgb, h_rgb, bond_rgb, metalness, roughness):
+    bl   = 0.38
+    half = np.radians(104.5) / 2
+    O    = np.zeros(3)
+    H1   = np.array([ np.sin(half), -np.cos(half), 0.0]) * bl
+    H2   = np.array([-np.sin(half), -np.cos(half), 0.0]) * bl
+
+    o_mesh = trimesh.creation.icosphere(3, 0.13)
+
+    h1 = trimesh.creation.icosphere(2, 0.09);  h1.apply_translation(H1)
+    h2 = trimesh.creation.icosphere(2, 0.09);  h2.apply_translation(H2)
+    h_mesh = trimesh.util.concatenate([h1, h2])
+
+    b_mesh = trimesh.util.concatenate([_bond(O, H1, 0.032), _bond(O, H2, 0.032)])
+
+    scene = trimesh.Scene()
+    for name, mesh, rgb in [("heavy", o_mesh, heavy_rgb),
+                             ("hydrogen", h_mesh, h_rgb),
+                             ("bonds", b_mesh, bond_rgb)]:
+        _apply_solid_color(mesh, rgb, metalness, roughness)
+        scene.add_geometry(mesh, node_name=name, geom_name=name)
+    return scene
+
+
+def build_methane_scene(heavy_rgb, h_rgb, bond_rgb, metalness, roughness):
+    bl   = 0.40
+    tips = np.array([[1,1,1],[1,-1,-1],[-1,1,-1],[-1,-1,1]], float)
+    tips = tips / np.linalg.norm(tips[0]) * bl
+    C    = np.zeros(3)
+
+    c_mesh = trimesh.creation.icosphere(3, 0.12)
+
+    h_parts = []
+    b_parts = []
+    for H in tips:
+        h = trimesh.creation.icosphere(2, 0.085);  h.apply_translation(H)
+        h_parts.append(h)
+        b_parts.append(_bond(C, H, 0.028))
+    h_mesh = trimesh.util.concatenate(h_parts)
+    b_mesh = trimesh.util.concatenate(b_parts)
+
+    scene = trimesh.Scene()
+    for name, mesh, rgb in [("heavy", c_mesh, heavy_rgb),
+                             ("hydrogen", h_mesh, h_rgb),
+                             ("bonds", b_mesh, bond_rgb)]:
+        _apply_solid_color(mesh, rgb, metalness, roughness)
+        scene.add_geometry(mesh, node_name=name, geom_name=name)
+    return scene
+
+
+def build_benzene_scene(heavy_rgb, h_rgb, bond_rgb, metalness, roughness):
+    Cr     = 0.33
+    Hr     = 0.53
+    angles = np.linspace(0, 2 * np.pi, 6, endpoint=False)
+    C_pos  = np.column_stack([Cr * np.cos(angles), Cr * np.sin(angles), np.zeros(6)])
+    H_pos  = np.column_stack([Hr * np.cos(angles), Hr * np.sin(angles), np.zeros(6)])
+
+    c_parts, h_parts, b_parts = [], [], []
+    for i in range(6):
+        c = trimesh.creation.icosphere(2, 0.075);  c.apply_translation(C_pos[i])
+        h = trimesh.creation.icosphere(2, 0.055);  h.apply_translation(H_pos[i])
+        c_parts.append(c)
+        h_parts.append(h)
+        b_parts.append(_bond(C_pos[i], H_pos[i], 0.022))
+        b_parts.append(_bond(C_pos[i], C_pos[(i + 1) % 6], 0.027))
+
+    c_mesh = trimesh.util.concatenate(c_parts)
+    h_mesh = trimesh.util.concatenate(h_parts)
+    b_mesh = trimesh.util.concatenate(b_parts)
+
+    scene = trimesh.Scene()
+    for name, mesh, rgb in [("heavy", c_mesh, heavy_rgb),
+                             ("hydrogen", h_mesh, h_rgb),
+                             ("bonds", b_mesh, bond_rgb)]:
+        _apply_solid_color(mesh, rgb, metalness, roughness)
+        scene.add_geometry(mesh, node_name=name, geom_name=name)
+    return scene
+
+
+MOLECULE_BUILDERS = {
+    "water":   build_water_scene,
+    "methane":  build_methane_scene,
+    "benzene":  build_benzene_scene,
+}
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 SHAPES = [
-    ("cube",        build_cube,        "linear gradient"),
-    ("cylinder",    build_cylinder,    "radial gradient"),
-    ("pyramid",     build_pyramid,     "angular stripes"),
-    ("sphere",      build_sphere,      "marble"),
-    ("torus",       build_torus,       "concentric rings"),
-    ("tetrahedron", build_tetrahedron, "checkerboard"),
-    ("octahedron",  build_octahedron,  "diagonal stripes"),
-    ("hexprism",    build_hexprism,    "crosshatch"),
-    ("capsule",     build_capsule,     "wood grain"),
-    ("mobius",      build_mobius,      "spiral"),
-    ("star",        build_star,        "cells"),
+    ("cube",            build_cube,            "linear gradient"),
+    ("cylinder",        build_cylinder,        "radial gradient"),
+    ("pyramid",         build_pyramid,         "angular stripes"),
+    ("sphere",          build_sphere,          "marble"),
+    ("torus",           build_torus,           "concentric rings"),
+    ("tetrahedron",     build_tetrahedron,     "checkerboard"),
+    ("octahedron",      build_octahedron,      "diagonal stripes"),
+    ("hexprism",        build_hexprism,        "crosshatch"),
+    ("capsule",         build_capsule,         "wood grain"),
+    ("mobius",          build_mobius,          "spiral"),
+    ("star",            build_star,            "cells"),
+    ("buckyball-162",   build_buckyball_162,   "marble"),
+    ("buckyball-642",   build_buckyball_642,   "concentric rings"),
+    ("buckyball-2562",  build_buckyball_2562,  "spiral"),
+    ("water",           build_water,           "radial gradient"),
+    ("methane",         build_methane,         "marble"),
+    ("benzene",         build_benzene,         "angular stripes"),
+    ("trefoil",         build_trefoil,         "diagonal stripes"),
+    ("helix",           build_helix,           "wood grain"),
+    ("hyperboloid",     build_hyperboloid,     "concentric rings"),
 ]
+
+# Maps shape names to their output subdirectory when it differs from the shape name.
+# Used by generate_all.py to route files into the correct folder.
+SHAPE_OUTPUT_DIRS = {
+    "buckyball-162":  "buckyball",
+    "buckyball-642":  "buckyball",
+    "buckyball-2562": "buckyball",
+}
 
 if __name__ == "__main__":
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -471,25 +872,42 @@ if __name__ == "__main__":
     locked_colorizer = None
     locked_label     = None
     locked           = False
+    mat_locked       = False
+    locked_metal     = 0.0
+    locked_rough     = 0.85
+    locked_mat_label = None
 
     for name, builder, pattern_name in SHAPES:
         print(f"\nBuilding {name}...", end=" ", flush=True)
         mesh, uv, gray = builder()
 
         if use_defaults or locked:
-            colorizer = locked_colorizer
-            label     = locked_label
+            colorizer   = locked_colorizer
+            color_label = locked_label
         else:
-            colorizer, apply_all, label = prompt_color(name, pattern_name)
+            colorizer, apply_all, color_label = prompt_color(name, pattern_name)
             if apply_all:
                 locked_colorizer = colorizer
-                locked_label     = label
+                locked_label     = color_label
                 locked           = True
+
+        if use_defaults or mat_locked:
+            metalness = locked_metal
+            roughness = locked_rough
+            mat_label = locked_mat_label
+        else:
+            metalness, roughness, mat_label, apply_all_mat = prompt_material(name)
+            if apply_all_mat:
+                locked_metal     = metalness
+                locked_rough     = roughness
+                locked_mat_label = mat_label
+                mat_locked       = True
             print(f"  Building {name}...", end=" ", flush=True)
 
         colored  = colorizer(gray) if colorizer is not None else gray
-        stem     = f"{name}-{label}" if label else name
-        out_mesh = apply_texture(mesh, uv, make_png_bytes(colored))
+        parts    = [p for p in [color_label, mat_label] if p]
+        stem     = "-".join([name] + parts) if parts else name
+        out_mesh = apply_texture(mesh, uv, make_png_bytes(colored), metalness, roughness)
         out      = os.path.join(OUTPUT_DIR, f"{stem}.glb")
         out_mesh.export(out)
         size_kb  = os.path.getsize(out) / 1024
