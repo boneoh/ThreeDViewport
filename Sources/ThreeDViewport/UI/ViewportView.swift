@@ -67,6 +67,10 @@ final class ViewportView: MTKView {
     private var controlMode: ControlMode = .camera {
         didSet {
             overlayState.controlMode = controlMode
+            // Camera-mode awareness — lets the renderer suspend the camera-follow
+            // override while the user is editing the camera with the timeline
+            // paused.  See Renderer.applyCameraFollow.
+            renderer?.cameraModeActive = (controlMode == .camera)
             print("[DEBUG] ViewportView: controlMode = " + controlMode.displayName)
         }
     }
@@ -151,6 +155,10 @@ final class ViewportView: MTKView {
             backgroundConfig: backgroundConfig,
             timeline:         timeline
         )
+        // Seed cameraModeActive — controlMode's didSet only fires on changes,
+        // not on initial assignment, so the flag would otherwise stay false
+        // until the user pressed C / O / L / M for the first time.
+        renderer?.cameraModeActive = (controlMode == .camera)
 
         if renderer == nil {
             print("[DEBUG] ViewportView: Renderer init returned nil")
@@ -949,9 +957,13 @@ final class ViewportView: MTKView {
     /// Adds a camera follow keyframe at the current playhead time.
     /// The follow target is the currently selected (or primary) object.
     ///
-    /// The camera's yaw is stored as an offset from the object's current "behind yaw"
-    /// so that as the object rotates the camera automatically stays in the same
-    /// relative position (e.g. behind and above).  Pitch and distance are absolute.
+    /// Captures the camera's current state **as-is** (no aim adjustment) plus a
+    /// `targetOffset` recording how far the user's chosen aim point is from the
+    /// followed object's anchor.  At playback time, `target = anchor.pos +
+    /// targetOffset` reproduces the same relative framing wherever the anchor
+    /// has moved to — so the entire composition translates with the object.
+    /// `followYawOffset` does the same for the camera's yaw versus the body's
+    /// facing direction, so the camera also rotates with the body.
     func addFollowCameraKeyframeAtCurrentTime() {
         guard let obj = sceneManager.selectedObject ?? sceneManager.primaryObject else {
             print("[DEBUG] ViewportView: addFollowCameraKeyframe — no object selected")
@@ -962,73 +974,79 @@ final class ViewportView: MTKView {
             print("[DEBUG] ViewportView: created new CameraKeyframeTrack")
         }
 
-        // Capture how far the camera yaw is offset from the "directly behind" angle
-        // of the object right now.  At runtime, this offset is re-applied on top of
-        // the object's current behind-yaw so the camera stays in the same relative
-        // bearing regardless of how much the object has rotated.
-        // Also capture the offset from the node origin to the current camera target
-        // so the camera orbits the visual centre rather than the raw joint origin.
-        var followYawOffset: Float? = nil
+        var followYawOffset:   Float? = nil
+        var followPitchOffset: Float? = nil
         var targetOffset = SIMD3<Float>(0, 0, 0)
         if let anchor = sceneManager.worldOrbitAnchor(ofObjectNamed: obj.name) {
-            followYawOffset = camera.yaw - anchor.behindYaw
-            targetOffset    = camera.target - anchor.pos
+            followYawOffset   = camera.yaw    - anchor.behindYaw
+            followPitchOffset = camera.pitch  - anchor.behindPitch
+            targetOffset      = camera.target - anchor.pos
         }
 
         let kf = CameraKeyframe(
-            time:             timeline.currentTime,
-            yaw:              camera.yaw,
-            pitch:            camera.pitch,
-            distance:         camera.distance,
-            target:           camera.target,
-            fov:              camera.fovYRadians,
-            followTargetName: obj.name,
-            followYawOffset:  followYawOffset,
-            targetOffset:     targetOffset
+            time:              timeline.currentTime,
+            yaw:               camera.yaw,
+            pitch:             camera.pitch,
+            distance:          camera.distance,
+            target:            camera.target,
+            fov:               camera.fovYRadians,
+            followTargetName:  obj.name,
+            followYawOffset:   followYawOffset,
+            followPitchOffset: followPitchOffset,
+            targetOffset:      targetOffset
         )
         camera.keyframeTrack?.addKeyframe(kf)
 
-        let offsetStr = followYawOffset.map { String(format: "%.4f", $0) } ?? "nil"
+        let yawOffStr   = followYawOffset  .map { String(format: "%.4f", $0) } ?? "nil"
+        let pitchOffStr = followPitchOffset.map { String(format: "%.4f", $0) } ?? "nil"
         print("[DEBUG] ViewportView: follow camera keyframe added at t="
             + String(format: "%.3f", timeline.currentTime)
             + " followTarget='\(obj.name)'"
             + " yaw=" + String(format: "%.4f", camera.yaw)
-            + " followYawOffset=" + offsetStr
+            + " followYawOffset=" + yawOffStr
+            + " followPitchOffset=" + pitchOffStr
             + " distance=" + String(format: "%.4f", camera.distance))
     }
 
     /// Variant of `addFollowCameraKeyframeAtCurrentTime()` that follows a specific named
     /// object rather than the current selection.  Used by the keyframe-edit commit path
     /// to preserve the original follow target when re-writing an edited keyframe.
+    ///
+    /// Same capture-as-is behaviour as the no-arg variant.
     func addFollowCameraKeyframeAtCurrentTime(followingObjectNamed targetName: String) {
         if camera.keyframeTrack == nil {
             camera.keyframeTrack = CameraKeyframeTrack()
             print("[DEBUG] ViewportView: created new CameraKeyframeTrack")
         }
-        var followYawOffset: Float? = nil
+        var followYawOffset:   Float? = nil
+        var followPitchOffset: Float? = nil
         var targetOffset = SIMD3<Float>(0, 0, 0)
         if let anchor = sceneManager.worldOrbitAnchor(ofObjectNamed: targetName) {
-            followYawOffset = camera.yaw - anchor.behindYaw
-            targetOffset    = camera.target - anchor.pos
+            followYawOffset   = camera.yaw    - anchor.behindYaw
+            followPitchOffset = camera.pitch  - anchor.behindPitch
+            targetOffset      = camera.target - anchor.pos
         }
         let kf = CameraKeyframe(
-            time:             timeline.currentTime,
-            yaw:              camera.yaw,
-            pitch:            camera.pitch,
-            distance:         camera.distance,
-            target:           camera.target,
-            fov:              camera.fovYRadians,
-            followTargetName: targetName,
-            followYawOffset:  followYawOffset,
-            targetOffset:     targetOffset
+            time:              timeline.currentTime,
+            yaw:               camera.yaw,
+            pitch:             camera.pitch,
+            distance:          camera.distance,
+            target:            camera.target,
+            fov:               camera.fovYRadians,
+            followTargetName:  targetName,
+            followYawOffset:   followYawOffset,
+            followPitchOffset: followPitchOffset,
+            targetOffset:      targetOffset
         )
         camera.keyframeTrack?.addKeyframe(kf)
 
-        let offsetStr = followYawOffset.map { String(format: "%.4f", $0) } ?? "nil"
+        let yawOffStr   = followYawOffset  .map { String(format: "%.4f", $0) } ?? "nil"
+        let pitchOffStr = followPitchOffset.map { String(format: "%.4f", $0) } ?? "nil"
         print("[DEBUG] ViewportView: follow camera keyframe updated at t="
             + String(format: "%.3f", timeline.currentTime)
             + " followTarget='\(targetName)'"
-            + " followYawOffset=" + offsetStr)
+            + " followYawOffset=" + yawOffStr
+            + " followPitchOffset=" + pitchOffStr)
     }
 
     // MARK: - Video Export

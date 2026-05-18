@@ -1079,7 +1079,11 @@ final class VideoExporter {
                 getObjectState: { [self] name in sceneManager.worldOrbitAnchor(ofObjectNamed: name) }
             ) {
                 camera.target = follow.target
-                if let yaw = follow.yaw { camera.yaw = yaw }
+                if let yaw   = follow.yaw   { camera.yaw   = yaw }
+                if let pitch = follow.pitch {
+                    camera.pitch = max(-Float.pi / 2 + 0.01,
+                                    min( Float.pi / 2 - 0.01, pitch))
+                }
             }
         }
 

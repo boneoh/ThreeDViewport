@@ -38,6 +38,13 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// (so the scene camera moves on its track), but the *view* is the director's.
     var sceneModeActive:  Bool = false
 
+    /// True when the viewport's controlMode is `.camera`.  Used (together with
+    /// `timeline.isPlaying`) to decide whether `applyCameraFollow` should yield
+    /// the camera to the user: in camera mode while paused, follow stops
+    /// overwriting target / yaw so manual input (arrows, drag, scroll) sticks.
+    /// `ViewportView` keeps this in sync via `controlMode`'s `didSet`.
+    var cameraModeActive: Bool = false
+
     /// The camera whose `viewMatrix` / `viewProjectionMatrix` / `eyePosition`
     /// the renderer should sample this frame.  Centralises the "scene mode swap"
     /// so individual draw paths don't have to branch.
@@ -1144,6 +1151,12 @@ final class Renderer: NSObject, MTKViewDelegate {
         // playback resumes (or Scene mode exits), follow re-engages and the
         // wedge tracks its target normally.
         if sceneModeActive && !timeline.isPlaying { return }
+        // And suspended whenever the user is in camera mode with the timeline
+        // paused — that's the "I'm setting up follow keyframes" workflow and
+        // input needs to win.  Object/Light/Model modes keep follow live so
+        // the camera tracks the followed object while the user adjusts the
+        // scene.  Playback always engages follow, regardless of mode.
+        if cameraModeActive && !timeline.isPlaying { return }
         guard let camTrack = camera.keyframeTrack,
               !camTrack.keyframes.isEmpty else { return }
         if let follow = camTrack.resolveFollowCamera(
@@ -1153,7 +1166,13 @@ final class Renderer: NSObject, MTKViewDelegate {
             }
         ) {
             camera.target = follow.target
-            if let yaw = follow.yaw { camera.yaw = yaw }
+            if let yaw   = follow.yaw   { camera.yaw   = yaw }
+            if let pitch = follow.pitch {
+                // Clamp to avoid gimbal lock at the poles — same window the
+                // existing camera operations use when writing pitch directly.
+                camera.pitch = max(-Float.pi / 2 + 0.01,
+                                min( Float.pi / 2 - 0.01, pitch))
+            }
         }
     }
 }

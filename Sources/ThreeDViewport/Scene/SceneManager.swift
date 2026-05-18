@@ -171,63 +171,66 @@ final class SceneManager {
     /// Returns the world-space follow state for the named object — the data needed
     /// for camera-follow keyframes (both at creation time and at runtime).
     ///
-    /// `pos` — world position of the **named object itself** (the camera orbits /
-    ///   looks at this point).  For a head bone the camera will follow the head,
-    ///   for an ungrouped mesh it follows the mesh origin.
+    /// `pos` — world position of the followed object's **visual centre** (its
+    ///   `boundingCenter` transformed through the full posMat chain).  Using
+    ///   the visual centre rather than the raw pivot fixes the common case of
+    ///   a rigged part whose pivot sits at a joint rather than at the mesh.
     ///
-    /// `behindYaw` — camera yaw that places the camera directly *behind* the body,
-    ///   derived from the **group root's** world orientation (not the sub-part).
-    ///   This keeps the "behind" direction aligned with the whole character's facing
-    ///   direction even when the selected sub-part (e.g. a head) has its own local
-    ///   rotation.  Formula: atan2(columns.2.x, columns.2.z).
-    ///
-    /// Design note — two matrices, one per purpose:
-    ///   • `posMat`  : always the named object's own world transform → correct height
-    ///                 and lateral position (e.g. the head, not the feet).
-    ///   • `yawMat`  : group-root (or group keyframe) transform → body facing direction.
-    ///   When a group keyframe is present it drives both, because the group transform
-    ///   already represents the whole model's world pose.
+    /// `behindYaw` / `behindPitch` — the yaw and pitch angles of the followed
+    ///   object's local +Z axis (its "behind" direction) expressed in world
+    ///   space.  Camera-follow logic adds the keyframe's captured offsets to
+    ///   these so the camera stays at a fixed bearing AND elevation relative
+    ///   to the object — head rotation (yaw) AND head tilt (pitch) both rotate
+    ///   the camera around the followed point.
     func worldOrbitAnchor(ofObjectNamed name: String)
-        -> (pos: SIMD3<Float>, behindYaw: Float)? {
+        -> (pos: SIMD3<Float>, behindYaw: Float, behindPitch: Float)? {
         guard let obj = objects.first(where: { $0.name == name }) else { return nil }
 
-        let posMat:  matrix_float4x4   // for extracting world position of the target
-        let yawMat:  matrix_float4x4   // for extracting the body's facing direction
-
-        if let gid = obj.groupID {
-            if let groupMat = groupTransforms[gid] {
-                // Group has a keyframe-animated transform.  The rendered position
-                // of any part is `groupMat × obj.transform` — the group matrix is
-                // a multiplier on top of each part's hierarchical transform, not
-                // a complete pose by itself.  So compose them for `posMat` so that
-                // following a sub-part (e.g. a head bone) tracks the sub-part's
-                // actual rendered position when the group is also keyframed.
-                // `yawMat` stays at groupMat because the body-facing direction
-                // comes from the model as a whole, not the sub-part.
-                posMat = groupMat * obj.transform
-                yawMat = groupMat
-            } else {
-                // No group keyframe yet.
-                //   pos  → the named object's own world transform (updated each frame
-                //          by Renderer.applyHierarchy), so a head bone tracks the head.
-                //   yaw  → the group root's transform so "behind" means "behind the
-                //          whole character body", regardless of head rotation.
-                let root = objects.first(where: { $0.groupID == gid && $0.parentIndex == nil })
-                posMat = obj.transform
-                yawMat = root?.transform ?? obj.transform
-            }
+        // Rendered world transform of the followed object.  When the model has
+        // a group-level keyframe, the group matrix is a multiplier on top of
+        // each part's hierarchical transform (not a complete pose by itself),
+        // so the two must be composed.  Otherwise the object's own transform
+        // is already its world transform.
+        let posMat: matrix_float4x4
+        if let gid = obj.groupID, let groupMat = groupTransforms[gid] {
+            posMat = groupMat * obj.transform
         } else {
-            // Ungrouped object — its own transform covers both needs.
             posMat = obj.transform
-            yawMat = obj.transform
         }
+        // Both position AND facing direction come from the followed object's
+        // own world transform.  So if you're following a head bone and the
+        // head rotates relative to the body, the camera rotates with the head.
+        // If you instead want the camera to track the body's facing, follow
+        // the body's root part — the same code path produces the right answer
+        // because `behindYaw` is then derived from the body's transform.
+        let yawMat = posMat
 
-        let pos = SIMD3<Float>(posMat.columns.3.x, posMat.columns.3.y, posMat.columns.3.z)
-        // "Behind yaw": the camera yaw that places the orbit eye on the +Z (local)
-        // side of the body.  In GLTF the -Z axis is forward, so +Z is behind.
-        // atan2(columns.2.x, columns.2.z) gives the world-space angle of that axis.
-        let behindYaw = atan2(yawMat.columns.2.x, yawMat.columns.2.z)
+        // The followed point is the object's **visual centre** (mid-point of its
+        // mesh bounding box) transformed through the same matrix chain as the
+        // object itself.  Using boundingCenter instead of the raw pivot fixes
+        // the common case where a rigged part's pivot sits at its joint (e.g.
+        // the bottom of the head, at the neck) rather than where the mesh
+        // visually appears.  Without this, snap-on-stamp would tilt the camera
+        // down to aim at the joint instead of at the head you can see.
+        let centreLocal4 = SIMD4<Float>(obj.boundingCenter, 1)
+        let centreWorld4 = posMat * centreLocal4
+        let pos = SIMD3<Float>(centreWorld4.x, centreWorld4.y, centreWorld4.z)
 
-        return (pos: pos, behindYaw: behindYaw)
+        // "Behind" direction = followed object's local +Z axis in world space.
+        // In GLTF, -Z is forward, so +Z is behind.  Normalise to strip out any
+        // non-unit scale baked into the transform chain (Project 2's robot has
+        // a 0.168 uniform scale, for instance) so `behindPitch` reads as the
+        // true elevation angle rather than scale-distorted.  `behindYaw` would
+        // be scale-invariant anyway (atan2 of a ratio), but we use the same
+        // normalised vector for both for consistency.
+        let col2 = SIMD3<Float>(yawMat.columns.2.x,
+                                 yawMat.columns.2.y,
+                                 yawMat.columns.2.z)
+        let len  = simd_length(col2)
+        let dir  = len > 0.0001 ? col2 / len : SIMD3<Float>(0, 0, 1)
+        let behindYaw   = atan2(dir.x, dir.z)
+        let behindPitch = asin(max(-1.0, min(1.0, dir.y)))
+
+        return (pos: pos, behindYaw: behindYaw, behindPitch: behindPitch)
     }
 }

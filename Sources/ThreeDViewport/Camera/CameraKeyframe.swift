@@ -23,6 +23,12 @@ struct CameraKeyframe {
     /// e.g. 0 = directly behind, π/4 = 45° to the right.
     /// nil = no yaw-relative follow (position-only, absolute yaw).
     var followYawOffset:  Float?  = nil
+    /// When followTargetName is set, the offset between the camera pitch and the
+    /// "behind pitch" of the followed object at keyframe-creation time.  Lets
+    /// the camera tilt with the head when the head pitches up/down.
+    /// nil = no pitch-relative follow (camera pitch from keyframe, absolute).
+    /// Absent in keyframes saved before pitch-follow was added.
+    var followPitchOffset: Float? = nil
     /// When followTargetName is set, the offset from the node's world-space origin
     /// to the actual camera target at keyframe-creation time.  Lets the camera orbit
     /// a visual centre (e.g. the middle of a head) rather than a joint origin.
@@ -31,18 +37,20 @@ struct CameraKeyframe {
     init(time: Double, yaw: Float, pitch: Float,
          distance: Float, target: SIMD3<Float>,
          fov: Float,
-         followTargetName: String? = nil,
-         followYawOffset:  Float?  = nil,
-         targetOffset:     SIMD3<Float> = SIMD3<Float>(0, 0, 0)) {
-        self.time             = time
-        self.yaw              = yaw
-        self.pitch            = pitch
-        self.distance         = distance
-        self.target           = target
-        self.fov              = fov
-        self.followTargetName = followTargetName
-        self.followYawOffset  = followYawOffset
-        self.targetOffset     = targetOffset
+         followTargetName:  String? = nil,
+         followYawOffset:   Float?  = nil,
+         followPitchOffset: Float?  = nil,
+         targetOffset:      SIMD3<Float> = SIMD3<Float>(0, 0, 0)) {
+        self.time              = time
+        self.yaw               = yaw
+        self.pitch             = pitch
+        self.distance          = distance
+        self.target            = target
+        self.fov               = fov
+        self.followTargetName  = followTargetName
+        self.followYawOffset   = followYawOffset
+        self.followPitchOffset = followPitchOffset
+        self.targetOffset      = targetOffset
     }
 }
 
@@ -125,18 +133,22 @@ final class CameraKeyframeTrack {
 
     /// Resolves camera-follow overrides at `time`.
     ///
-    /// Returns `(target, yaw?)` where:
+    /// Returns `(target, yaw?, pitch?)` where:
     ///   • `target` — the world-space position the camera should orbit around.
     ///   • `yaw`    — the camera yaw to apply, or nil to keep the evaluated yaw.
+    ///   • `pitch`  — the camera pitch to apply, or nil to keep the evaluated pitch.
+    ///                Only non-nil when the keyframe(s) captured a followPitchOffset
+    ///                (i.e. were stamped after pitch-follow was added).
     ///
     /// Returns nil when no follow is active (free → free segment or empty track),
     /// meaning `evaluate(at:)` values are used unchanged.
     ///
-    /// `getObjectState` maps an object name to its current world position and
-    /// "behind yaw" — the camera yaw that places the camera directly behind the
-    /// object.  Passing it as a closure keeps this track decoupled from SceneManager.
+    /// `getObjectState` maps an object name to its current world position plus
+    /// "behind yaw" and "behind pitch" — the camera yaw / pitch that places the
+    /// camera directly behind the object's local +Z axis.  Passing it as a
+    /// closure keeps this track decoupled from SceneManager.
     ///
-    /// Blending rules (target follows the same logic for yaw when followYawOffset is set):
+    /// Blending rules apply identically to yaw and pitch (when both are present):
     ///   free  → free   : nil (no override)
     ///   free  → follow : lerp(a.stored, b.live, alpha)
     ///   follow→ free   : lerp(a.live, b.stored, alpha)
@@ -144,8 +156,8 @@ final class CameraKeyframeTrack {
     ///   follow→ follow (different target): snap — use a's target throughout segment
     func resolveFollowCamera(
         at time: Double,
-        getObjectState: (String) -> (pos: SIMD3<Float>, behindYaw: Float)?
-    ) -> (target: SIMD3<Float>, yaw: Float?)? {
+        getObjectState: (String) -> (pos: SIMD3<Float>, behindYaw: Float, behindPitch: Float)?
+    ) -> (target: SIMD3<Float>, yaw: Float?, pitch: Float?)? {
 
         guard !keyframes.isEmpty else { return nil }
 
@@ -155,8 +167,9 @@ final class CameraKeyframeTrack {
             guard let name = kf.followTargetName,
                   let state = getObjectState(name) else { return nil }
             let offset = kf.targetOffset
-            let yaw = kf.followYawOffset.map { state.behindYaw + $0 }
-            return (target: state.pos + offset, yaw: yaw)
+            let yaw   = kf.followYawOffset  .map { state.behindYaw   + $0 }
+            let pitch = kf.followPitchOffset.map { state.behindPitch + $0 }
+            return (target: state.pos + offset, yaw: yaw, pitch: pitch)
         }
 
         // ── After last keyframe ───────────────────────────────────────────────
@@ -165,8 +178,9 @@ final class CameraKeyframeTrack {
             guard let name = kf.followTargetName,
                   let state = getObjectState(name) else { return nil }
             let offset = kf.targetOffset
-            let yaw = kf.followYawOffset.map { state.behindYaw + $0 }
-            return (target: state.pos + offset, yaw: yaw)
+            let yaw   = kf.followYawOffset  .map { state.behindYaw   + $0 }
+            let pitch = kf.followPitchOffset.map { state.behindPitch + $0 }
+            return (target: state.pos + offset, yaw: yaw, pitch: pitch)
         }
 
         // ── Between two keyframes ─────────────────────────────────────────────
@@ -184,24 +198,30 @@ final class CameraKeyframeTrack {
                 return nil   // free → free
 
             case (.none, .some(let bName)):
-                // free → follow: blend stored a.target / a.yaw toward live b values
+                // free → follow: blend stored a.target / a.yaw / a.pitch toward live b values
                 guard let bState = getObjectState(bName) else { return nil }
                 let blendedTarget = a.target + ((bState.pos + b.targetOffset) - a.target) * alpha
                 let blendedYaw: Float? = b.followYawOffset.map {
                     lerpAngle(a.yaw, bState.behindYaw + $0, alpha)
                 }
-                return (target: blendedTarget, yaw: blendedYaw)
+                let blendedPitch: Float? = b.followPitchOffset.map {
+                    lerpFloat(a.pitch, bState.behindPitch + $0, alpha)
+                }
+                return (target: blendedTarget, yaw: blendedYaw, pitch: blendedPitch)
 
             case (.some(let aName), .none):
-                // follow → free: blend live a values toward stored b.target / b.yaw
+                // follow → free: blend live a values toward stored b.target / b.yaw / b.pitch
                 guard let aState = getObjectState(aName) else {
-                    return (target: b.target, yaw: nil)
+                    return (target: b.target, yaw: nil, pitch: nil)
                 }
                 let blendedTarget = (aState.pos + a.targetOffset) + (b.target - (aState.pos + a.targetOffset)) * alpha
                 let blendedYaw: Float? = a.followYawOffset.map {
                     lerpAngle(aState.behindYaw + $0, b.yaw, alpha)
                 }
-                return (target: blendedTarget, yaw: blendedYaw)
+                let blendedPitch: Float? = a.followPitchOffset.map {
+                    lerpFloat(aState.behindPitch + $0, b.pitch, alpha)
+                }
+                return (target: blendedTarget, yaw: blendedYaw, pitch: blendedPitch)
 
             case (.some(let aName), .some(let bName)):
                 // follow → follow
@@ -209,8 +229,9 @@ final class CameraKeyframeTrack {
                 guard let state = getObjectState(trackName) else { return nil }
                 // Interpolate the stored target offset between the two keyframes.
                 let offset = a.targetOffset + (b.targetOffset - a.targetOffset) * alpha
-                let yaw = a.followYawOffset.map { state.behindYaw + $0 }
-                return (target: state.pos + offset, yaw: yaw)
+                let yaw   = a.followYawOffset  .map { state.behindYaw   + $0 }
+                let pitch = a.followPitchOffset.map { state.behindPitch + $0 }
+                return (target: state.pos + offset, yaw: yaw, pitch: pitch)
             }
         }
         return nil

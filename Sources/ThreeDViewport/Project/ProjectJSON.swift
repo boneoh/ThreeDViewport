@@ -320,11 +320,17 @@ struct CameraKeyframeData: Codable {
     /// Camera yaw stored as an offset from the object's "behind yaw" at creation time.
     /// nil = no yaw-relative follow (absolute yaw / position-only follow).
     var followYawOffset: Float?  = nil
+    /// Camera pitch stored as an offset from the object's "behind pitch" at
+    /// creation time.  Lets the camera tilt with the followed object when
+    /// the object pitches up/down.  nil = no pitch-relative follow (camera
+    /// pitch from keyframe, absolute).  Absent in older project files saved
+    /// before pitch-follow was added.
+    var followPitchOffset: Float? = nil
     /// World-space offset from the node origin to the camera target at creation time.
     /// nil / absent in older project files — treated as (0, 0, 0) on load.
     var targetOffset: [Float]? = nil
 
-    // Custom decoder so files saved before camera-follow / FOV fields decode cleanly.
+    // Custom decoder so files saved before camera-follow / FOV / pitch-follow fields decode cleanly.
     init(from decoder: Decoder) throws {
         let c    = try decoder.container(keyedBy: CodingKeys.self)
         time     = try  c.decode(Double.self, forKey: .time)
@@ -334,28 +340,32 @@ struct CameraKeyframeData: Codable {
         targetX  = try  c.decode(Float.self,  forKey: .targetX)
         targetY  = try  c.decode(Float.self,  forKey: .targetY)
         targetZ  = try  c.decode(Float.self,  forKey: .targetZ)
-        fov             = try? c.decode(Float.self,   forKey: .fov)
-        followTarget    = try? c.decode(String.self,  forKey: .followTarget)
-        followYawOffset = try? c.decode(Float.self,   forKey: .followYawOffset)
-        targetOffset    = try? c.decode([Float].self, forKey: .targetOffset)
+        fov               = try? c.decode(Float.self,   forKey: .fov)
+        followTarget      = try? c.decode(String.self,  forKey: .followTarget)
+        followYawOffset   = try? c.decode(Float.self,   forKey: .followYawOffset)
+        followPitchOffset = try? c.decode(Float.self,   forKey: .followPitchOffset)
+        targetOffset      = try? c.decode([Float].self, forKey: .targetOffset)
     }
 
     init(time: Double, yaw: Float, pitch: Float, distance: Float,
          targetX: Float, targetY: Float, targetZ: Float,
          fov: Float? = nil,
-         followTarget: String? = nil, followYawOffset: Float? = nil,
+         followTarget: String? = nil,
+         followYawOffset: Float? = nil,
+         followPitchOffset: Float? = nil,
          targetOffset: [Float]? = nil) {
-        self.time            = time
-        self.yaw             = yaw
-        self.pitch           = pitch
-        self.distance        = distance
-        self.targetX         = targetX
-        self.targetY         = targetY
-        self.targetZ         = targetZ
-        self.fov             = fov
-        self.followTarget    = followTarget
-        self.followYawOffset = followYawOffset
-        self.targetOffset    = targetOffset
+        self.time              = time
+        self.yaw               = yaw
+        self.pitch             = pitch
+        self.distance          = distance
+        self.targetX           = targetX
+        self.targetY           = targetY
+        self.targetZ           = targetZ
+        self.fov               = fov
+        self.followTarget      = followTarget
+        self.followYawOffset   = followYawOffset
+        self.followPitchOffset = followPitchOffset
+        self.targetOffset      = targetOffset
     }
 }
 

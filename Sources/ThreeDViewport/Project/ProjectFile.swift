@@ -152,17 +152,18 @@ final class ProjectFile {
         // ── Camera keyframes (Phase 5) ────────────────────────────────────────
         let cameraKfData: [CameraKeyframeData] = (cam.keyframeTrack?.keyframes ?? []).map { kf in
             CameraKeyframeData(
-                time:            kf.time,
-                yaw:             kf.yaw,
-                pitch:           kf.pitch,
-                distance:        kf.distance,
-                targetX:         kf.target.x,
-                targetY:         kf.target.y,
-                targetZ:         kf.target.z,
-                fov:             kf.fov,
-                followTarget:    kf.followTargetName,
-                followYawOffset: kf.followYawOffset,
-                targetOffset:    [kf.targetOffset.x, kf.targetOffset.y, kf.targetOffset.z]
+                time:              kf.time,
+                yaw:               kf.yaw,
+                pitch:             kf.pitch,
+                distance:          kf.distance,
+                targetX:           kf.target.x,
+                targetY:           kf.target.y,
+                targetZ:           kf.target.z,
+                fov:               kf.fov,
+                followTarget:      kf.followTargetName,
+                followYawOffset:   kf.followYawOffset,
+                followPitchOffset: kf.followPitchOffset,
+                targetOffset:      [kf.targetOffset.x, kf.targetOffset.y, kf.targetOffset.z]
             )
         }
 
@@ -324,15 +325,16 @@ final class ProjectFile {
                                                savedOffset.count >= 3 ? savedOffset[1] : 0,
                                                savedOffset.count >= 3 ? savedOffset[2] : 0)
                 camTrack.addKeyframe(CameraKeyframe(
-                    time:             kfData.time,
-                    yaw:              kfData.yaw,
-                    pitch:            kfData.pitch,
-                    distance:         kfData.distance,
-                    target:           SIMD3<Float>(kfData.targetX, kfData.targetY, kfData.targetZ),
-                    fov:              kfData.fov ?? effectiveStaticFov,
-                    followTargetName: kfData.followTarget,
-                    followYawOffset:  kfData.followYawOffset,
-                    targetOffset:     targetOff
+                    time:              kfData.time,
+                    yaw:               kfData.yaw,
+                    pitch:             kfData.pitch,
+                    distance:          kfData.distance,
+                    target:            SIMD3<Float>(kfData.targetX, kfData.targetY, kfData.targetZ),
+                    fov:               kfData.fov ?? effectiveStaticFov,
+                    followTargetName:  kfData.followTarget,
+                    followYawOffset:   kfData.followYawOffset,
+                    followPitchOffset: kfData.followPitchOffset,
+                    targetOffset:      targetOff
                 ))
             }
             vp.camera.keyframeTrack = camTrack
