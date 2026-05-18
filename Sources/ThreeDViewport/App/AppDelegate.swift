@@ -600,7 +600,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let colorGradeItem = NSMenuItem(
             title: "Color Grade…",
             action: #selector(showColorGradePanel(_:)),
-            keyEquivalent: "g"
+            keyEquivalent: "G"   // ⌘⇧G — uppercase encodes the shift modifier
         )
         colorGradeItem.target = self
         windowMenu.addItem(colorGradeItem)
