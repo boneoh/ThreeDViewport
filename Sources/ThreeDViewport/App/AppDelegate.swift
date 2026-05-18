@@ -19,6 +19,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // Brightness / contrast color grade panel.
     private var colorGradePanel: NSPanel?
 
+    // Camera keyframe inspector panel.
+    private var cameraPanel: NSPanel?
+
     // Edit > Remove submenu — repopulated dynamically by NSMenuDelegate.
     private var removeSubmenu: NSMenu?
 
@@ -139,9 +142,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             onAddKeyframe: { [weak viewport] in
                 viewport?.addKeyframeAtCurrentTime()
             },
-            onAddCameraKeyframe: { [weak viewport] in
-                viewport?.addCameraKeyframeAtCurrentTime()
-            },
             onExport: { [weak self] in
                 self?.showExportPanel()
             }
@@ -259,6 +259,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             layout.colorGradePanel = WindowFrameData(x: f.origin.x, y: f.origin.y,
                                                      w: f.size.width, h: f.size.height)
         }
+        if let panel = cameraPanel, panel.isVisible {
+            let f = panel.frame
+            layout.cameraPanel = WindowFrameData(x: f.origin.x, y: f.origin.y,
+                                                 w: f.size.width, h: f.size.height)
+        }
         return layout
     }
 
@@ -306,6 +311,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             if colorGradePanel == nil { showColorGradePanel(self) }
             colorGradePanel?.setFrame(
                 NSRect(x: gf.x, y: gf.y, width: gf.w, height: gf.h), display: true)
+        }
+
+        // Camera panel — open and position if it was visible
+        if let cf = layout.cameraPanel {
+            if cameraPanel == nil { showCameraPanel(self) }
+            cameraPanel?.setFrame(
+                NSRect(x: cf.x, y: cf.y, width: cf.w, height: cf.h), display: true)
         }
     }
 
@@ -592,6 +604,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         )
         colorGradeItem.target = self
         windowMenu.addItem(colorGradeItem)
+
+        let cameraPanelItem = NSMenuItem(
+            title: "Camera…",
+            action: #selector(showCameraPanel(_:)),
+            keyEquivalent: "k"
+        )
+        cameraPanelItem.target = self
+        windowMenu.addItem(cameraPanelItem)
 
         let timelineEditorItem = NSMenuItem(
             title: "Timeline Editor",
@@ -949,6 +969,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             p.orderOut(nil)
             panelsHiddenByMiniaturize.insert("colorGrade")
         }
+        if let p = cameraPanel, p.isVisible {
+            p.orderOut(nil)
+            panelsHiddenByMiniaturize.insert("camera")
+        }
         if let wc = timelineEditorWC, wc.window?.isVisible == true {
             wc.window?.orderOut(nil)
             panelsHiddenByMiniaturize.insert("timeline")
@@ -997,6 +1021,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if panelsHiddenByMiniaturize.contains("lights")     { lightsPanel?.makeKeyAndOrderFront(nil) }
         if panelsHiddenByMiniaturize.contains("feedback")   { feedbackPanel?.makeKeyAndOrderFront(nil) }
         if panelsHiddenByMiniaturize.contains("colorGrade") { colorGradePanel?.makeKeyAndOrderFront(nil) }
+        if panelsHiddenByMiniaturize.contains("camera")     { cameraPanel?.makeKeyAndOrderFront(nil) }
         if panelsHiddenByMiniaturize.contains("timeline")   { timelineEditorWC?.showWindow(nil) }
         if !panelsHiddenByMiniaturize.isEmpty {
             print("[DEBUG] AppDelegate: restored panels: "
@@ -1229,6 +1254,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         colorGradePanel = panel
         panel.makeKeyAndOrderFront(nil)
         print("[DEBUG] AppDelegate: color grade panel opened")
+    }
+
+    // MARK: - Camera Panel
+
+    @objc private func showCameraPanel(_ sender: Any) {
+        // Refresh the picker's object-name list every time the menu item is
+        // invoked, so newly-loaded models appear without requiring a restart
+        // of the panel.  Cheap enough to do unconditionally.
+        if let viewport = viewportView {
+            // Sort alphabetically (natural order so `head10` follows `head2`,
+            // not `head1`).  "None — Free Camera" is rendered separately at
+            // the top of the picker, so it isn't in this list.
+            viewport.cameraPanelState.availableObjectNames =
+                viewport.sceneManager.objects
+                    .map { $0.name }
+                    .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+            // If the previously-chosen follow target no longer exists in the
+            // scene (e.g. the model was removed or replaced), reset to free
+            // camera so the picker shows a valid selection.
+            if let chosen = viewport.cameraPanelState.followTargetName,
+               !viewport.cameraPanelState.availableObjectNames.contains(chosen) {
+                viewport.cameraPanelState.followTargetName = nil
+            }
+        }
+
+        if let panel = cameraPanel {
+            panel.isVisible ? panel.orderOut(nil) : panel.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        guard let viewport = viewportView else { return }
+
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 296, height: 260),
+            styleMask:   [.titled, .closable, .miniaturizable, .resizable, .utilityWindow, .nonactivatingPanel],
+            backing:     .buffered,
+            defer:       false
+        )
+        panel.title              = "Camera"
+        panel.isFloatingPanel    = true
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.hidesOnDeactivate  = false
+
+        let cameraView = CameraPanel(
+            state: viewport.cameraPanelState,
+            onStampKeyframe: { [weak self, weak viewport] in
+                viewport?.addCameraKeyframeFromPanel()
+                self?.markDirty()
+            }
+        )
+        panel.contentView = NSHostingView(rootView: cameraView)
+
+        if let win = window {
+            let winFrame  = win.frame
+            let panelSize = panel.frame.size
+            let originX   = winFrame.maxX - panelSize.width - 20
+            // Position below the other utility panels (lights ~720 + feedback ~280 + grade ~220).
+            let originY   = winFrame.maxY - panelSize.height - 40 - 740 - 300 - 220
+            panel.setFrameOrigin(NSPoint(x: originX, y: max(originY, 40)))
+        } else {
+            panel.center()
+        }
+
+        cameraPanel = panel
+        panel.makeKeyAndOrderFront(nil)
+        print("[DEBUG] AppDelegate: camera panel opened")
     }
 
     // MARK: - Timeline Editor

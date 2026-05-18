@@ -216,6 +216,7 @@ struct WindowLayoutData: Codable {
     var lightsPanel:    WindowFrameData? = nil
     var feedbackPanel:  WindowFrameData? = nil
     var colorGradePanel: WindowFrameData? = nil
+    var cameraPanel:    WindowFrameData? = nil
 }
 
 struct TimelineData: Codable {

@@ -182,8 +182,16 @@ final class SceneManager {
     ///   these so the camera stays at a fixed bearing AND elevation relative
     ///   to the object — head rotation (yaw) AND head tilt (pitch) both rotate
     ///   the camera around the followed point.
+    ///
+    /// `basis` — the object's normalised 3×3 world-space rotation (columns are
+    ///   the object's local +X/+Y/+Z axes in world space).  Used by the
+    ///   camera-follow logic to transform a target offset between the followed
+    ///   object's local frame and world space, so the offset rotates with the
+    ///   object the same way yaw/pitch do.  For clean (uniform-scale +
+    ///   rotation) transforms this is orthonormal and `.transpose` is its
+    ///   inverse — which is the form the follow code uses for world→local.
     func worldOrbitAnchor(ofObjectNamed name: String)
-        -> (pos: SIMD3<Float>, behindYaw: Float, behindPitch: Float)? {
+        -> (pos: SIMD3<Float>, behindYaw: Float, behindPitch: Float, basis: matrix_float3x3)? {
         guard let obj = objects.first(where: { $0.name == name }) else { return nil }
 
         // Rendered world transform of the followed object.  When the model has
@@ -216,21 +224,27 @@ final class SceneManager {
         let centreWorld4 = posMat * centreLocal4
         let pos = SIMD3<Float>(centreWorld4.x, centreWorld4.y, centreWorld4.z)
 
-        // "Behind" direction = followed object's local +Z axis in world space.
-        // In GLTF, -Z is forward, so +Z is behind.  Normalise to strip out any
-        // non-unit scale baked into the transform chain (Project 2's robot has
-        // a 0.168 uniform scale, for instance) so `behindPitch` reads as the
-        // true elevation angle rather than scale-distorted.  `behindYaw` would
-        // be scale-invariant anyway (atan2 of a ratio), but we use the same
-        // normalised vector for both for consistency.
-        let col2 = SIMD3<Float>(yawMat.columns.2.x,
-                                 yawMat.columns.2.y,
-                                 yawMat.columns.2.z)
-        let len  = simd_length(col2)
-        let dir  = len > 0.0001 ? col2 / len : SIMD3<Float>(0, 0, 1)
-        let behindYaw   = atan2(dir.x, dir.z)
-        let behindPitch = asin(max(-1.0, min(1.0, dir.y)))
+        // Normalise each column of the upper-left 3×3 to strip non-unit scale
+        // (Project 2's robot has a 0.168 uniform scale, for instance) so the
+        // resulting basis is orthonormal for clean transforms.  Used both for
+        // pitch (asin of the y-component below) and for the world↔local
+        // rotation of camera-follow target offsets.
+        let col0 = SIMD3<Float>(yawMat.columns.0.x, yawMat.columns.0.y, yawMat.columns.0.z)
+        let col1 = SIMD3<Float>(yawMat.columns.1.x, yawMat.columns.1.y, yawMat.columns.1.z)
+        let col2 = SIMD3<Float>(yawMat.columns.2.x, yawMat.columns.2.y, yawMat.columns.2.z)
+        let len0 = simd_length(col0)
+        let len1 = simd_length(col1)
+        let len2 = simd_length(col2)
+        let axisX = len0 > 0.0001 ? col0 / len0 : SIMD3<Float>(1, 0, 0)
+        let axisY = len1 > 0.0001 ? col1 / len1 : SIMD3<Float>(0, 1, 0)
+        let axisZ = len2 > 0.0001 ? col2 / len2 : SIMD3<Float>(0, 0, 1)
+        let basis = matrix_float3x3(columns: (axisX, axisY, axisZ))
 
-        return (pos: pos, behindYaw: behindYaw, behindPitch: behindPitch)
+        // "Behind" direction = followed object's local +Z axis in world space.
+        // In GLTF, -Z is forward, so +Z is behind.
+        let behindYaw   = atan2(axisZ.x, axisZ.z)
+        let behindPitch = asin(max(-1.0, min(1.0, axisZ.y)))
+
+        return (pos: pos, behindYaw: behindYaw, behindPitch: behindPitch, basis: basis)
     }
 }

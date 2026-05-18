@@ -57,6 +57,11 @@ final class ViewportView: MTKView {
     let feedbackSettings    = FeedbackSettings()
     let feedbackProcessor:   FeedbackProcessor   // created after Metal device is ready
     let colorGradeSettings = ColorGradeSettings()
+
+    // Camera panel — sticky follow-target picker shared with the floating
+    // CameraPanel inspector.  Lives here so the choice survives panel
+    // hide/show cycles.
+    let cameraPanelState   = CameraPanelState()
     private var playbackCancellable: AnyCancellable?
 
     // Phase 6: HUD observable state — AppDelegate embeds the SwiftUI overlay using this.
@@ -767,11 +772,13 @@ final class ViewportView: MTKView {
             if obj.parentIndex == nil {
                 obj.localTransform = obj.transform
             }
-            // Update bounding sphere to post-scale world space.
-            let lc4 = SIMD4<Float>(obj.boundingCenter, 1)
-            let wc4 = obj.transform * lc4
-            obj.boundingCenter = SIMD3<Float>(wc4.x, wc4.y, wc4.z)
-            obj.boundingRadius *= scale
+            // boundingCenter / boundingRadius stay in mesh-local space — both
+            // consumers (groupCenter, worldOrbitAnchor) re-apply the object's
+            // current world transform to get the live world position.  Baking
+            // the load-pose world transform into boundingCenter here was the
+            // source of a long-standing camera-follow drift bug: animated parts
+            // saw `posMat * (loadTransform * localCenter)` instead of
+            // `posMat * localCenter`, and the anchor drifted as the part moved.
         }
 
         let finalCenter = worldCenter * scale
@@ -959,11 +966,12 @@ final class ViewportView: MTKView {
     ///
     /// Captures the camera's current state **as-is** (no aim adjustment) plus a
     /// `targetOffset` recording how far the user's chosen aim point is from the
-    /// followed object's anchor.  At playback time, `target = anchor.pos +
-    /// targetOffset` reproduces the same relative framing wherever the anchor
-    /// has moved to — so the entire composition translates with the object.
-    /// `followYawOffset` does the same for the camera's yaw versus the body's
-    /// facing direction, so the camera also rotates with the body.
+    /// followed object's anchor, stored in the object's **local frame**.  At
+    /// playback time, `target = anchor.pos + anchor.basis * targetOffset`
+    /// reproduces the same relative framing wherever the anchor has moved AND
+    /// rotated to — so the entire composition translates *and rotates* with
+    /// the object.  `followYawOffset` does the same for the camera's yaw
+    /// versus the body's facing direction.
     func addFollowCameraKeyframeAtCurrentTime() {
         guard let obj = sceneManager.selectedObject ?? sceneManager.primaryObject else {
             print("[DEBUG] ViewportView: addFollowCameraKeyframe — no object selected")
@@ -980,7 +988,10 @@ final class ViewportView: MTKView {
         if let anchor = sceneManager.worldOrbitAnchor(ofObjectNamed: obj.name) {
             followYawOffset   = camera.yaw    - anchor.behindYaw
             followPitchOffset = camera.pitch  - anchor.behindPitch
-            targetOffset      = camera.target - anchor.pos
+            // Convert the world-space delta into the followed object's local
+            // frame.  For orthonormal basis, transpose = inverse.
+            let worldDelta = camera.target - anchor.pos
+            targetOffset   = anchor.basis.transpose * worldDelta
         }
 
         let kf = CameraKeyframe(
@@ -1024,7 +1035,10 @@ final class ViewportView: MTKView {
         if let anchor = sceneManager.worldOrbitAnchor(ofObjectNamed: targetName) {
             followYawOffset   = camera.yaw    - anchor.behindYaw
             followPitchOffset = camera.pitch  - anchor.behindPitch
-            targetOffset      = camera.target - anchor.pos
+            // Convert the world-space delta into the followed object's local
+            // frame.  For orthonormal basis, transpose = inverse.
+            let worldDelta = camera.target - anchor.pos
+            targetOffset   = anchor.basis.transpose * worldDelta
         }
         let kf = CameraKeyframe(
             time:              timeline.currentTime,
@@ -1047,6 +1061,26 @@ final class ViewportView: MTKView {
             + " followTarget='\(targetName)'"
             + " followYawOffset=" + yawOffStr
             + " followPitchOffset=" + pitchOffStr)
+    }
+
+    /// Stamps a camera keyframe using the Camera panel's sticky follow-target
+    /// choice — nil = free camera, otherwise the named object.  Bypasses the
+    /// scene-selection-driven menu path so the user can stamp many follow
+    /// keyframes for the same target without re-selecting it each time.
+    /// If the chosen target no longer exists in the scene, falls back to a
+    /// free keyframe and logs.
+    func addCameraKeyframeFromPanel() {
+        if let name = cameraPanelState.followTargetName {
+            if sceneManager.objects.contains(where: { $0.name == name }) {
+                addFollowCameraKeyframeAtCurrentTime(followingObjectNamed: name)
+            } else {
+                print("[DEBUG] ViewportView: panel follow target '\(name)' missing"
+                    + " — stamping a free camera keyframe instead")
+                addCameraKeyframeAtCurrentTime()
+            }
+        } else {
+            addCameraKeyframeAtCurrentTime()
+        }
     }
 
     // MARK: - Video Export

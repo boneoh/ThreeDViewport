@@ -9,7 +9,6 @@ struct TimelinePanel: View {
     @ObservedObject var exportState:  ExportState
 
     var onAddKeyframe:       () -> Void
-    var onAddCameraKeyframe: () -> Void
     var onExport:            () -> Void
 
     @State private var showDurationPopover: Bool   = false
@@ -89,16 +88,6 @@ struct TimelinePanel: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .help("Add an object keyframe at the current playhead position")
-                .disabled(exportState.isExporting)
-
-                // ── Add Camera Keyframe (Phase 5) ─────────────────────────────
-                Button(action: onAddCameraKeyframe) {
-                    Label("Add Cam Key", systemImage: "camera.fill")
-                        .font(.system(size: 11, weight: .medium))
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .help("Add a camera keyframe at the current playhead position")
                 .disabled(exportState.isExporting)
 
                 Divider()
