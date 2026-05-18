@@ -330,6 +330,12 @@ struct CameraKeyframeData: Codable {
     /// World-space offset from the node origin to the camera target at creation time.
     /// nil / absent in older project files — treated as (0, 0, 0) on load.
     var targetOffset: [Float]? = nil
+    /// Camera's forward direction (unit vector) in the followed object's
+    /// local frame at creation time.  Preferred over yaw/pitch offsets for
+    /// reconstructing camera orientation under arbitrary head rotation.
+    /// nil / absent in older project files — loader falls back to the
+    /// yaw/pitch offsets and the keyframe still resolves.
+    var followForwardLocal: [Float]? = nil
 
     // Custom decoder so files saved before camera-follow / FOV / pitch-follow fields decode cleanly.
     init(from decoder: Decoder) throws {
@@ -341,11 +347,12 @@ struct CameraKeyframeData: Codable {
         targetX  = try  c.decode(Float.self,  forKey: .targetX)
         targetY  = try  c.decode(Float.self,  forKey: .targetY)
         targetZ  = try  c.decode(Float.self,  forKey: .targetZ)
-        fov               = try? c.decode(Float.self,   forKey: .fov)
-        followTarget      = try? c.decode(String.self,  forKey: .followTarget)
-        followYawOffset   = try? c.decode(Float.self,   forKey: .followYawOffset)
-        followPitchOffset = try? c.decode(Float.self,   forKey: .followPitchOffset)
-        targetOffset      = try? c.decode([Float].self, forKey: .targetOffset)
+        fov                = try? c.decode(Float.self,   forKey: .fov)
+        followTarget       = try? c.decode(String.self,  forKey: .followTarget)
+        followYawOffset    = try? c.decode(Float.self,   forKey: .followYawOffset)
+        followPitchOffset  = try? c.decode(Float.self,   forKey: .followPitchOffset)
+        targetOffset       = try? c.decode([Float].self, forKey: .targetOffset)
+        followForwardLocal = try? c.decode([Float].self, forKey: .followForwardLocal)
     }
 
     init(time: Double, yaw: Float, pitch: Float, distance: Float,
@@ -354,19 +361,21 @@ struct CameraKeyframeData: Codable {
          followTarget: String? = nil,
          followYawOffset: Float? = nil,
          followPitchOffset: Float? = nil,
-         targetOffset: [Float]? = nil) {
-        self.time              = time
-        self.yaw               = yaw
-        self.pitch             = pitch
-        self.distance          = distance
-        self.targetX           = targetX
-        self.targetY           = targetY
-        self.targetZ           = targetZ
-        self.fov               = fov
-        self.followTarget      = followTarget
-        self.followYawOffset   = followYawOffset
-        self.followPitchOffset = followPitchOffset
-        self.targetOffset      = targetOffset
+         targetOffset: [Float]? = nil,
+         followForwardLocal: [Float]? = nil) {
+        self.time               = time
+        self.yaw                = yaw
+        self.pitch              = pitch
+        self.distance           = distance
+        self.targetX            = targetX
+        self.targetY            = targetY
+        self.targetZ            = targetZ
+        self.fov                = fov
+        self.followTarget       = followTarget
+        self.followYawOffset    = followYawOffset
+        self.followPitchOffset  = followPitchOffset
+        self.targetOffset       = targetOffset
+        self.followForwardLocal = followForwardLocal
     }
 }
 

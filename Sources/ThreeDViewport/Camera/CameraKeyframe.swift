@@ -38,24 +38,36 @@ struct CameraKeyframe {
     /// orbit a visual centre (e.g. the middle of a head) rather than a joint
     /// origin.
     var targetOffset: SIMD3<Float> = SIMD3<Float>(0, 0, 0)
+    /// When followTargetName is set, the camera's **forward direction** at
+    /// keyframe-creation time, expressed in the followed object's local
+    /// frame as a unit vector.  Preferred over `followYawOffset` /
+    /// `followPitchOffset` because it correctly preserves the camera-to-head
+    /// direction under arbitrary head orientation (yaw + pitch + roll), where
+    /// the yaw/pitch-offset approach loses information at gimbal-lock or when
+    /// the head rolls.  At playback time `state.basis * followForwardLocal`
+    /// is the world-space forward; yaw and pitch are derived from it.
+    /// nil = use the legacy yaw/pitch-offset path (older keyframes).
+    var followForwardLocal: SIMD3<Float>? = nil
 
     init(time: Double, yaw: Float, pitch: Float,
          distance: Float, target: SIMD3<Float>,
          fov: Float,
-         followTargetName:  String? = nil,
-         followYawOffset:   Float?  = nil,
-         followPitchOffset: Float?  = nil,
-         targetOffset:      SIMD3<Float> = SIMD3<Float>(0, 0, 0)) {
-        self.time              = time
-        self.yaw               = yaw
-        self.pitch             = pitch
-        self.distance          = distance
-        self.target            = target
-        self.fov               = fov
-        self.followTargetName  = followTargetName
-        self.followYawOffset   = followYawOffset
-        self.followPitchOffset = followPitchOffset
-        self.targetOffset      = targetOffset
+         followTargetName:   String? = nil,
+         followYawOffset:    Float?  = nil,
+         followPitchOffset:  Float?  = nil,
+         targetOffset:       SIMD3<Float> = SIMD3<Float>(0, 0, 0),
+         followForwardLocal: SIMD3<Float>? = nil) {
+        self.time               = time
+        self.yaw                = yaw
+        self.pitch              = pitch
+        self.distance           = distance
+        self.target             = target
+        self.fov                = fov
+        self.followTargetName   = followTargetName
+        self.followYawOffset    = followYawOffset
+        self.followPitchOffset  = followPitchOffset
+        self.targetOffset       = targetOffset
+        self.followForwardLocal = followForwardLocal
     }
 }
 
@@ -175,8 +187,7 @@ final class CameraKeyframeTrack {
             let kf = keyframes.first!
             guard let name = kf.followTargetName,
                   let state = getObjectState(name) else { return nil }
-            let yaw   = kf.followYawOffset  .map { state.behindYaw   + $0 }
-            let pitch = kf.followPitchOffset.map { state.behindPitch + $0 }
+            let (yaw, pitch) = resolvedYawPitch(for: kf, state: state)
             return (target: state.pos + state.basis * kf.targetOffset, yaw: yaw, pitch: pitch)
         }
 
@@ -185,8 +196,7 @@ final class CameraKeyframeTrack {
             let kf = keyframes.last!
             guard let name = kf.followTargetName,
                   let state = getObjectState(name) else { return nil }
-            let yaw   = kf.followYawOffset  .map { state.behindYaw   + $0 }
-            let pitch = kf.followPitchOffset.map { state.behindPitch + $0 }
+            let (yaw, pitch) = resolvedYawPitch(for: kf, state: state)
             return (target: state.pos + state.basis * kf.targetOffset, yaw: yaw, pitch: pitch)
         }
 
@@ -209,12 +219,9 @@ final class CameraKeyframeTrack {
                 guard let bState = getObjectState(bName) else { return nil }
                 let bTargetLive = bState.pos + bState.basis * b.targetOffset
                 let blendedTarget = a.target + (bTargetLive - a.target) * alpha
-                let blendedYaw: Float? = b.followYawOffset.map {
-                    lerpAngle(a.yaw, bState.behindYaw + $0, alpha)
-                }
-                let blendedPitch: Float? = b.followPitchOffset.map {
-                    lerpFloat(a.pitch, bState.behindPitch + $0, alpha)
-                }
+                let (bYaw, bPitch) = resolvedYawPitch(for: b, state: bState)
+                let blendedYaw:   Float? = bYaw  .map { lerpAngle(a.yaw,   $0, alpha) }
+                let blendedPitch: Float? = bPitch.map { lerpFloat(a.pitch, $0, alpha) }
                 return (target: blendedTarget, yaw: blendedYaw, pitch: blendedPitch)
 
             case (.some(let aName), .none):
@@ -224,12 +231,9 @@ final class CameraKeyframeTrack {
                 }
                 let aTargetLive = aState.pos + aState.basis * a.targetOffset
                 let blendedTarget = aTargetLive + (b.target - aTargetLive) * alpha
-                let blendedYaw: Float? = a.followYawOffset.map {
-                    lerpAngle(aState.behindYaw + $0, b.yaw, alpha)
-                }
-                let blendedPitch: Float? = a.followPitchOffset.map {
-                    lerpFloat(aState.behindPitch + $0, b.pitch, alpha)
-                }
+                let (aYaw, aPitch) = resolvedYawPitch(for: a, state: aState)
+                let blendedYaw:   Float? = aYaw  .map { lerpAngle($0, b.yaw,   alpha) }
+                let blendedPitch: Float? = aPitch.map { lerpFloat($0, b.pitch, alpha) }
                 return (target: blendedTarget, yaw: blendedYaw, pitch: blendedPitch)
 
             case (.some(let aName), .some(let bName)):
@@ -240,20 +244,15 @@ final class CameraKeyframeTrack {
                     // between the two follow framings without snapping at b.
                     guard let state = getObjectState(aName) else { return nil }
                     let localOffset = a.targetOffset + (b.targetOffset - a.targetOffset) * alpha
-                    let yaw = resolveFollowYaw(
-                        a: a, b: b,
-                        liveBehindYaw: state.behindYaw,
-                        alpha: alpha)
-                    let pitch = resolveFollowPitch(
-                        a: a, b: b,
-                        liveBehindPitch: state.behindPitch,
-                        alpha: alpha)
+                    let (aYaw, aPitch) = resolvedYawPitch(for: a, state: state)
+                    let (bYaw, bPitch) = resolvedYawPitch(for: b, state: state)
+                    let yaw   = blendOptionalAngle(aYaw, bYaw,   fallbackA: a.yaw,   fallbackB: b.yaw,   alpha: alpha)
+                    let pitch = blendOptionalFloat(aPitch, bPitch, fallbackA: a.pitch, fallbackB: b.pitch, alpha: alpha)
                     return (target: state.pos + state.basis * localOffset, yaw: yaw, pitch: pitch)
                 } else {
                     // Different target: snap — use a's target throughout segment.
                     guard let state = getObjectState(aName) else { return nil }
-                    let yaw   = a.followYawOffset  .map { state.behindYaw   + $0 }
-                    let pitch = a.followPitchOffset.map { state.behindPitch + $0 }
+                    let (yaw, pitch) = resolvedYawPitch(for: a, state: state)
                     return (target: state.pos + state.basis * a.targetOffset, yaw: yaw, pitch: pitch)
                 }
             }
@@ -261,37 +260,74 @@ final class CameraKeyframeTrack {
         return nil
     }
 
-    /// Interpolates the camera yaw across a same-target follow→follow segment.
-    /// Handles the four combinations of yaw-offset presence on a and b, so
-    /// segments where one side has only an absolute yaw still blend smoothly.
-    private func resolveFollowYaw(a: CameraKeyframe, b: CameraKeyframe,
-                                  liveBehindYaw: Float, alpha: Float) -> Float? {
-        switch (a.followYawOffset, b.followYawOffset) {
-        case (.some(let aOff), .some(let bOff)):
-            return lerpAngle(liveBehindYaw + aOff, liveBehindYaw + bOff, alpha)
-        case (.some(let aOff), .none):
-            return lerpAngle(liveBehindYaw + aOff, b.yaw, alpha)
-        case (.none, .some(let bOff)):
-            return lerpAngle(a.yaw, liveBehindYaw + bOff, alpha)
-        case (.none, .none):
-            return nil
+    // MARK: - Per-keyframe yaw/pitch resolution
+
+    /// Resolves the camera's world-space yaw and pitch for a single follow
+    /// keyframe at the followed object's current pose.
+    ///
+    /// Prefers the new `followForwardLocal` field (a unit vector in the
+    /// object's local frame): rotate by the object's current basis to get
+    /// the world-space forward direction, then derive yaw / pitch from it.
+    /// This preserves the camera direction exactly under arbitrary head
+    /// rotation (yaw, pitch, roll, combined) — no gimbal-lock issues.
+    ///
+    /// Falls back to the legacy `followYawOffset` / `followPitchOffset`
+    /// fields (offsets from the object's "behind" angles) so keyframes
+    /// stamped before `followForwardLocal` was added still resolve.
+    private func resolvedYawPitch(
+        for kf: CameraKeyframe,
+        state: (pos: SIMD3<Float>, behindYaw: Float, behindPitch: Float, basis: matrix_float3x3)
+    ) -> (yaw: Float?, pitch: Float?) {
+        if let fwdLocal = kf.followForwardLocal {
+            // Camera's forward direction in world space, derived by rotating
+            // the stored local-frame forward by the object's current basis.
+            let fwd = state.basis * fwdLocal
+            let len = simd_length(fwd)
+            guard len > 0.0001 else {
+                // Degenerate stored vector — fall through to the legacy path
+                // (if either offset is set) or return nils.
+                let yaw   = kf.followYawOffset  .map { state.behindYaw   + $0 }
+                let pitch = kf.followPitchOffset.map { state.behindPitch + $0 }
+                return (yaw, pitch)
+            }
+            let n = fwd / len
+            // CameraController convention (see CameraController.eyePosition):
+            //   forward = -(cos(pitch)·sin(yaw), sin(pitch), cos(pitch)·cos(yaw))
+            // Invert to recover yaw / pitch from the forward vector.
+            let yaw   = atan2(-n.x, -n.z)
+            let pitch = asin(max(-1, min(1, -n.y)))
+            return (yaw, pitch)
+        }
+        let yaw   = kf.followYawOffset  .map { state.behindYaw   + $0 }
+        let pitch = kf.followPitchOffset.map { state.behindPitch + $0 }
+        return (yaw, pitch)
+    }
+
+    /// Interpolates two optional angles for a same-target follow→follow
+    /// segment.  When one side has no follow-derived angle, the other side's
+    /// stored absolute angle (`fallbackA` / `fallbackB`) is used so blending
+    /// stays smooth even across a follow/stored boundary.
+    private func blendOptionalAngle(_ aVal: Float?, _ bVal: Float?,
+                                    fallbackA: Float, fallbackB: Float,
+                                    alpha: Float) -> Float? {
+        switch (aVal, bVal) {
+        case (.some(let a), .some(let b)): return lerpAngle(a, b, alpha)
+        case (.some(let a), .none):        return lerpAngle(a, fallbackB, alpha)
+        case (.none, .some(let b)):        return lerpAngle(fallbackA, b, alpha)
+        case (.none, .none):               return nil
         }
     }
 
-    /// Interpolates the camera pitch across a same-target follow→follow segment.
-    /// Mirrors `resolveFollowYaw` but with linear (non-angular) interpolation
-    /// because pitch is clamped to (-π/2, π/2) and never wraps.
-    private func resolveFollowPitch(a: CameraKeyframe, b: CameraKeyframe,
-                                    liveBehindPitch: Float, alpha: Float) -> Float? {
-        switch (a.followPitchOffset, b.followPitchOffset) {
-        case (.some(let aOff), .some(let bOff)):
-            return lerpFloat(liveBehindPitch + aOff, liveBehindPitch + bOff, alpha)
-        case (.some(let aOff), .none):
-            return lerpFloat(liveBehindPitch + aOff, b.pitch, alpha)
-        case (.none, .some(let bOff)):
-            return lerpFloat(a.pitch, liveBehindPitch + bOff, alpha)
-        case (.none, .none):
-            return nil
+    /// Linear-blend version of `blendOptionalAngle`, for pitch (clamped to
+    /// (-π/2, π/2) so wraparound isn't a concern).
+    private func blendOptionalFloat(_ aVal: Float?, _ bVal: Float?,
+                                    fallbackA: Float, fallbackB: Float,
+                                    alpha: Float) -> Float? {
+        switch (aVal, bVal) {
+        case (.some(let a), .some(let b)): return lerpFloat(a, b, alpha)
+        case (.some(let a), .none):        return lerpFloat(a, fallbackB, alpha)
+        case (.none, .some(let b)):        return lerpFloat(fallbackA, b, alpha)
+        case (.none, .none):               return nil
         }
     }
 

@@ -961,6 +961,14 @@ final class ViewportView: MTKView {
             + " fov=" + String(format: "%.4f", camera.fovYRadians))
     }
 
+    /// World-space forward direction for the camera's current yaw / pitch.
+    /// Mirrors the convention in `CameraController.eyePosition` so the
+    /// inverse (`atan2(-fwd.x, -fwd.z)`, `asin(-fwd.y)`) round-trips exactly.
+    private func cameraForward(yaw: Float, pitch: Float) -> SIMD3<Float> {
+        let cp = cos(pitch)
+        return SIMD3<Float>(-cp * sin(yaw), -sin(pitch), -cp * cos(yaw))
+    }
+
     /// Adds a camera follow keyframe at the current playhead time.
     /// The follow target is the currently selected (or primary) object.
     ///
@@ -982,9 +990,10 @@ final class ViewportView: MTKView {
             print("[DEBUG] ViewportView: created new CameraKeyframeTrack")
         }
 
-        var followYawOffset:   Float? = nil
-        var followPitchOffset: Float? = nil
+        var followYawOffset:    Float? = nil
+        var followPitchOffset:  Float? = nil
         var targetOffset = SIMD3<Float>(0, 0, 0)
+        var followForwardLocal: SIMD3<Float>? = nil
         if let anchor = sceneManager.worldOrbitAnchor(ofObjectNamed: obj.name) {
             followYawOffset   = camera.yaw    - anchor.behindYaw
             followPitchOffset = camera.pitch  - anchor.behindPitch
@@ -992,19 +1001,26 @@ final class ViewportView: MTKView {
             // frame.  For orthonormal basis, transpose = inverse.
             let worldDelta = camera.target - anchor.pos
             targetOffset   = anchor.basis.transpose * worldDelta
+            // Capture the camera's forward direction in the object's local
+            // frame so playback can rotate it by the object's current basis
+            // and reproduce the camera-to-head direction exactly, regardless
+            // of the object's later orientation.  See CameraKeyframe docs.
+            let forwardWorld = cameraForward(yaw: camera.yaw, pitch: camera.pitch)
+            followForwardLocal = anchor.basis.transpose * forwardWorld
         }
 
         let kf = CameraKeyframe(
-            time:              timeline.currentTime,
-            yaw:               camera.yaw,
-            pitch:             camera.pitch,
-            distance:          camera.distance,
-            target:            camera.target,
-            fov:               camera.fovYRadians,
-            followTargetName:  obj.name,
-            followYawOffset:   followYawOffset,
-            followPitchOffset: followPitchOffset,
-            targetOffset:      targetOffset
+            time:               timeline.currentTime,
+            yaw:                camera.yaw,
+            pitch:              camera.pitch,
+            distance:           camera.distance,
+            target:             camera.target,
+            fov:                camera.fovYRadians,
+            followTargetName:   obj.name,
+            followYawOffset:    followYawOffset,
+            followPitchOffset:  followPitchOffset,
+            targetOffset:       targetOffset,
+            followForwardLocal: followForwardLocal
         )
         camera.keyframeTrack?.addKeyframe(kf)
 
@@ -1029,9 +1045,10 @@ final class ViewportView: MTKView {
             camera.keyframeTrack = CameraKeyframeTrack()
             print("[DEBUG] ViewportView: created new CameraKeyframeTrack")
         }
-        var followYawOffset:   Float? = nil
-        var followPitchOffset: Float? = nil
+        var followYawOffset:    Float? = nil
+        var followPitchOffset:  Float? = nil
         var targetOffset = SIMD3<Float>(0, 0, 0)
+        var followForwardLocal: SIMD3<Float>? = nil
         if let anchor = sceneManager.worldOrbitAnchor(ofObjectNamed: targetName) {
             followYawOffset   = camera.yaw    - anchor.behindYaw
             followPitchOffset = camera.pitch  - anchor.behindPitch
@@ -1039,18 +1056,21 @@ final class ViewportView: MTKView {
             // frame.  For orthonormal basis, transpose = inverse.
             let worldDelta = camera.target - anchor.pos
             targetOffset   = anchor.basis.transpose * worldDelta
+            let forwardWorld = cameraForward(yaw: camera.yaw, pitch: camera.pitch)
+            followForwardLocal = anchor.basis.transpose * forwardWorld
         }
         let kf = CameraKeyframe(
-            time:              timeline.currentTime,
-            yaw:               camera.yaw,
-            pitch:             camera.pitch,
-            distance:          camera.distance,
-            target:            camera.target,
-            fov:               camera.fovYRadians,
-            followTargetName:  targetName,
-            followYawOffset:   followYawOffset,
-            followPitchOffset: followPitchOffset,
-            targetOffset:      targetOffset
+            time:               timeline.currentTime,
+            yaw:                camera.yaw,
+            pitch:              camera.pitch,
+            distance:           camera.distance,
+            target:             camera.target,
+            fov:                camera.fovYRadians,
+            followTargetName:   targetName,
+            followYawOffset:    followYawOffset,
+            followPitchOffset:  followPitchOffset,
+            targetOffset:       targetOffset,
+            followForwardLocal: followForwardLocal
         )
         camera.keyframeTrack?.addKeyframe(kf)
 

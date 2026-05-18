@@ -152,18 +152,19 @@ final class ProjectFile {
         // ── Camera keyframes (Phase 5) ────────────────────────────────────────
         let cameraKfData: [CameraKeyframeData] = (cam.keyframeTrack?.keyframes ?? []).map { kf in
             CameraKeyframeData(
-                time:              kf.time,
-                yaw:               kf.yaw,
-                pitch:             kf.pitch,
-                distance:          kf.distance,
-                targetX:           kf.target.x,
-                targetY:           kf.target.y,
-                targetZ:           kf.target.z,
-                fov:               kf.fov,
-                followTarget:      kf.followTargetName,
-                followYawOffset:   kf.followYawOffset,
-                followPitchOffset: kf.followPitchOffset,
-                targetOffset:      [kf.targetOffset.x, kf.targetOffset.y, kf.targetOffset.z]
+                time:               kf.time,
+                yaw:                kf.yaw,
+                pitch:              kf.pitch,
+                distance:           kf.distance,
+                targetX:            kf.target.x,
+                targetY:            kf.target.y,
+                targetZ:            kf.target.z,
+                fov:                kf.fov,
+                followTarget:       kf.followTargetName,
+                followYawOffset:    kf.followYawOffset,
+                followPitchOffset:  kf.followPitchOffset,
+                targetOffset:       [kf.targetOffset.x, kf.targetOffset.y, kf.targetOffset.z],
+                followForwardLocal: kf.followForwardLocal.map { [$0.x, $0.y, $0.z] }
             )
         }
 
@@ -324,17 +325,21 @@ final class ProjectFile {
                 let targetOff   = SIMD3<Float>(savedOffset.count >= 3 ? savedOffset[0] : 0,
                                                savedOffset.count >= 3 ? savedOffset[1] : 0,
                                                savedOffset.count >= 3 ? savedOffset[2] : 0)
+                let fwdLocal: SIMD3<Float>? = kfData.followForwardLocal.flatMap {
+                    $0.count >= 3 ? SIMD3<Float>($0[0], $0[1], $0[2]) : nil
+                }
                 camTrack.addKeyframe(CameraKeyframe(
-                    time:              kfData.time,
-                    yaw:               kfData.yaw,
-                    pitch:             kfData.pitch,
-                    distance:          kfData.distance,
-                    target:            SIMD3<Float>(kfData.targetX, kfData.targetY, kfData.targetZ),
-                    fov:               kfData.fov ?? effectiveStaticFov,
-                    followTargetName:  kfData.followTarget,
-                    followYawOffset:   kfData.followYawOffset,
-                    followPitchOffset: kfData.followPitchOffset,
-                    targetOffset:      targetOff
+                    time:               kfData.time,
+                    yaw:                kfData.yaw,
+                    pitch:              kfData.pitch,
+                    distance:           kfData.distance,
+                    target:             SIMD3<Float>(kfData.targetX, kfData.targetY, kfData.targetZ),
+                    fov:                kfData.fov ?? effectiveStaticFov,
+                    followTargetName:   kfData.followTarget,
+                    followYawOffset:    kfData.followYawOffset,
+                    followPitchOffset:  kfData.followPitchOffset,
+                    targetOffset:       targetOff,
+                    followForwardLocal: fwdLocal
                 ))
             }
             vp.camera.keyframeTrack = camTrack

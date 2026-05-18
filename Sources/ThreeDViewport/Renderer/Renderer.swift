@@ -1146,16 +1146,14 @@ final class Renderer: NSObject, MTKViewDelegate {
         // Suspended during edit mode for camera-follow keyframes so the user's
         // live adjustments to target/yaw aren't overwritten each frame.
         guard !camera.followSuspended else { return }
-        // Also suspended in Scene mode while the timeline is paused so the user
-        // can freely arrange the scene camera from the Director's POV.  When
-        // playback resumes (or Scene mode exits), follow re-engages and the
-        // wedge tracks its target normally.
-        if sceneModeActive && !timeline.isPlaying { return }
-        // And suspended whenever the user is in camera mode with the timeline
+        // Suspended whenever the user is in camera mode with the timeline
         // paused — that's the "I'm setting up follow keyframes" workflow and
-        // input needs to win.  Object/Light/Model modes keep follow live so
-        // the camera tracks the followed object while the user adjusts the
-        // scene.  Playback always engages follow, regardless of mode.
+        // input needs to win.  This also covers the Scene-mode case where
+        // the user wants to arrange the scene camera wedge from the
+        // Director's POV: switch into camera mode to take control.  Object /
+        // Light / Model / non-camera modes keep follow live even while paused
+        // so scrubbing accurately previews where the camera will be at each
+        // frame.  Playback always engages follow, regardless of mode.
         if cameraModeActive && !timeline.isPlaying { return }
         guard let camTrack = camera.keyframeTrack,
               !camTrack.keyframes.isEmpty else { return }
