@@ -104,6 +104,13 @@ final class ViewportView: MTKView {
     /// AppDelegate wires this to keep the Timeline Editor's row highlight in sync.
     var onControlModeChanged: ((TrackRef) -> Void)?
 
+    /// Called immediately after a keyframe is stamped from anywhere (I / Insert
+    /// key, transport-panel button, Camera panel button, edit-mode commit).
+    /// AppDelegate wires this to highlight the just-stamped diamond in the
+    /// Timeline Editor so the user can nudge it with F / B without first having
+    /// to click it.
+    var onKeyframeStamped: ((TrackRef) -> Void)?
+
     /// Timeline Editor view to forward unhandled keys to.  Set by AppDelegate.
     weak var timelineKeyTarget: TimelineEditorView?
 
@@ -850,6 +857,7 @@ final class ViewportView: MTKView {
 
         print("[DEBUG] ViewportView: keyframe added at t=" + String(format: "%.3f", timeline.currentTime)
             + " for '" + obj.name + "'")
+        onKeyframeStamped?(.object(index))
     }
 
     // MARK: - Add Group Keyframe (Phase 2)
@@ -897,6 +905,7 @@ final class ViewportView: MTKView {
         print("[DEBUG] ViewportView: group keyframe added at t="
             + String(format: "%.3f", timeline.currentTime)
             + " for groupID=\(gid)")
+        onKeyframeStamped?(.group(gid))
     }
 
     // MARK: - Add Light Keyframe
@@ -933,6 +942,7 @@ final class ViewportView: MTKView {
         print("[DEBUG] ViewportView: light keyframe added at t="
             + String(format: "%.3f", timeline.currentTime)
             + " light=\(index)")
+        onKeyframeStamped?(.light(index))
     }
 
     // MARK: - Add Camera Keyframe
@@ -959,6 +969,7 @@ final class ViewportView: MTKView {
             + " pitch=" + String(format: "%.4f", camera.pitch)
             + " distance=" + String(format: "%.4f", camera.distance)
             + " fov=" + String(format: "%.4f", camera.fovYRadians))
+        onKeyframeStamped?(.camera)
     }
 
     /// World-space forward direction for the camera's current yaw / pitch.
@@ -1033,6 +1044,7 @@ final class ViewportView: MTKView {
             + " followYawOffset=" + yawOffStr
             + " followPitchOffset=" + pitchOffStr
             + " distance=" + String(format: "%.4f", camera.distance))
+        onKeyframeStamped?(.camera)
     }
 
     /// Variant of `addFollowCameraKeyframeAtCurrentTime()` that follows a specific named
@@ -1081,6 +1093,7 @@ final class ViewportView: MTKView {
             + " followTarget='\(targetName)'"
             + " followYawOffset=" + yawOffStr
             + " followPitchOffset=" + pitchOffStr)
+        onKeyframeStamped?(.camera)
     }
 
     /// Stamps a camera keyframe using the Camera panel's sticky follow-target

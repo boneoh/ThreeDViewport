@@ -125,6 +125,8 @@ Each builder returns `(mesh, uv, gray_array)`. The greyscale texture is colouris
 
 In `generate_models.py`'s standalone mode, molecules (water, methane, benzene) get a single PBR material like every other shape. In **`generate_all.py`**, the `c1` and `c2` palette variants of molecules instead use `MOLECULE_BUILDERS` to produce a multi-part scene with three solid-colour groups — `heavy` (O / C atoms), `hydrogen` (H atoms), `bonds` (cylinders) — coloured from the palette's bright / complementary / mid stops. This makes molecule colourings read as chemistry rather than as a single textured blob.
 
+The three parts are exported with `heavy` as the root mesh and `hydrogen` / `bonds` parented to it, mirroring how the robot is structured (`hips` as the root with everything else descending). On import, ThreeDViewport renames the root to the filename basename and the whole molecule appears as a single hierarchical object — selectable and movable as one unit in Model mode, exactly like the robot.
+
 ---
 
 ## `generate_character.py`
@@ -220,6 +222,7 @@ The shapes pass uses `palette_molecule_colors()` for molecule shapes when the pa
 
 For a multi-coloured molecule with `c1`/`c2` variants:
 
-1. Add a `build_X_scene(heavy_rgb, h_rgb, bond_rgb, metalness, roughness)` function that returns a `trimesh.Scene` with three nodes named `heavy`, `hydrogen`, `bonds` (each with a solid-colour PBR material).
-2. Register it in the `MOLECULE_BUILDERS` dict, keyed by the shape name you used in `SHAPES`.
-3. `generate_all.py` will route `c1`/`c2` palette variants through your scene builder while keeping plain palettes / greyscale on the single-mesh `builder()` path.
+1. Add a `build_X_scene(heavy_rgb, h_rgb, bond_rgb, metalness, roughness)` function that returns a `trimesh.Scene` with three nodes named `heavy`, `hydrogen`, and `bonds`, each with a solid-colour PBR material.
+2. Add `heavy` first (no `parent_node_name`), then add `hydrogen` and `bonds` with `parent_node_name="heavy"`. This makes `heavy` the single root mesh so ThreeDViewport imports the molecule as one hierarchical object rather than three independent siblings.
+3. Register it in the `MOLECULE_BUILDERS` dict, keyed by the shape name you used in `SHAPES`.
+4. `generate_all.py` will route `c1`/`c2` palette variants through your scene builder while keeping plain palettes / greyscale on the single-mesh `builder()` path.

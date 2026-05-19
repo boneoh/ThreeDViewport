@@ -128,6 +128,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         viewport.onDropProjectFile = { [weak self] url in
             self?.handleDroppedProject(url)
         }
+        // Highlight a freshly-stamped keyframe in the Timeline Editor so the
+        // user can immediately nudge it with F / B.  No-op when the editor
+        // isn't open (timelineEditorWC == nil) or hasn't built a lane yet.
+        viewport.onKeyframeStamped = { [weak self, weak viewport] ref in
+            guard let editor = self?.timelineEditorWC?.editorView,
+                  let time = viewport?.timeline.currentTime else { return }
+            editor.selectKeyframe(ref: ref, atTime: time)
+        }
 
         if viewport.device == nil {
             print("[DEBUG] AppDelegate: ViewportView MTLDevice is nil — Metal not available")
@@ -655,6 +663,89 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         return base
     }
 
+    /// Default starting folder for any "pick a model file" sheet.  If a
+    /// `Models/Favorites/` subfolder exists, jumps straight to it; otherwise
+    /// falls back to the Models root.  Favorites is never auto-created — the
+    /// user opts in by making the folder themselves.
+    private func defaultModelDirectory() -> URL {
+        let models    = defaultDirectory(for: "Models")
+        let favorites = models.appendingPathComponent("Favorites")
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: favorites.path, isDirectory: &isDir),
+           isDir.boolValue {
+            return favorites
+        }
+        return models
+    }
+
+    /// Returns the next "rev letter" project filename derived from `baseName`.
+    /// Strips any trailing ` rev <letters>` suffix to find the root, scans `dir`
+    /// for existing `<root> rev <letters>.3dvp` files, and returns
+    /// `<root> rev <next>` where `<next>` is one above the highest existing
+    /// letter sequence (A → B → … → Z → AA → AB → …).  When no revision file
+    /// exists yet, defaults to `<root> rev A`.
+    private func nextProjectRevisionName(baseName: String, in dir: URL) -> String {
+        // Strip an existing " rev <letters>" suffix to find the root name.
+        let revPattern = #" rev ([A-Z]+)$"#
+        var root = baseName
+        if let regex = try? NSRegularExpression(pattern: revPattern),
+           let match = regex.firstMatch(in: baseName,
+                                        range: NSRange(baseName.startIndex..., in: baseName)),
+           let r = Range(match.range, in: baseName) {
+            root = String(baseName[..<r.lowerBound])
+        }
+
+        // Letters → integer (A=1, B=2, …, Z=26, AA=27, AB=28, …).
+        func value(of letters: String) -> Int {
+            var v = 0
+            for c in letters {
+                guard let a = c.asciiValue, a >= 65, a <= 90 else { return 0 }
+                v = v * 26 + Int(a - 64)
+            }
+            return v
+        }
+        // Integer → letters (1=A, …, 27=AA, …).
+        func letters(of n: Int) -> String {
+            var n = n
+            var out = ""
+            while n > 0 {
+                let r = (n - 1) % 26
+                out = String(UnicodeScalar(65 + r)!) + out
+                n = (n - 1) / 26
+            }
+            return out
+        }
+
+        let prefix = root + " rev "
+        let names  = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        var highest = 0
+        for name in names where name.hasSuffix(".3dvp") {
+            let stem = String(name.dropLast(5))
+            guard stem.hasPrefix(prefix) else { continue }
+            let suffix = String(stem.dropFirst(prefix.count))
+            let v = value(of: suffix)
+            if v > highest { highest = v }
+        }
+        return "\(root) rev \(letters(of: highest + 1))"
+    }
+
+    /// Returns the next available `<projectName>.NN.mov` filename in `dir`.
+    /// Scans existing files matching that pattern, picks the highest NN, and
+    /// returns NN+1 (zero-padded to at least two digits).  When the folder
+    /// has no matching files, starts at `.01`.  Custom-named files in the
+    /// same folder don't affect the count.
+    private func nextMovieFilename(projectName: String, in dir: URL) -> String {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        let prefix = projectName + "."
+        var highest = 0
+        for name in names {
+            guard name.hasPrefix(prefix), name.hasSuffix(".mov") else { continue }
+            let middle = name.dropFirst(prefix.count).dropLast(4)   // strip prefix + ".mov"
+            if let n = Int(middle), n > highest { highest = n }
+        }
+        return String(format: "%@.%02d.mov", projectName, highest + 1)
+    }
+
     // MARK: - Template projects
 
     /// If `template.3dvp` exists in the Projects folder, load it as the starting
@@ -737,7 +828,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.canChooseDirectories    = false
         panel.canChooseFiles          = true
         panel.title        = "Open Model"
-        panel.directoryURL = defaultDirectory(for: "Models")
+        panel.directoryURL = defaultModelDirectory()
 
         let modelTypes = [UTType(filenameExtension: "glb"), UTType(filenameExtension: "gltf")]
             .compactMap { $0 }
@@ -770,7 +861,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.canChooseDirectories    = false
         panel.canChooseFiles          = true
         panel.title        = "Add Model to Scene"
-        panel.directoryURL = defaultDirectory(for: "Models")
+        panel.directoryURL = defaultModelDirectory()
 
         let modelTypes = [UTType(filenameExtension: "glb"), UTType(filenameExtension: "gltf")]
             .compactMap { $0 }
@@ -801,7 +892,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.title                   = "Replace Selected Model"
         panel.prompt                  = "Replace"
         panel.message                 = "Choose a .glb file to replace the selected model's geometry."
-        panel.directoryURL            = defaultDirectory(for: "Models")
+        panel.directoryURL            = defaultModelDirectory()
 
         let modelTypes = [UTType(filenameExtension: "glb"), UTType(filenameExtension: "gltf")]
             .compactMap { $0 }
@@ -865,7 +956,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             panel.title                   = "Locate Missing Model"
             panel.prompt                  = "Locate"
             panel.message                 = "\"\(filename)\" could not be found. Please locate it, or cancel to skip."
-            panel.directoryURL            = self?.defaultDirectory(for: "Models")
+            panel.directoryURL            = self?.defaultModelDirectory()
 
             let modelTypes = [UTType(filenameExtension: "glb"), UTType(filenameExtension: "gltf")]
                 .compactMap { $0 }
@@ -918,11 +1009,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let panel = NSSavePanel()
         panel.title                = "Save Project"
         panel.canCreateDirectories = true
-        panel.directoryURL         = defaultDirectory(for: "Projects")
+        let projectsDir = defaultDirectory(for: "Projects")
+        panel.directoryURL         = projectsDir
 
-        // Default filename: template-derived "Project N" wins over first-model name
-        // wins over the plain "project.3dvp" fallback.
-        if let suggested = suggestedProjectName {
+        // Default filename:
+        //   • Saved project → append the next "rev <letter>" suffix, e.g.
+        //     `Project 1` → `Project 1 rev A`, `Project 1 rev A` → `Project 1 rev B`.
+        //   • Unsaved project with a template-derived name → use it as-is.
+        //   • Unsaved project with a loaded model → name from the first model's filename.
+        //   • Empty fallback → "project.3dvp".
+        if let current = currentProjectURL {
+            let base = current.deletingPathExtension().lastPathComponent
+            panel.nameFieldStringValue = nextProjectRevisionName(baseName: base,
+                                                                  in: projectsDir) + ".3dvp"
+        } else if let suggested = suggestedProjectName {
             panel.nameFieldStringValue = suggested + ".3dvp"
         } else if let firstURL = viewport.sceneManager.objects.first?.sourceURL {
             panel.nameFieldStringValue = firstURL.deletingPathExtension().lastPathComponent + ".3dvp"
@@ -1687,14 +1787,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             alert.beginSheetModal(for: window)
             return
         }
+        // Require a saved project so the export can be filed under a real
+        // per-project folder.  Without this the auto-named export
+        // (<projectName>.NN.mov) would have no project name to use.
+        guard let projectURL = currentProjectURL else {
+            let alert = NSAlert()
+            alert.messageText     = "Save the Project First"
+            alert.informativeText = "Exports are filed under Movies/<project name>/ — save the project so it has a name."
+            alert.alertStyle      = .warning
+            alert.beginSheetModal(for: window)
+            return
+        }
+
+        let projectName = projectURL.deletingPathExtension().lastPathComponent
+        let projectMovieDir = defaultDirectory(for: "Movies")
+            .appendingPathComponent(projectName)
+        try? FileManager.default.createDirectory(at: projectMovieDir,
+                                                 withIntermediateDirectories: true)
+        let defaultName = nextMovieFilename(projectName: projectName, in: projectMovieDir)
 
         let (accessory, codecPopup) = makeCodecAccessoryView()
 
         let panel = NSSavePanel()
         panel.title                = "Export ProRes Video"
-        panel.nameFieldStringValue = "animation.mov"
+        panel.nameFieldStringValue = defaultName
         panel.canCreateDirectories = true
-        panel.directoryURL         = defaultDirectory(for: "Movies")
+        panel.directoryURL         = projectMovieDir
         panel.accessoryView        = accessory
 
         if let movType = UTType(filenameExtension: "mov") {

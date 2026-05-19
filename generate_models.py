@@ -722,10 +722,20 @@ def build_star():
 
 # ---------------------------------------------------------------------------
 # Molecule scene builders  (C1 / C2 palette variants only)
+#
 # Each returns a trimesh.Scene with three solid-colour nodes:
-#   "heavy"    — O or C spheres
-#   "hydrogen" — H spheres
-#   "bonds"    — all bond cylinders
+#   "heavy"    — O or C spheres   (root mesh)
+#   "hydrogen" — H spheres        (parented to "heavy")
+#   "bonds"    — all bond cylinders (parented to "heavy")
+#
+# Parenting "hydrogen" and "bonds" to "heavy" mirrors how the robot's GLB is
+# structured (hips as the root mesh with everything else descending from it).
+# On import, ThreeDViewport's GLTFLoader sees one root mesh and two children,
+# renames the root to the filename basename, and the whole molecule appears as
+# a single hierarchical object in the scene HUD instead of three siblings.
+# All three meshes are pre-positioned in scene coordinates and the parent's
+# local transform is identity, so the children render in place without any
+# additional translation.
 # ---------------------------------------------------------------------------
 
 def _apply_solid_color(mesh, rgb, metalness, roughness):
@@ -753,12 +763,14 @@ def build_water_scene(heavy_rgb, h_rgb, bond_rgb, metalness, roughness):
 
     b_mesh = trimesh.util.concatenate([_bond(O, H1, 0.032), _bond(O, H2, 0.032)])
 
+    _apply_solid_color(o_mesh, heavy_rgb, metalness, roughness)
+    _apply_solid_color(h_mesh, h_rgb,     metalness, roughness)
+    _apply_solid_color(b_mesh, bond_rgb,  metalness, roughness)
+
     scene = trimesh.Scene()
-    for name, mesh, rgb in [("heavy", o_mesh, heavy_rgb),
-                             ("hydrogen", h_mesh, h_rgb),
-                             ("bonds", b_mesh, bond_rgb)]:
-        _apply_solid_color(mesh, rgb, metalness, roughness)
-        scene.add_geometry(mesh, node_name=name, geom_name=name)
+    scene.add_geometry(o_mesh, node_name="heavy",    geom_name="heavy")
+    scene.add_geometry(h_mesh, node_name="hydrogen", geom_name="hydrogen", parent_node_name="heavy")
+    scene.add_geometry(b_mesh, node_name="bonds",    geom_name="bonds",    parent_node_name="heavy")
     return scene
 
 
@@ -779,12 +791,14 @@ def build_methane_scene(heavy_rgb, h_rgb, bond_rgb, metalness, roughness):
     h_mesh = trimesh.util.concatenate(h_parts)
     b_mesh = trimesh.util.concatenate(b_parts)
 
+    _apply_solid_color(c_mesh, heavy_rgb, metalness, roughness)
+    _apply_solid_color(h_mesh, h_rgb,     metalness, roughness)
+    _apply_solid_color(b_mesh, bond_rgb,  metalness, roughness)
+
     scene = trimesh.Scene()
-    for name, mesh, rgb in [("heavy", c_mesh, heavy_rgb),
-                             ("hydrogen", h_mesh, h_rgb),
-                             ("bonds", b_mesh, bond_rgb)]:
-        _apply_solid_color(mesh, rgb, metalness, roughness)
-        scene.add_geometry(mesh, node_name=name, geom_name=name)
+    scene.add_geometry(c_mesh, node_name="heavy",    geom_name="heavy")
+    scene.add_geometry(h_mesh, node_name="hydrogen", geom_name="hydrogen", parent_node_name="heavy")
+    scene.add_geometry(b_mesh, node_name="bonds",    geom_name="bonds",    parent_node_name="heavy")
     return scene
 
 
@@ -808,12 +822,14 @@ def build_benzene_scene(heavy_rgb, h_rgb, bond_rgb, metalness, roughness):
     h_mesh = trimesh.util.concatenate(h_parts)
     b_mesh = trimesh.util.concatenate(b_parts)
 
+    _apply_solid_color(c_mesh, heavy_rgb, metalness, roughness)
+    _apply_solid_color(h_mesh, h_rgb,     metalness, roughness)
+    _apply_solid_color(b_mesh, bond_rgb,  metalness, roughness)
+
     scene = trimesh.Scene()
-    for name, mesh, rgb in [("heavy", c_mesh, heavy_rgb),
-                             ("hydrogen", h_mesh, h_rgb),
-                             ("bonds", b_mesh, bond_rgb)]:
-        _apply_solid_color(mesh, rgb, metalness, roughness)
-        scene.add_geometry(mesh, node_name=name, geom_name=name)
+    scene.add_geometry(c_mesh, node_name="heavy",    geom_name="heavy")
+    scene.add_geometry(h_mesh, node_name="hydrogen", geom_name="hydrogen", parent_node_name="heavy")
+    scene.add_geometry(b_mesh, node_name="bonds",    geom_name="bonds",    parent_node_name="heavy")
     return scene
 
 

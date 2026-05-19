@@ -1020,6 +1020,22 @@ final class TimelineEditorView: NSView {
         needsDisplay       = true
     }
 
+    /// Selects the lane matching `ref` and the diamond at `time` (within 1 ms).
+    /// Used to auto-highlight a freshly-stamped keyframe so the user can
+    /// immediately nudge it with F / B without having to click it first.
+    /// No-op if `ref` or the matching time can't be found (e.g. the timeline
+    /// editor hasn't built a lane for this track yet).
+    func selectKeyframe(ref: TrackRef, atTime time: Double) {
+        let tracks = buildTracks()
+        guard let ti = tracks.firstIndex(where: { $0.ref == ref }) else { return }
+        let times = keyframeTimes(for: ref)
+        guard let ki = times.firstIndex(where: { abs($0 - time) < 0.001 }) else { return }
+        selectedTrackIndex = ti
+        selectedKFIndex    = ki
+        multiSelectedDiamonds.removeAll()
+        needsDisplay       = true
+    }
+
     /// Selects the lane matching `ref`.
     /// If the lane is already selected (e.g. because the user just clicked a diamond
     /// on it and `onLaneSelected` triggered a viewport mode change that bounced back
@@ -1247,12 +1263,13 @@ final class TimelineEditorView: NSView {
         case .light(let i):  onInsertLightKeyframe?(i)
         case .group(let gid): onInsertGroupKeyframe?(gid)
         }
-        // Do NOT auto-select the newly stamped diamond.
-        // Auto-selection was causing the diamond to be "attached" to the scrubber:
-        // if the user immediately clicked the ruler and dragged, the selected
-        // diamond would move with the cursor rather than just scrubbing the playhead.
-        selectedKFIndex = nil
-        needsDisplay    = true
+        // The stamp call above triggers ViewportView.onKeyframeStamped, which
+        // AppDelegate routes back to `selectKeyframe(ref:atTime:)` — so the new
+        // diamond is highlighted automatically.  Subsequent F / B nudges target
+        // it immediately.  Ruler clicks safely deselect via mouseDown, and
+        // mouseDragged only drags diamonds when mouseDownOnDiamond is true,
+        // so an auto-selected diamond won't get attached to a ruler-scrub drag.
+        needsDisplay = true
         let t = timeline?.currentTime ?? 0
         print("[DEBUG] TimelineEditorView: inserted keyframe at t=\(String(format: "%.3f", t))"
             + " lane=\(ti)")
