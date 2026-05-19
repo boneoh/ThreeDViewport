@@ -143,10 +143,18 @@ final class ProjectFile {
             } else {
                 matrixToSave = obj.transform
             }
-            return ObjectData(name: obj.name,
-                              keyframes: kfData,
-                              baseTransformMatrix: encodeMatrix(matrixToSave),
-                              easingMode: (obj.keyframeTrack?.easingMode ?? .linear).rawValue)
+            let bcf = obj.material.baseColorFactor
+            return ObjectData(
+                name:                obj.name,
+                keyframes:           kfData,
+                baseTransformMatrix: encodeMatrix(matrixToSave),
+                easingMode:          (obj.keyframeTrack?.easingMode ?? .linear).rawValue,
+                isVisible:           obj.isVisible,
+                normalMode:          obj.normalMode.rawValue,
+                metallicFactor:      obj.material.metallicFactor,
+                roughnessFactor:     obj.material.roughnessFactor,
+                baseColorFactor:     [bcf.x, bcf.y, bcf.z, bcf.w]
+            )
         }
 
         // ── Camera keyframes (Phase 5) ────────────────────────────────────────
@@ -518,6 +526,20 @@ final class ProjectFile {
         for i in 0..<n {
             let obj   = objects[i]
             let saved = objectsData[i]
+
+            // ── v15: restore Model Inspector state ───────────────────────────────
+            obj.isVisible = saved.isVisible
+            if let mode = NormalMode(rawValue: saved.normalMode), mode != .auto {
+                vp.applyNormalMode(mode, toTargets: [obj])
+                obj.normalMode = mode
+            }
+            if saved.metallicFactor >= 0  { obj.material.metallicFactor  = saved.metallicFactor }
+            if saved.roughnessFactor >= 0 { obj.material.roughnessFactor = saved.roughnessFactor }
+            if saved.baseColorFactor.count == 4 {
+                obj.material.baseColorFactor = SIMD4<Float>(
+                    saved.baseColorFactor[0], saved.baseColorFactor[1],
+                    saved.baseColorFactor[2], saved.baseColorFactor[3])
+            }
 
             // ── v4: restore baseTransform so manual repositioning survives reload ──
             if let m = decodeMatrix(saved.baseTransformMatrix) {

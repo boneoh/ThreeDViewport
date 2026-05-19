@@ -85,7 +85,7 @@ struct LightUniforms {
 //   hasMetallicRoughTex uint     4
 //   hasEmissiveTex      uint     4
 //   colorMode           uint     4   (0 = greyscale, 1 = color)
-//   pad                 uint     4
+//   useFlatNormals      uint     4   (0 = vertex normals, 1 = compute from derivatives)
 //   ───────────────────────────────
 //   Total                       64
 struct MaterialUniforms {
@@ -98,7 +98,7 @@ struct MaterialUniforms {
     var hasMetallicRoughTex: UInt32
     var hasEmissiveTex:      UInt32
     var colorMode:           UInt32         // 0 = greyscale, 1 = color
-    var pad:                 UInt32
+    var useFlatNormals:      UInt32         // 0 = vertex normals, 1 = derivatives
 
     init() {
         baseColorFactor     = SIMD4<Float>(1, 1, 1, 1)
@@ -110,7 +110,7 @@ struct MaterialUniforms {
         hasMetallicRoughTex = 0
         hasEmissiveTex      = 0
         colorMode           = 0
-        pad                 = 0
+        useFlatNormals      = 0
     }
 }
 

@@ -128,6 +128,10 @@ final class ViewportView: MTKView {
     /// AppDelegate wires this through handleDroppedProject() (with dirty-check).
     var onDropProjectFile: ((URL) -> Void)?
 
+    /// Fires after all keyframes for a model are cleared during a part-count-mismatch replace.
+    /// AppDelegate wires this to refresh the Timeline Editor and mark the document dirty.
+    var onKeyframesCleared: (() -> Void)?
+
     // Overlay that highlights the viewport during a valid drag hover.
     private var dragHighlightView: DragHighlightView?
 
@@ -378,24 +382,46 @@ final class ViewportView: MTKView {
             return
         }
 
-        // Part-count mismatch → abort.
+        // Part-count mismatch → ask user whether to replace (losing keyframes) or cancel.
         if newObjects.count != targets.count {
             let alert = NSAlert()
             alert.alertStyle      = .warning
-            alert.messageText     = "Cannot Replace Model"
+            alert.messageText     = "Part Count Mismatch"
             alert.informativeText = "\"\(url.lastPathComponent)\" has \(newObjects.count)"
                 + " part\(newObjects.count == 1 ? "" : "s")"
                 + " but the selected model has \(targets.count)."
-                + " Both models must have the same number of parts"
-                + " to preserve the animation."
-            alert.addButton(withTitle: "OK")
-            if let w = window { alert.beginSheetModal(for: w) } else { alert.runModal() }
-            print("[DEBUG] ViewportView: replaceSelectedModel — aborted, part count mismatch"
-                + " (new=\(newObjects.count) existing=\(targets.count))")
+                + " Replacing will delete all keyframes for this model."
+            alert.addButton(withTitle: "Replace")
+            alert.addButton(withTitle: "Cancel")
+            print("[DEBUG] ViewportView: replaceSelectedModel — part count mismatch"
+                + " (new=\(newObjects.count) existing=\(targets.count)), prompting user")
+
+            let doReplace: () -> Void = { [weak self] in
+                guard let self else { return }
+                // Clear per-part keyframes.
+                for target in targets { target.keyframeTrack?.removeAll() }
+                // Clear the group keyframe track if applicable.
+                if let gid = targets.first?.groupID {
+                    sceneManager.groupKeyframeTracks[gid]?.removeAll()
+                }
+                self.performModelSwap(targets: targets, newObjects: newObjects, url: url)
+                self.onKeyframesCleared?()
+            }
+
+            if let w = window {
+                alert.beginSheetModal(for: w) { response in
+                    if response == .alertFirstButtonReturn { doReplace() }
+                }
+            } else {
+                if alert.runModal() == .alertFirstButtonReturn { doReplace() }
+            }
             return
         }
 
-        // Swap geometry + material on each target in order, preserving all scene state.
+        performModelSwap(targets: targets, newObjects: newObjects, url: url)
+    }
+
+    private func performModelSwap(targets: [SceneObject], newObjects: [SceneObject], url: URL) {
         for (target, source) in zip(targets, newObjects) {
             target.positionBuffer = source.positionBuffer
             target.normalBuffer   = source.normalBuffer
@@ -426,6 +452,29 @@ final class ViewportView: MTKView {
     }
 
     // MARK: - Control Mode (external access for edit-mode wiring)
+
+    /// Regenerates the normal buffer for each object in `targets` using the given mode
+    /// and uploads it to the GPU.  Called by AppDelegate when the user changes the
+    /// normal mode in the Model Inspector.
+    func applyNormalMode(_ mode: NormalMode, toTargets targets: [SceneObject]) {
+        guard let dev = device else { return }
+        for obj in targets {
+            let newNormals: [Float]
+            switch mode {
+            case .auto:   newNormals = obj.originalNormals
+            case .smooth: newNormals = generateSmoothedNormals(positions: obj.cpuPositions, indices: obj.cpuIndices)
+            case .flat:   newNormals = generateFlatNormals(positions: obj.cpuPositions, indices: obj.cpuIndices)
+            }
+            guard !newNormals.isEmpty else { continue }
+            let byteLen = newNormals.count * MemoryLayout<Float>.stride
+            if let buf = dev.makeBuffer(bytes: newNormals, length: byteLen, options: .storageModeShared) {
+                buf.label    = "normals"
+                obj.normalBuffer = buf
+            }
+        }
+        needsDisplay = true
+        print("[DEBUG] ViewportView: applyNormalMode \(mode) to \(targets.count) part(s)")
+    }
 
     /// Sets the active control mode from outside the viewport (e.g. AppDelegate keyframe edit wiring).
     /// Updates the HUD overlay and notifies the timeline editor to highlight the matching lane.

@@ -395,7 +395,7 @@ struct LightsInspectorPanel: View {
 // MARK: - Reusable sub-views
 
 // A row with a fixed-width label and a ColorPicker.
-private struct LabeledColorRow: View {
+struct LabeledColorRow: View {
     let label: String
     let binding: Binding<Color>
 
@@ -412,7 +412,7 @@ private struct LabeledColorRow: View {
 }
 
 // A row with a label, a Slider, and a numeric readout.
-private struct SliderRow: View {
+struct SliderRow: View {
     let label: String
     let value: Binding<Float>
     let range: ClosedRange<Float>

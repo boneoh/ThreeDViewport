@@ -1031,6 +1031,11 @@ final class Renderer: NSObject, MTKViewDelegate {
         mu.hasEmissiveTex      = mat.emissiveTexture      != nil ? 1 : 0
         mu.colorMode           = isColorMode ? 1 : 0
 
+        // Flat shading: explicit user pick, or .auto on a file that shipped no normals.
+        let wantFlat = object.normalMode == .flat
+                    || (object.normalMode == .auto && !object.fileHadNormals)
+        mu.useFlatNormals = wantFlat ? 1 : 0
+
         if !materialDebugPrinted.contains(object.name) {
             materialDebugPrinted.insert(object.name)
             print("[DEBUG] Renderer materialUniforms '\(object.name)'"
@@ -1039,6 +1044,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                 + " hasMetallicRoughTex=\(mu.hasMetallicRoughTex)"
                 + " hasEmissiveTex=\(mu.hasEmissiveTex)"
                 + " colorMode=\(mu.colorMode)"
+                + " useFlatNormals=\(mu.useFlatNormals)"
                 + " metallic=\(String(format: "%.3f", mu.metallicFactor))"
                 + " roughness=\(String(format: "%.3f", mu.roughnessFactor))"
                 + " texNonNil=\(mat.baseColorTexture != nil)")

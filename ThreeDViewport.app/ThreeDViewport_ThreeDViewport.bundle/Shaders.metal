@@ -40,7 +40,7 @@ struct MaterialUniforms {
     uint    hasMetallicRoughTex;
     uint    hasEmissiveTex;
     uint    colorMode;           // 0=greyscale, 1=color
-    uint    pad;
+    uint    useFlatNormals;      // 0=vertex normals, 1=derivatives
 };
 
 struct BackgroundUniforms {
@@ -189,13 +189,22 @@ fragment float4 fragment_main(
                                   address::repeat);
 
     // ── Surface normal ─────────────────────────────────────────────────────
-    float3 N = normalize(in.worldNormal);
-    if (matData.hasNormalTex) {
-        float3 tangentNormal = normalTex.sample(texSampler, in.uv).rgb * 2.0 - 1.0;
-        float3x3 TBN = float3x3(normalize(in.worldTangent),
-                                 normalize(in.worldBitangent),
-                                 N);
-        N = normalize(TBN * tangentNormal);
+    float3 N;
+    if (matData.useFlatNormals != 0) {
+        // True per-face normal from screen-space derivatives of world position.
+        // Used when the file shipped no normals, or when the user picks Flat mode.
+        N = normalize(cross(dfdx(in.worldPosition), dfdy(in.worldPosition)));
+        // Orient consistent with the stored vertex normal (handles winding/handedness).
+        if (dot(N, in.worldNormal) < 0.0) N = -N;
+    } else {
+        N = normalize(in.worldNormal);
+        if (matData.hasNormalTex) {
+            float3 tangentNormal = normalTex.sample(texSampler, in.uv).rgb * 2.0 - 1.0;
+            float3x3 TBN = float3x3(normalize(in.worldTangent),
+                                     normalize(in.worldBitangent),
+                                     N);
+            N = normalize(TBN * tangentNormal);
+        }
     }
 
     // ── View direction ─────────────────────────────────────────────────────

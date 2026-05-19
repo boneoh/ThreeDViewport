@@ -745,7 +745,13 @@ def _apply_solid_color(mesh, rgb, metalness, roughness):
         metallicFactor=metalness,
         roughnessFactor=roughness,
     )
-    mesh.visual = trimesh.visual.TextureVisuals(material=mat)
+    # trimesh's glTF exporter only emits the NORMAL accessor if vertex_normals
+    # has been materialised in the mesh cache.  Touch it here so molecule scenes
+    # ship as POSITION+NORMAL rather than positions-only.  Dummy UVs alone are
+    # not enough — verified empirically.
+    _ = mesh.vertex_normals
+    uv = np.zeros((len(mesh.vertices), 2), dtype=np.float32)
+    mesh.visual = trimesh.visual.TextureVisuals(uv=uv, material=mat)
 
 
 def build_water_scene(heavy_rgb, h_rgb, bond_rgb, metalness, roughness):

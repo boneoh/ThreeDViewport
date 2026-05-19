@@ -169,15 +169,19 @@ final class GLTFLoader {
 
         // ── Normals ─────────────────────────────────────────────────────────
         let normals: [Float]
+        let fileHadNormals: Bool
         if let acc = primitive.attribute(forName: "NORMAL")?.accessor,
            let raw = extractFloat3(from: acc, label: "NORMAL") {
             normals = raw
+            fileHadNormals = true
         } else {
-            // Generate smooth normals from the real indexed triangles.
-            // Passing sequential indices here (as was done before) gives completely
-            // wrong normals because the triangle connectivity is ignored.
+            // File has no normals. We still populate the buffer (used if the user
+            // later picks Smooth in the inspector), but the shader's flat-normal
+            // path (computed via screen-space derivatives) will be selected via
+            // useFlatNormals in MaterialUniforms when normalMode == .auto.
             normals = generateSmoothedNormals(positions: positions, indices: indices)
-            print("[DEBUG] GLTFLoader: generated smooth normals from \(indices.count/3) triangles")
+            fileHadNormals = false
+            print("[DEBUG] GLTFLoader: file has no normals — derivatives will be used in .auto mode")
         }
 
         // ── UV coordinates ──────────────────────────────────────────────────
@@ -255,6 +259,11 @@ final class GLTFLoader {
         obj.boundingMin    = boundMin
         obj.boundingMax    = boundMax
         obj.material       = material
+
+        obj.cpuPositions    = positions
+        obj.cpuIndices      = indices
+        obj.originalNormals = normals
+        obj.fileHadNormals  = fileHadNormals
 
         obj.validateBuffers()
         print("[DEBUG] GLTFLoader: '" + name + "' ready — verts="
@@ -685,47 +694,6 @@ final class GLTFLoader {
         }
 
         return result
-    }
-
-    // MARK: - Smooth Normal Generation
-
-    // Accumulates face normals for every vertex that shares a triangle,
-    // then normalises — produces smooth shading from indexed geometry.
-    // (Equivalent to what most DCC tools call "smooth normals".)
-    private func generateSmoothedNormals(positions: [Float], indices: [UInt32]) -> [Float] {
-        let vertexCount = positions.count / 3
-        var normals     = [Float](repeating: 0, count: positions.count)
-
-        let triCount = indices.count / 3
-        for t in 0..<triCount {
-            let i0 = Int(indices[t*3]) * 3
-            let i1 = Int(indices[t*3+1]) * 3
-            let i2 = Int(indices[t*3+2]) * 3
-
-            let v0 = SIMD3<Float>(positions[i0], positions[i0+1], positions[i0+2])
-            let v1 = SIMD3<Float>(positions[i1], positions[i1+1], positions[i1+2])
-            let v2 = SIMD3<Float>(positions[i2], positions[i2+1], positions[i2+2])
-            let fn = simd_normalize(simd_cross(v1 - v0, v2 - v0))
-
-            for vi in [i0, i1, i2] {
-                normals[vi]     += fn.x
-                normals[vi + 1] += fn.y
-                normals[vi + 2] += fn.z
-            }
-        }
-
-        for i in 0..<vertexCount {
-            let vi = i * 3
-            let n  = SIMD3<Float>(normals[vi], normals[vi+1], normals[vi+2])
-            let len = simd_length(n)
-            if len > 1e-7 {
-                normals[vi] = n.x / len; normals[vi+1] = n.y / len; normals[vi+2] = n.z / len
-            } else {
-                normals[vi] = 0; normals[vi+1] = 1; normals[vi+2] = 0
-            }
-        }
-
-        return normals
     }
 
     // MARK: - Vertex Color Extraction

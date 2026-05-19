@@ -1,6 +1,6 @@
 import Foundation
 
-// Phase 4/5/6/8/9/10/11/12/14: Codable structs that define the .3dvp project file format (JSON).
+// Phase 4/5/6/8/9/10/11/12/14/15: Codable structs that define the .3dvp project file format (JSON).
 // Version history:
 //   1 — initial: model path, camera, timeline, per-object keyframe tracks.
 //   2 — Phase 5: added cameraKeyframes array.
@@ -18,6 +18,8 @@ import Foundation
 //  12 — Added colorGrade (brightness Float, contrast Float).
 //  13 — Added gamma to ColorGradeData.
 //  14 — Phase 2 Timeline Hierarchy: added groupKeyframeTracks (group-level animation).
+//  15 — Model Inspector: added isVisible, normalMode, metallicFactor, roughnessFactor,
+//       baseColorFactor per ObjectData; added modelInspectorPanel to WindowLayoutData.
 //
 // Design rules:
 //   • No binary data inline — .glb files are referenced by absolute path.
@@ -29,7 +31,7 @@ import Foundation
 //     All new fields have defaults so older files load without error.
 
 struct ProjectData: Codable {
-    var version:             Int     = 14
+    var version:             Int     = 15
     var modelPath:           String? = nil   // v1/v2 compat; ignored when modelPaths non-empty.
     var modelPaths:          [String] = []   // v3 — ordered list of absolute .glb paths.
     var timeline:            TimelineData
@@ -52,7 +54,7 @@ struct ProjectData: Codable {
 
     // MARK: - Memberwise init (required because we define init(from:) below)
 
-    init(version:             Int                    = 14,
+    init(version:             Int                    = 15,
          modelPath:           String?                = nil,
          modelPaths:          [String]               = [],
          timeline:            TimelineData,
@@ -211,12 +213,13 @@ struct WindowFrameData: Codable {
 // v11: Saved layout for all managed windows.
 // nil panel entries = that panel was closed; don't reopen on load.
 struct WindowLayoutData: Codable {
-    var mainWindow:     WindowFrameData  = WindowFrameData()  // always saved
-    var timelineEditor: WindowFrameData? = nil                // nil = was closed
-    var lightsPanel:    WindowFrameData? = nil
-    var feedbackPanel:  WindowFrameData? = nil
-    var colorGradePanel: WindowFrameData? = nil
-    var cameraPanel:    WindowFrameData? = nil
+    var mainWindow:          WindowFrameData  = WindowFrameData()  // always saved
+    var timelineEditor:      WindowFrameData? = nil                // nil = was closed
+    var lightsPanel:         WindowFrameData? = nil
+    var feedbackPanel:       WindowFrameData? = nil
+    var colorGradePanel:     WindowFrameData? = nil
+    var cameraPanel:         WindowFrameData? = nil
+    var modelInspectorPanel: WindowFrameData? = nil                // v15
 }
 
 struct TimelineData: Codable {
@@ -269,23 +272,44 @@ struct ObjectData: Codable {
     // v11: EasingMode.rawValue.  0 = .linear (default) — missing key in older files
     //      is decoded as 0 so pre-v11 projects load with unchanged linear behaviour.
     var easingMode: Int = 0
+    // v15: Model Inspector state.
+    // isVisible defaults true; normalMode 0 = .auto.
+    // metallicFactor / roughnessFactor: -1 = not overridden (use file value).
+    // baseColorFactor: empty = not overridden.
+    var isVisible:       Bool    = true
+    var normalMode:      Int     = 0
+    var metallicFactor:  Float   = -1
+    var roughnessFactor: Float   = -1
+    var baseColorFactor: [Float] = []
 
-    // Custom decoder so files without baseTransformMatrix (v1–v3) or easingMode (v1–v10)
-    // decode cleanly using the defaults above instead of throwing keyNotFound.
+    // Custom decoder so older files without the v15 fields decode cleanly.
     init(from decoder: Decoder) throws {
         let c                = try decoder.container(keyedBy: CodingKeys.self)
         name                 = try  c.decode(String.self,        forKey: .name)
         keyframes            = try  c.decode([KeyframeData].self, forKey: .keyframes)
         baseTransformMatrix  = (try? c.decode([Float].self,       forKey: .baseTransformMatrix)) ?? []
         easingMode           = (try? c.decode(Int.self,           forKey: .easingMode))          ?? 0
+        isVisible            = (try? c.decode(Bool.self,          forKey: .isVisible))           ?? true
+        normalMode           = (try? c.decode(Int.self,           forKey: .normalMode))          ?? 0
+        metallicFactor       = (try? c.decode(Float.self,         forKey: .metallicFactor))      ?? -1
+        roughnessFactor      = (try? c.decode(Float.self,         forKey: .roughnessFactor))     ?? -1
+        baseColorFactor      = (try? c.decode([Float].self,       forKey: .baseColorFactor))     ?? []
     }
 
     init(name: String, keyframes: [KeyframeData],
-         baseTransformMatrix: [Float] = [], easingMode: Int = 0) {
+         baseTransformMatrix: [Float] = [], easingMode: Int = 0,
+         isVisible: Bool = true, normalMode: Int = 0,
+         metallicFactor: Float = -1, roughnessFactor: Float = -1,
+         baseColorFactor: [Float] = []) {
         self.name                = name
         self.keyframes           = keyframes
         self.baseTransformMatrix = baseTransformMatrix
         self.easingMode          = easingMode
+        self.isVisible           = isVisible
+        self.normalMode          = normalMode
+        self.metallicFactor      = metallicFactor
+        self.roughnessFactor     = roughnessFactor
+        self.baseColorFactor     = baseColorFactor
     }
 }
 

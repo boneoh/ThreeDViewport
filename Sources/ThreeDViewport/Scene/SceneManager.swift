@@ -5,6 +5,10 @@ import simd
 // Phase 6: multi-object support with selectedIndex for keyboard/mouse routing.
 final class SceneManager {
 
+    // Fired whenever the selected object changes (index change or objects array change).
+    // AppDelegate wires this to push the new selection into ModelInspectorState.
+    var onSelectionChanged: (() -> Void)?
+
     var objects: [SceneObject] = [] {
         didSet {
             if objects.isEmpty {
@@ -17,6 +21,9 @@ final class SceneManager {
                 }
                 print("[DEBUG] SceneManager: objects count = " + String(objects.count))
             }
+            // Fire even when selectedIndex didn't change numerically, because
+            // the underlying object (filename, parts, materials) may have changed.
+            onSelectionChanged?()
         }
     }
 
@@ -28,6 +35,7 @@ final class SceneManager {
             selectedIndex = max(0, min(objects.count - 1, selectedIndex))
             print("[DEBUG] SceneManager: selectedIndex = " + String(selectedIndex)
                 + " ('" + (selectedObject?.name ?? "none") + "')")
+            onSelectionChanged?()
         }
     }
 

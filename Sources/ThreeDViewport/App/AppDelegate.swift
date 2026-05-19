@@ -22,6 +22,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // Camera keyframe inspector panel.
     private var cameraPanel: NSPanel?
 
+    // Model inspector panel.
+    private var modelInspectorPanel: NSPanel?
+    private var modelInspectorState: ModelInspectorState?
+
     // Edit > Remove submenu — repopulated dynamically by NSMenuDelegate.
     private var removeSubmenu: NSMenu?
 
@@ -135,6 +139,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             guard let editor = self?.timelineEditorWC?.editorView,
                   let time = viewport?.timeline.currentTime else { return }
             editor.selectKeyframe(ref: ref, atTime: time)
+        }
+        viewport.onKeyframesCleared = { [weak self] in
+            self?.timelineEditorWC?.editorView.needsDisplay = true
+            self?.markDirty()
+        }
+        viewport.sceneManager.onSelectionChanged = { [weak self, weak viewport] in
+            guard let self, let viewport else { return }
+            let selected = viewport.sceneManager.selectedObject
+            let targets: [SceneObject]
+            if let gid = selected?.groupID {
+                targets = viewport.sceneManager.objects(inGroup: gid)
+            } else if let obj = selected {
+                targets = [obj]
+            } else {
+                targets = []
+            }
+            self.modelInspectorState?.update(targets: targets)
         }
 
         if viewport.device == nil {
@@ -272,6 +293,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             layout.cameraPanel = WindowFrameData(x: f.origin.x, y: f.origin.y,
                                                  w: f.size.width, h: f.size.height)
         }
+        if let panel = modelInspectorPanel, panel.isVisible {
+            let f = panel.frame
+            layout.modelInspectorPanel = WindowFrameData(x: f.origin.x, y: f.origin.y,
+                                                         w: f.size.width, h: f.size.height)
+        }
         return layout
     }
 
@@ -326,6 +352,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             if cameraPanel == nil { showCameraPanel(self) }
             cameraPanel?.setFrame(
                 NSRect(x: cf.x, y: cf.y, width: cf.w, height: cf.h), display: true)
+        }
+
+        // Model inspector panel — open and position if it was visible
+        if let mf = layout.modelInspectorPanel {
+            if modelInspectorPanel == nil { showModelInspector(self) }
+            modelInspectorPanel?.setFrame(
+                NSRect(x: mf.x, y: mf.y, width: mf.w, height: mf.h), display: true)
         }
     }
 
@@ -588,22 +621,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         windowMenu.addItem(.separator())
 
-        // Floating inspector panels
-        let lightsItem = NSMenuItem(
-            title: "Lights & Background…",
-            action: #selector(showLightsInspector(_:)),
-            keyEquivalent: "l"
+        // Floating inspector panels — alphabetical order
+        let cameraPanelItem = NSMenuItem(
+            title: "Camera…",
+            action: #selector(showCameraPanel(_:)),
+            keyEquivalent: "k"
         )
-        lightsItem.target = self
-        windowMenu.addItem(lightsItem)
-
-        let feedbackItem = NSMenuItem(
-            title: "Feedback…",
-            action: #selector(showFeedbackPanel(_:)),
-            keyEquivalent: "f"
-        )
-        feedbackItem.target = self
-        windowMenu.addItem(feedbackItem)
+        cameraPanelItem.target = self
+        windowMenu.addItem(cameraPanelItem)
 
         let colorGradeItem = NSMenuItem(
             title: "Color Grade…",
@@ -613,13 +638,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         colorGradeItem.target = self
         windowMenu.addItem(colorGradeItem)
 
-        let cameraPanelItem = NSMenuItem(
-            title: "Camera…",
-            action: #selector(showCameraPanel(_:)),
-            keyEquivalent: "k"
+        let feedbackItem = NSMenuItem(
+            title: "Feedback…",
+            action: #selector(showFeedbackPanel(_:)),
+            keyEquivalent: "f"
         )
-        cameraPanelItem.target = self
-        windowMenu.addItem(cameraPanelItem)
+        feedbackItem.target = self
+        windowMenu.addItem(feedbackItem)
+
+        let lightsItem = NSMenuItem(
+            title: "Lights & Background…",
+            action: #selector(showLightsInspector(_:)),
+            keyEquivalent: "l"
+        )
+        lightsItem.target = self
+        windowMenu.addItem(lightsItem)
+
+        let modelInspectorItem = NSMenuItem(
+            title: "Model Inspector…",
+            action: #selector(showModelInspector(_:)),
+            keyEquivalent: "i"
+        )
+        modelInspectorItem.target = self
+        windowMenu.addItem(modelInspectorItem)
 
         let timelineEditorItem = NSMenuItem(
             title: "Timeline Editor",
@@ -885,13 +926,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc private func replaceSelectedModel(_ sender: Any) {
         guard let window = window else { return }
 
+        let selectedName = viewportView?.sceneManager.selectedObject?.name ?? "selected model"
+
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories    = false
         panel.canChooseFiles          = true
         panel.title                   = "Replace Selected Model"
         panel.prompt                  = "Replace"
-        panel.message                 = "Choose a .glb file to replace the selected model's geometry."
+        panel.message                 = "Choose a .glb file to replace \"\(selectedName)\"."
         panel.directoryURL            = defaultModelDirectory()
 
         let modelTypes = [UTType(filenameExtension: "glb"), UTType(filenameExtension: "gltf")]
@@ -1073,6 +1116,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             p.orderOut(nil)
             panelsHiddenByMiniaturize.insert("camera")
         }
+        if let p = modelInspectorPanel, p.isVisible {
+            p.orderOut(nil)
+            panelsHiddenByMiniaturize.insert("modelInspector")
+        }
         if let wc = timelineEditorWC, wc.window?.isVisible == true {
             wc.window?.orderOut(nil)
             panelsHiddenByMiniaturize.insert("timeline")
@@ -1121,8 +1168,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if panelsHiddenByMiniaturize.contains("lights")     { lightsPanel?.makeKeyAndOrderFront(nil) }
         if panelsHiddenByMiniaturize.contains("feedback")   { feedbackPanel?.makeKeyAndOrderFront(nil) }
         if panelsHiddenByMiniaturize.contains("colorGrade") { colorGradePanel?.makeKeyAndOrderFront(nil) }
-        if panelsHiddenByMiniaturize.contains("camera")     { cameraPanel?.makeKeyAndOrderFront(nil) }
-        if panelsHiddenByMiniaturize.contains("timeline")   { timelineEditorWC?.showWindow(nil) }
+        if panelsHiddenByMiniaturize.contains("camera")         { cameraPanel?.makeKeyAndOrderFront(nil) }
+        if panelsHiddenByMiniaturize.contains("modelInspector") { modelInspectorPanel?.makeKeyAndOrderFront(nil) }
+        if panelsHiddenByMiniaturize.contains("timeline")       { timelineEditorWC?.showWindow(nil) }
         if !panelsHiddenByMiniaturize.isEmpty {
             print("[DEBUG] AppDelegate: restored panels: "
                 + panelsHiddenByMiniaturize.sorted().joined(separator: ", "))
@@ -1420,6 +1468,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         cameraPanel = panel
         panel.makeKeyAndOrderFront(nil)
         print("[DEBUG] AppDelegate: camera panel opened")
+    }
+
+    // MARK: - Model Inspector
+
+    @objc private func showModelInspector(_ sender: Any) {
+        if let panel = modelInspectorPanel {
+            panel.isVisible ? panel.orderOut(nil) : panel.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        guard let viewport = viewportView else { return }
+
+        let state = ModelInspectorState()
+
+        // Push current selection immediately.
+        let selected = viewport.sceneManager.selectedObject
+        let targets: [SceneObject]
+        if let gid = selected?.groupID {
+            targets = viewport.sceneManager.objects(inGroup: gid)
+        } else if let obj = selected {
+            targets = [obj]
+        } else {
+            targets = []
+        }
+        state.update(targets: targets)
+
+        // Wire callbacks.
+        state.onRedraw = { [weak viewport] in viewport?.needsDisplay = true }
+        state.onDirty  = { [weak self] in self?.markDirty() }
+        state.onRebuildNormals = { [weak viewport] mode, targets in
+            viewport?.applyNormalMode(mode, toTargets: targets)
+        }
+        state.onRevealInFinder = { [weak viewport] in
+            guard let url = viewport?.sceneManager.selectedObject?.sourceURL else { return }
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        }
+
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 296, height: 440),
+            styleMask:   [.titled, .closable, .miniaturizable, .resizable, .utilityWindow, .nonactivatingPanel],
+            backing:     .buffered,
+            defer:       false
+        )
+        panel.title              = "Model Inspector"
+        panel.isFloatingPanel    = true
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.hidesOnDeactivate  = false
+
+        panel.contentView = NSHostingView(rootView: ModelInspectorPanel(state: state))
+
+        if let win = window {
+            let winFrame  = win.frame
+            let panelSize = panel.frame.size
+            let originX   = winFrame.minX + 20
+            let originY   = winFrame.maxY - panelSize.height - 40
+            panel.setFrameOrigin(NSPoint(x: originX, y: originY))
+        } else {
+            panel.center()
+        }
+
+        modelInspectorState  = state
+        modelInspectorPanel  = panel
+        panel.makeKeyAndOrderFront(nil)
+        print("[DEBUG] AppDelegate: model inspector panel opened")
     }
 
     // MARK: - Timeline Editor

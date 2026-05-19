@@ -1,6 +1,20 @@
 import Metal
 import simd
 
+enum NormalMode: Int, CaseIterable {
+    case auto   = 0   // use file normals if present, otherwise generate flat
+    case smooth = 1   // always generate smooth (averaged face normals)
+    case flat   = 2   // always generate flat (per-face normals, faceted look)
+
+    var displayName: String {
+        switch self {
+        case .auto:   return "Auto"
+        case .smooth: return "Smooth"
+        case .flat:   return "Flat"
+        }
+    }
+}
+
 // Represents one loaded GLTF mesh node with its GPU buffers.
 // Phase 2 adds keyframe animation via keyframeTrack.
 // Phase 6 adds sourceURL and per-object visibility toggle.
@@ -55,6 +69,17 @@ final class SceneObject {
     var material: PBRMaterial = PBRMaterial()
 
     var isVisible: Bool
+
+    // Normal shading mode — set by the Model Inspector.
+    // cpuPositions, cpuIndices, and originalNormals are kept so the GPU normal
+    // buffer can be regenerated on demand without re-reading the .glb file.
+    var normalMode:      NormalMode  = .auto
+    var cpuPositions:    [Float]     = []
+    var cpuIndices:      [UInt32]    = []
+    var originalNormals: [Float]     = []   // normals as-loaded from file (or initial smooth)
+    // True when the source .glb actually shipped a NORMAL accessor.
+    // Drives the shader's flat-normal fallback when normalMode == .auto.
+    var fileHadNormals:  Bool        = true
 
     // Bounding sphere (local space, set by GLTFLoader)
     var boundingCenter: SIMD3<Float>
