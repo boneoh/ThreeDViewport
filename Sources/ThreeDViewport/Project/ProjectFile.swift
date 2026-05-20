@@ -244,9 +244,10 @@ final class ProjectFile {
             gradBottomB: bg.gradientBottom.z
         )
 
-        // ── Color grade (v12) ─────────────────────────────────────────────────
+        // ── Color grade (v12; exposure v16) ───────────────────────────────────
         let cg = vp.colorGradeSettings
         let colorGradeData = ColorGradeData(
+            exposure:   cg.exposure,
             brightness: cg.brightness,
             contrast:   cg.contrast,
             gamma:      cg.gamma
@@ -281,7 +282,7 @@ final class ProjectFile {
         }
 
         return ProjectData(
-            version:             14,
+            version:             16,
             modelPath:           nil,           // v3+ uses modelPaths instead
             modelPaths:          modelPaths,
             timeline:            timelineData,
@@ -298,7 +299,8 @@ final class ProjectFile {
             lightConfigs:        lightConfigsData,
             windowLayout:        windowLayout,
             colorGrade:          colorGradeData,
-            groupKeyframeTracks: groupTrackData
+            groupKeyframeTracks: groupTrackData,
+            iblIntensity:        vp.renderSettings.iblIntensity
         )
     }
 
@@ -487,13 +489,19 @@ final class ProjectFile {
         // Sync HUD with restored scene.
         vp.syncOverlayState()
 
-        // ── Color grade (v12) ─────────────────────────────────────────────────
+        // ── Color grade (v12; exposure v16) ───────────────────────────────────
+        vp.colorGradeSettings.exposure   = data.colorGrade.exposure
         vp.colorGradeSettings.brightness = data.colorGrade.brightness
         vp.colorGradeSettings.contrast   = data.colorGrade.contrast
         vp.colorGradeSettings.gamma      = data.colorGrade.gamma
-        print("[DEBUG] ProjectFile: colorGrade brightness=\(data.colorGrade.brightness)"
+        print("[DEBUG] ProjectFile: colorGrade exposure=\(data.colorGrade.exposure)"
+            + " brightness=\(data.colorGrade.brightness)"
             + " contrast=\(data.colorGrade.contrast)"
             + " gamma=\(data.colorGrade.gamma)")
+
+        // ── IBL intensity (v16) ───────────────────────────────────────────────
+        vp.renderSettings.iblIntensity = data.iblIntensity
+        print("[DEBUG] ProjectFile: iblIntensity=\(data.iblIntensity)")
 
         // Force the Renderer to re-evaluate keyframes on the next draw.
         // Without this, lastAnimatedTime == currentTime (both 0) so applyAnimation()

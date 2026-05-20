@@ -20,6 +20,7 @@ import Foundation
 //  14 — Phase 2 Timeline Hierarchy: added groupKeyframeTracks (group-level animation).
 //  15 — Model Inspector: added isVisible, normalMode, metallicFactor, roughnessFactor,
 //       baseColorFactor per ObjectData; added modelInspectorPanel to WindowLayoutData.
+//  16 — IBL: added top-level iblIntensity, and exposure to ColorGradeData.
 //
 // Design rules:
 //   • No binary data inline — .glb files are referenced by absolute path.
@@ -31,7 +32,7 @@ import Foundation
 //     All new fields have defaults so older files load without error.
 
 struct ProjectData: Codable {
-    var version:             Int     = 15
+    var version:             Int     = 16
     var modelPath:           String? = nil   // v1/v2 compat; ignored when modelPaths non-empty.
     var modelPaths:          [String] = []   // v3 — ordered list of absolute .glb paths.
     var timeline:            TimelineData
@@ -51,10 +52,11 @@ struct ProjectData: Codable {
     var colorGrade:          ColorGradeData   = ColorGradeData()    // v12; B/C post-process.
     /// v14 (Phase 2): group-level animation tracks, one per loaded multi-part model.
     var groupKeyframeTracks: [GroupTrackData] = []
+    var iblIntensity:        Float = 1.0                 // v16; per-scene IBL strength.
 
     // MARK: - Memberwise init (required because we define init(from:) below)
 
-    init(version:             Int                    = 15,
+    init(version:             Int                    = 16,
          modelPath:           String?                = nil,
          modelPaths:          [String]               = [],
          timeline:            TimelineData,
@@ -71,7 +73,8 @@ struct ProjectData: Codable {
          lightConfigs:        [LightConfigData]      = [],
          windowLayout:        WindowLayoutData       = WindowLayoutData(),
          colorGrade:          ColorGradeData         = ColorGradeData(),
-         groupKeyframeTracks: [GroupTrackData]       = []) {
+         groupKeyframeTracks: [GroupTrackData]       = [],
+         iblIntensity:        Float                  = 1.0) {
         self.version             = version
         self.modelPath           = modelPath
         self.modelPaths          = modelPaths
@@ -90,6 +93,7 @@ struct ProjectData: Codable {
         self.windowLayout        = windowLayout
         self.colorGrade          = colorGrade
         self.groupKeyframeTracks = groupKeyframeTracks
+        self.iblIntensity        = iblIntensity
     }
 
     // MARK: - Custom decoder
@@ -120,6 +124,7 @@ struct ProjectData: Codable {
         windowLayout        = (try? c.decode(WindowLayoutData.self,      forKey: .windowLayout))        ?? WindowLayoutData()
         colorGrade          = (try? c.decode(ColorGradeData.self,        forKey: .colorGrade))          ?? ColorGradeData()
         groupKeyframeTracks = (try? c.decode([GroupTrackData].self,      forKey: .groupKeyframeTracks)) ?? []
+        iblIntensity        = (try? c.decode(Float.self,                 forKey: .iblIntensity))        ?? 1.0
     }
 }
 
@@ -127,19 +132,22 @@ struct ProjectData: Codable {
 // v13: Added gamma (Float, identity = 1.0).
 // Defaults are identity so older project files load with no color grading applied.
 struct ColorGradeData: Codable {
+    var exposure:   Float = 1.0   // identity = 1; v16 — pre-tone-map scene exposure
     var brightness: Float = 0.0   // identity = 0
     var contrast:   Float = 1.0   // identity = 1
     var gamma:      Float = 1.0   // identity = 1; v13 — absent in v12 files, falls back to 1.0
 
-    // Custom decoder so v12 files (missing gamma) decode cleanly using the default.
+    // Custom decoder so older files (missing exposure/gamma) decode cleanly using defaults.
     init(from decoder: Decoder) throws {
         let c  = try decoder.container(keyedBy: CodingKeys.self)
+        exposure   = (try? c.decode(Float.self, forKey: .exposure))   ?? 1.0
         brightness = (try? c.decode(Float.self, forKey: .brightness)) ?? 0.0
         contrast   = (try? c.decode(Float.self, forKey: .contrast))   ?? 1.0
         gamma      = (try? c.decode(Float.self, forKey: .gamma))      ?? 1.0
     }
 
-    init(brightness: Float = 0.0, contrast: Float = 1.0, gamma: Float = 1.0) {
+    init(exposure: Float = 1.0, brightness: Float = 0.0, contrast: Float = 1.0, gamma: Float = 1.0) {
+        self.exposure   = exposure
         self.brightness = brightness
         self.contrast   = contrast
         self.gamma      = gamma

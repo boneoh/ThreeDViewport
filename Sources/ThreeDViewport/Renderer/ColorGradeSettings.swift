@@ -4,6 +4,12 @@ import Combine
 // Owned by ViewportView; observed by Renderer and VideoExporter.
 final class ColorGradeSettings: ObservableObject {
 
+    /// Scene exposure — a linear multiplier applied PRE-tone-map in the main
+    /// scene shader (not in the post-process grade pass like the fields below).
+    /// Lives here so it shares the Color Grade panel + per-project persistence.
+    /// 1 = no change (identity).
+    @Published var exposure: Float = 1.0
+
     /// Additive brightness offset applied before contrast.  Range −1…+1.
     /// 0 = no change (identity).
     @Published var brightness: Float = 0.0
@@ -17,11 +23,13 @@ final class ColorGradeSettings: ObservableObject {
     /// 1 = no change (identity).
     @Published var gamma: Float = 1.0
 
-    /// True when all parameters are at their identity values — lets the
-    /// renderer skip the pass entirely.
+    /// True when the POST-PROCESS parameters are at identity — lets the renderer
+    /// skip the color-grade pass.  Exposure is excluded on purpose: it's applied
+    /// in the main scene shader, not in that pass.
     var isIdentity: Bool { brightness == 0 && contrast == 1 && gamma == 1 }
 
     func reset() {
+        exposure   = 1
         brightness = 0
         contrast   = 1
         gamma      = 1

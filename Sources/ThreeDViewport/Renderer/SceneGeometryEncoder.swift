@@ -18,6 +18,7 @@ enum SceneGeometryEncoder {
         let depthStencilState: MTLDepthStencilState
         let isColorMode:       Bool
         let isWireframe:       Bool
+        let exposure:          Float        // pre-tone-map multiplier (Color Grade)
         let ibl:               IBL?
         let dummyUV:           MTLBuffer?
         let dummyTangent:      MTLBuffer?
@@ -46,6 +47,9 @@ enum SceneGeometryEncoder {
                     && context.ibl?.specularCube   != nil
                     && context.ibl?.brdfLUT        != nil
         lu.ambientColor.w = iblReady ? (context.ibl?.intensity ?? 0.0) : 0.0
+        // Exposure travels in the spare countAndPad.y slot as a bit-cast float
+        // (countAndPad.x is the light count and must be preserved).
+        lu.countAndPad.y = context.exposure.bitPattern
         encoder.setFragmentBytes(&lu,
                                  length: MemoryLayout<LightUniforms>.stride,
                                  index: 3)

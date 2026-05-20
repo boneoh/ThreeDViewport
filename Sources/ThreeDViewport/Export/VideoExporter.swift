@@ -599,6 +599,7 @@ final class VideoExporter {
                     depthStencilState: depthStencilState,
                     isColorMode:       isColorMode,
                     isWireframe:       isWireframe,
+                    exposure:          colorGradeSettings?.exposure ?? 1.0,
                     ibl:               ibl,
                     dummyUV:           dummyUVBuffer,
                     dummyTangent:      dummyTangentBuffer))

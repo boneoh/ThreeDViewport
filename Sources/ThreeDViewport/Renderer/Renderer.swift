@@ -512,6 +512,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                     depthStencilState: ds,
                     isColorMode:       isColorMode,
                     isWireframe:       isWireframe,
+                    exposure:          colorGradeSettings?.exposure ?? 1.0,
                     ibl:               ibl,
                     dummyUV:           dummyUVBuffer,
                     dummyTangent:      dummyTangentBuffer))
@@ -583,17 +584,27 @@ final class Renderer: NSObject, MTKViewDelegate {
                           height:        Int(view.drawableSize.height))
         }
 
-        // ── Color grade (brightness / contrast) — very last pass ─────────────
-        if let settings = colorGradeSettings, !settings.isIdentity,
-           let gradeTex = gradeTexture {
-            if let blit = commandBuffer.makeBlitCommandEncoder() {
-                blit.copy(from: drawable.texture, to: gradeTex)
-                blit.endEncoding()
+        // ── Color grade (brightness / contrast / gamma) — very last pass ─────
+        if let settings = colorGradeSettings, !settings.isIdentity {
+            // Build the intermediate lazily: drawableSizeWillChange can fire
+            // before this renderer is assigned as the view's delegate, so
+            // gradeTexture may still be nil on the first frames (it only got
+            // built after a manual window resize).  Rebuild on size mismatch too.
+            let w = drawable.texture.width
+            let h = drawable.texture.height
+            if gradeTexture == nil || gradeTexture?.width != w || gradeTexture?.height != h {
+                rebuildGradeTexture(width: w, height: h)
             }
-            applyColorGrade(commandBuffer: commandBuffer,
-                            source: gradeTex,
-                            dest:   drawable.texture,
-                            settings: settings)
+            if let gradeTex = gradeTexture {
+                if let blit = commandBuffer.makeBlitCommandEncoder() {
+                    blit.copy(from: drawable.texture, to: gradeTex)
+                    blit.endEncoding()
+                }
+                applyColorGrade(commandBuffer: commandBuffer,
+                                source: gradeTex,
+                                dest:   drawable.texture,
+                                settings: settings)
+            }
         }
 
         commandBuffer.present(drawable)

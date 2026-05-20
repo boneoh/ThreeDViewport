@@ -315,8 +315,18 @@ fragment float4 fragment_main(
     }
     color += emissive;
 
-    // ── Tone mapping (Reinhard) ────────────────────────────────────────────
-    color = color / (color + float3(1.0));
+    // ── Exposure (pre-tone-map) ────────────────────────────────────────────
+    // Lives in the Color Grade panel/data but is applied HERE, before tone
+    // mapping — scaling after the curve can't recover clipped highlights.
+    // Travels in the spare countAndPad.y slot as a bit-cast float.
+    float exposure = as_type<float>(lightData.countAndPad.y);
+    if (exposure <= 0.0) { exposure = 1.0; }   // guard uninitialised paths
+    color *= exposure;
+
+    // ── Tone mapping (ACES filmic — Narkowicz approximation) ───────────────
+    float3 acesA = color * (2.51 * color + 0.03);
+    float3 acesB = color * (2.43 * color + 0.59) + 0.14;
+    color = saturate(acesA / acesB);
 
     // ── Gamma encode for .bgra8Unorm render target ─────────────────────────
     color = pow(saturate(color), float3(1.0 / 2.2));

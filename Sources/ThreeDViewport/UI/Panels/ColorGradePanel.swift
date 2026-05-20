@@ -16,7 +16,7 @@ struct ColorGradePanel: View {
                     Text("Color Grade")
                         .font(.headline)
                     Spacer()
-                    if !settings.isIdentity {
+                    if !settings.isIdentity || settings.exposure != 1.0 {
                         Button("Reset") { settings.reset() }
                             .buttonStyle(.borderless)
                             .font(.caption)
@@ -26,6 +26,18 @@ struct ColorGradePanel: View {
                 .padding(.bottom, 10)
 
                 Divider().padding(.bottom, 14)
+
+                // ── Exposure ──────────────────────────────────────────────────
+                // Applied pre-tone-map in the main scene shader (not the
+                // post-process pass), so it can tame HDR/IBL highlights.
+                GradeSliderRow(
+                    label:  "Exposure",
+                    value:  $settings.exposure,
+                    range:  0.1...4.0,
+                    format: "%.2f"
+                )
+
+                Divider().padding(.vertical, 10)
 
                 // ── Brightness ────────────────────────────────────────────────
                 GradeSliderRow(
