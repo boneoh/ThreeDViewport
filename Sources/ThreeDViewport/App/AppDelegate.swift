@@ -911,40 +911,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             self?.viewportView?.addModelToScene(url: url)
             self?.markDirty()
             self?.timelineEditorWC?.updateWindowHeight()
+            self?.refreshCameraFollowTargets()
         }
     }
 
     // MARK: - Add Model to Scene (Phase 6)
 
-    @objc private func addModelToScene(_ sender: Any) {
-        guard let window = window else {
-            print("[DEBUG] AppDelegate: addModelToScene — window is nil")
-            return
-        }
-
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories    = false
-        panel.canChooseFiles          = true
-        panel.title        = "Add Model to Scene"
-        panel.directoryURL = defaultModelDirectory()
-
-        let modelTypes = [UTType(filenameExtension: "glb"), UTType(filenameExtension: "gltf")]
-            .compactMap { $0 }
-        if !modelTypes.isEmpty {
-            panel.allowedContentTypes = modelTypes
-        }
-
-        panel.beginSheetModal(for: window) { [weak self] response in
-            guard response == .OK, let url = panel.url else {
-                print("[DEBUG] AppDelegate: add-model panel cancelled")
-                return
-            }
-            print("[DEBUG] AppDelegate: addModelToScene — " + url.lastPathComponent)
-            self?.viewportView?.addModelToScene(url: url)
-            self?.markDirty()
-        }
-    }
+    // NOTE: Unreachable dead code — this @objc handler is not wired to any menu
+    // item (no `#selector(addModelToScene)` registration anywhere).  The live
+    // "add a model" path is `openModel(_:)`, which calls
+    // `viewportView.addModelToScene(url:)` directly.  Commented out 2026-05-20;
+    // remove entirely if it's still unused.
+//    @objc private func addModelToScene(_ sender: Any) {
+//        guard let window = window else {
+//            print("[DEBUG] AppDelegate: addModelToScene — window is nil")
+//            return
+//        }
+//
+//        let panel = NSOpenPanel()
+//        panel.allowsMultipleSelection = false
+//        panel.canChooseDirectories    = false
+//        panel.canChooseFiles          = true
+//        panel.title        = "Add Model to Scene"
+//        panel.directoryURL = defaultModelDirectory()
+//
+//        let modelTypes = [UTType(filenameExtension: "glb"), UTType(filenameExtension: "gltf")]
+//            .compactMap { $0 }
+//        if !modelTypes.isEmpty {
+//            panel.allowedContentTypes = modelTypes
+//        }
+//
+//        panel.beginSheetModal(for: window) { [weak self] response in
+//            guard response == .OK, let url = panel.url else {
+//                print("[DEBUG] AppDelegate: add-model panel cancelled")
+//                return
+//            }
+//            print("[DEBUG] AppDelegate: addModelToScene — " + url.lastPathComponent)
+//            self?.viewportView?.addModelToScene(url: url)
+//            self?.markDirty()
+//        }
+//    }
 
     // MARK: - Replace Selected Model
 
@@ -973,6 +979,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             print("[DEBUG] AppDelegate: replaceSelectedModel — " + url.lastPathComponent)
             self?.viewportView?.replaceSelectedModel(url: url)
             self?.markDirty()
+            self?.refreshCameraFollowTargets()
         }
     }
 
@@ -1046,6 +1053,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             timelineEditorWC?.updateWindowHeight()
             // Restore window/panel positions saved with the project.
             applyWindowLayout(data.windowLayout)
+            // Sync the Camera panel's Follow Target list to the new scene so it
+            // doesn't keep showing objects from the previously-loaded project.
+            refreshCameraFollowTargets()
             print("[DEBUG] AppDelegate: project loaded from " + url.lastPathComponent)
         } catch {
             showErrorAlert(message: "Could not open project", detail: error.localizedDescription)
@@ -1471,26 +1481,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     // MARK: - Camera Panel
 
+    /// Refreshes the Camera panel's Follow Target list from the current scene.
+    /// Call after any scene mutation (project load, model open/replace/remove)
+    /// so the picker never shows stale objects from a previous scene.
+    private func refreshCameraFollowTargets() {
+        guard let viewport = viewportView else { return }
+        // Sort alphabetically (natural order so `head10` follows `head2`,
+        // not `head1`).  "None — Free Camera" is rendered separately at
+        // the top of the picker, so it isn't in this list.
+        viewport.cameraPanelState.availableObjectNames =
+            viewport.sceneManager.objects
+                .map { $0.name }
+                .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        // If the previously-chosen follow target no longer exists in the
+        // scene (e.g. the model was removed or replaced), reset to free
+        // camera so the picker shows a valid selection.
+        if let chosen = viewport.cameraPanelState.followTargetName,
+           !viewport.cameraPanelState.availableObjectNames.contains(chosen) {
+            viewport.cameraPanelState.followTargetName = nil
+        }
+    }
+
     @objc private func showCameraPanel(_ sender: Any) {
         // Refresh the picker's object-name list every time the menu item is
         // invoked, so newly-loaded models appear without requiring a restart
         // of the panel.  Cheap enough to do unconditionally.
-        if let viewport = viewportView {
-            // Sort alphabetically (natural order so `head10` follows `head2`,
-            // not `head1`).  "None — Free Camera" is rendered separately at
-            // the top of the picker, so it isn't in this list.
-            viewport.cameraPanelState.availableObjectNames =
-                viewport.sceneManager.objects
-                    .map { $0.name }
-                    .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-            // If the previously-chosen follow target no longer exists in the
-            // scene (e.g. the model was removed or replaced), reset to free
-            // camera so the picker shows a valid selection.
-            if let chosen = viewport.cameraPanelState.followTargetName,
-               !viewport.cameraPanelState.availableObjectNames.contains(chosen) {
-                viewport.cameraPanelState.followTargetName = nil
-            }
-        }
+        refreshCameraFollowTargets()
 
         if let panel = cameraPanel {
             panel.isVisible ? panel.orderOut(nil) : panel.makeKeyAndOrderFront(nil)
@@ -2106,6 +2122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             scene.removeGroup(containing: index)
             markDirty()
             timelineEditorWC?.updateWindowHeight()
+            refreshCameraFollowTargets()
         }
     }
 
@@ -2125,6 +2142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             scene.clear()
             markDirty()
             timelineEditorWC?.updateWindowHeight()
+            refreshCameraFollowTargets()
             print("[DEBUG] AppDelegate: removed all objects")
         }
     }

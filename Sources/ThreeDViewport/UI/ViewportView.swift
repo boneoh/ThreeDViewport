@@ -47,6 +47,12 @@ final class ViewportView: MTKView {
     private var directorEverFit: Bool = false
     var renderer: Renderer?
 
+    /// Camera whose basis (right/up/forward) and distance drive object, light,
+    /// and model manipulation, so movement matches what the user sees: the
+    /// Director in Scene mode, the scene camera otherwise.  Outside Scene mode
+    /// this is `camera`, so behaviour is unchanged.
+    private var viewCamera: CameraController { sceneModeActive ? director : camera }
+
     // Phase 8: observable rendering settings (color / greyscale / gizmo)
     let renderSettings = RenderSettings()
     private var colorModeCancellable:   AnyCancellable?
@@ -1282,11 +1288,11 @@ final class ViewportView: MTKView {
                 dragLockAxis = abs(dragAccumX) >= abs(dragAccumY) ? .horizontal : .vertical
             }
 
-            let scale = camera.distance * 0.001
+            let scale = viewCamera.distance * 0.001
             let move: SIMD3<Float>
             switch dragLockAxis {
-            case .horizontal: move = camera.rightVector * (dx * scale)
-            case .vertical:   move = camera.upVector   * (dy * scale)
+            case .horizontal: move = viewCamera.rightVector * (dx * scale)
+            case .vertical:   move = viewCamera.upVector   * (dy * scale)
             case .none:       return
             }
             obj.transform.columns.3.x += move.x
@@ -1308,11 +1314,11 @@ final class ViewportView: MTKView {
                 dragLockAxis = abs(dragAccumX) >= abs(dragAccumY) ? .horizontal : .vertical
             }
 
-            let scale = camera.distance * 0.001
+            let scale = viewCamera.distance * 0.001
             let move: SIMD3<Float>
             switch dragLockAxis {
-            case .horizontal: move = camera.rightVector * (dx * scale)
-            case .vertical:   move = camera.upVector   * (dy * scale)
+            case .horizontal: move = viewCamera.rightVector * (dx * scale)
+            case .vertical:   move = viewCamera.upVector   * (dy * scale)
             case .none:       return
             }
             translateGroup(parts, by: move)
@@ -1339,9 +1345,9 @@ final class ViewportView: MTKView {
                 lightManager.rotateSelected(deltaAzimuth:   -lockedDx * sensitivity,
                                             deltaElevation: -lockedDy * sensitivity)
             case .point, .spot, .laser:
-                let scale = camera.distance * 0.001
-                let d = camera.rightVector * (lockedDx * scale)
-                      + camera.upVector    * (lockedDy * scale)
+                let scale = viewCamera.distance * 0.001
+                let d = viewCamera.rightVector * (lockedDx * scale)
+                      + viewCamera.upVector    * (lockedDy * scale)
                 lightManager.translateSelected(by: d)
             default:
                 break
@@ -1357,9 +1363,15 @@ final class ViewportView: MTKView {
                 dragLockAxis = abs(dragAccumX) >= abs(dragAccumY) ? .horizontal : .vertical
             }
 
+            // Scene mode: pan the scene camera in the Director's screen plane so
+            // it tracks what the user sees.  Otherwise truck/pedestal as before.
             switch dragLockAxis {
-            case .horizontal: camera.pan(deltaX: -dx, deltaY: 0)
-            case .vertical:   camera.pan(deltaX: 0,   deltaY: dy)
+            case .horizontal:
+                if sceneModeActive { panSceneCameraInDirectorPlane(dx: dx, dy: 0) }
+                else               { camera.pan(deltaX: -dx, deltaY: 0) }
+            case .vertical:
+                if sceneModeActive { panSceneCameraInDirectorPlane(dx: 0, dy: dy) }
+                else               { camera.pan(deltaX: 0, deltaY: dy) }
             case .none:       return
             }
         }
@@ -1382,17 +1394,18 @@ final class ViewportView: MTKView {
         switch controlMode {
         case .object:
             // Free rotation on both axes simultaneously — no axis lock.
-            // Horizontal drag yaws around the world-up vector; vertical drag
-            // pitches around the camera-right vector.  Both apply in the same
+            // Horizontal drag yaws around the view's up vector; vertical drag
+            // pitches around the view's right vector (viewCamera = Director in
+            // Scene mode, scene camera otherwise).  Both apply in the same
             // frame so diagonal strokes rotate cleanly in any direction.
             guard !timeline.isPlaying,
                   let obj = sceneManager.selectedObject ?? sceneManager.primaryObject
             else { return }
 
             let hRot = rotationMatrix4x4(simd_quatf(angle:  dx * sensitivity,
-                                                     axis: camera.upVector))
+                                                     axis: viewCamera.upVector))
             let vRot = rotationMatrix4x4(simd_quatf(angle: -dy * sensitivity,
-                                                     axis: camera.rightVector))
+                                                     axis: viewCamera.rightVector))
             let rot  = vRot * hRot   // horizontal applied first, vertical on top
 
             let localCentre = (obj.boundingMin + obj.boundingMax) * 0.5
@@ -1423,8 +1436,8 @@ final class ViewportView: MTKView {
             let parts = groupParts()
             guard !parts.isEmpty else { return }
 
-            let hQuat = simd_quatf(angle:  dx * sensitivity, axis: camera.upVector)
-            let vQuat = simd_quatf(angle: -dy * sensitivity, axis: camera.rightVector)
+            let hQuat = simd_quatf(angle:  dx * sensitivity, axis: viewCamera.upVector)
+            let vQuat = simd_quatf(angle: -dy * sensitivity, axis: viewCamera.rightVector)
             let pivot = groupCenter(parts)
             rotateGroup(parts, by: vQuat * hQuat, around: pivot)
 
@@ -1513,8 +1526,8 @@ final class ViewportView: MTKView {
                     let factor = exp(delta * 0.02)
                     scaleGroup(parts, by: factor, around: groupCenter(parts))
                 } else {
-                    let move = delta * camera.distance * 0.05
-                    translateGroup(parts, by: camera.forwardVector * move)
+                    let move = delta * viewCamera.distance * 0.05
+                    translateGroup(parts, by: viewCamera.forwardVector * move)
                 }
                 return
             }
@@ -1523,15 +1536,18 @@ final class ViewportView: MTKView {
         // Camera mode: scroll wheel dollies the rig (translates along forward).
         // Focal-length / FOV change is on the +/− keys instead.
         if controlMode == .camera, !timeline.isPlaying {
-            camera.dolly(delta: delta)
+            // Scene mode: dolly the scene camera along the Director's forward axis
+            // (into / out of the view you see); otherwise dolly its own rig.
+            if sceneModeActive { dollySceneCameraAlongDirector(delta: delta) }
+            else               { camera.dolly(delta: delta) }
             return
         }
 
         // Light mode: move the selected light toward / away from the scene
         // (along the camera's forward axis — "into / out of the screen").
         if controlMode == .light, !timeline.isPlaying {
-            let move = delta * camera.distance * 0.05
-            lightManager.translateSelected(by: camera.forwardVector * move)
+            let move = delta * viewCamera.distance * 0.05
+            lightManager.translateSelected(by: viewCamera.forwardVector * move)
             return
         }
 
@@ -1561,9 +1577,9 @@ final class ViewportView: MTKView {
             syncLocalTransform(obj)
 
         } else {
-            // Plain scroll → translate along the camera forward axis (depth push/pull)
-            let move = delta * camera.distance * 0.05
-            let fwd  = camera.forwardVector
+            // Plain scroll → translate along the view forward axis (depth push/pull)
+            let move = delta * viewCamera.distance * 0.05
+            let fwd  = viewCamera.forwardVector
             obj.transform.columns.3.x += fwd.x * move
             obj.transform.columns.3.y += fwd.y * move
             obj.transform.columns.3.z += fwd.z * move
@@ -1608,6 +1624,24 @@ final class ViewportView: MTKView {
         }
     }
 
+    // MARK: - Scene-camera moves relative to the Director (Scene mode)
+    //
+    // In Scene mode the user views through the Director, so positioning the
+    // scene camera should follow the Director's POV rather than the scene
+    // camera's own basis.  These slide the scene camera's `target` (which drags
+    // the whole rig, since the eye is derived from target + yaw/pitch/distance).
+    // Sensitivity uses the Director's distance so feel matches the view.
+
+    private func panSceneCameraInDirectorPlane(dx: Float, dy: Float) {
+        let s = director.distance * 0.001
+        camera.target += director.rightVector * (dx * s)
+        camera.target += director.upVector    * (dy * s)
+    }
+
+    private func dollySceneCameraAlongDirector(delta: Float) {
+        camera.target += director.forwardVector * (delta * 0.05 * max(director.distance, 1.0))
+    }
+
     // MARK: - Arrow-key dispatch
     //
     // Plain arrow = primary action; Shift+arrow = secondary.
@@ -1623,8 +1657,8 @@ final class ViewportView: MTKView {
     private func applyArrow(dx: Int, dy: Int, shift: Bool) {
         let dxF   = Float(dx)
         let dyF   = Float(dy)
-        let right = camera.rightVector
-        let up    = camera.upVector
+        let right = viewCamera.rightVector
+        let up    = viewCamera.upVector
 
         switch controlMode {
         case .camera:
@@ -1636,7 +1670,12 @@ final class ViewportView: MTKView {
                 // Truck / pedestal.  Sign convention matches the previous plain-arrow
                 // behavior: dx>0 (→) calls camera.pan(deltaX: -panStep, 0), and
                 // dx<0 (←) calls camera.pan(deltaX: +panStep, 0).
-                camera.pan(deltaX: -dxF * panStep, deltaY: dyF * panStep)
+                // Scene mode: pan the scene camera in the Director's screen plane.
+                if sceneModeActive {
+                    panSceneCameraInDirectorPlane(dx: dxF * panStep, dy: dyF * panStep)
+                } else {
+                    camera.pan(deltaX: -dxF * panStep, deltaY: dyF * panStep)
+                }
             }
 
         case .light:
@@ -1706,7 +1745,7 @@ final class ViewportView: MTKView {
     /// Camera mode is unaffected by Option.
     private func applyDepthKey(positive: Bool, optionDown: Bool) {
         let sign: Float = positive ? 1 : -1
-        let fwd = camera.forwardVector
+        let fwd = viewCamera.forwardVector
 
         switch controlMode {
         case .camera:
