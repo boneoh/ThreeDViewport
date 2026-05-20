@@ -1298,28 +1298,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // MARK: - Settings
 
     @objc private func showSettings(_ sender: Any) {
-        // Toggle: close if visible, otherwise create/show.
-        if let panel = settingsPanel {
-            if panel.isVisible { panel.orderOut(nil) } else { panel.makeKeyAndOrderFront(nil) }
+        // Toggle closed if already showing.
+        if let panel = settingsPanel, panel.isVisible {
+            panel.orderOut(nil)
             return
         }
 
-        let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 460),
-            styleMask:   [.titled, .closable, .utilityWindow],
-            backing:     .buffered,
-            defer:       false
-        )
-        panel.title           = "Settings"
-        panel.isFloatingPanel = true
-        panel.hidesOnDeactivate = false
+        let isNew = settingsPanel == nil
+        let panel: NSPanel
+        if let existing = settingsPanel {
+            panel = existing
+        } else {
+            panel = NSPanel(
+                contentRect: NSRect(x: 0, y: 0, width: 720, height: 540),
+                styleMask:   [.titled, .closable, .utilityWindow],
+                backing:     .buffered,
+                defer:       false
+            )
+            panel.title             = "Settings"
+            panel.isFloatingPanel   = true
+            panel.hidesOnDeactivate = false
+            settingsPanel = panel
+        }
 
-        let view = SettingsPanel(settings: AppSettings.shared,
-                                 onClose: { [weak self] in self?.settingsPanel?.orderOut(nil) })
-        panel.contentView = NSHostingView(rootView: view)
-        panel.center()
+        // Install a fresh view every time it opens so the working copies re-seed
+        // from the current AppSettings — Cancel must truly discard edits, and a
+        // reopen must show the saved values, not the last (possibly cancelled) ones.
+        let hosting = NSHostingView(rootView: SettingsPanel(
+            settings: AppSettings.shared,
+            onClose:  { [weak self] in self?.settingsPanel?.orderOut(nil) }))
+        panel.contentView = hosting
+        panel.setContentSize(hosting.fittingSize)
+        if isNew { panel.center() }
 
-        settingsPanel = panel
         panel.makeKeyAndOrderFront(nil)
         print("[DEBUG] AppDelegate: settings panel opened")
     }

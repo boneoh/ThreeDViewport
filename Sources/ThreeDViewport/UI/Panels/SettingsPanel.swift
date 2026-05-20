@@ -45,13 +45,13 @@ struct SettingsPanel: View {
 
             Text("Export").font(.subheadline).foregroundColor(.secondary)
             HStack(spacing: 8) {
-                Text("Resolution").frame(width: 120, alignment: .leading)
+                Text("Resolution").frame(width: 140, alignment: .leading)
                 TextField("W", text: $exportWidth).frame(width: 64)
                 Text("×")
                 TextField("H", text: $exportHeight).frame(width: 64)
             }
             HStack(spacing: 8) {
-                Text("Codec").frame(width: 120, alignment: .leading)
+                Text("Codec").frame(width: 140, alignment: .leading)
                 Picker("", selection: $codecIndex) {
                     Text("ProRes 4444").tag(0)
                     Text("ProRes 422 HQ").tag(1)
@@ -71,7 +71,7 @@ struct SettingsPanel: View {
             }
         }
         .padding(16)
-        .frame(width: 480)
+        .frame(width: 720)
         .onAppear(perform: seed)
     }
 
@@ -82,7 +82,7 @@ struct SettingsPanel: View {
                          _ binding: Binding<String>,
                          directory: Bool) -> some View {
         HStack(spacing: 8) {
-            Text(label).frame(width: 120, alignment: .leading)
+            Text(label).frame(width: 140, alignment: .leading)
             TextField("", text: binding)
             Button("Choose…") { choose(binding, directory: directory) }
         }
