@@ -160,15 +160,30 @@ final class IBL {
 
     // MARK: - HDR environment loading
 
+    // Resolves which HDR to load: a user-configured path from AppSettings if set
+    // and present on disk, otherwise the bundled default.  Returns nil only when
+    // neither is available (caller then falls back to procedural).
+    private static func resolveHDRURL() -> URL? {
+        let configured = AppSettings.shared.hdrPath
+        if !configured.isEmpty {
+            let url = AppSettings.expand(configured)
+            if FileManager.default.fileExists(atPath: url.path) {
+                print("[DEBUG] IBL: using configured HDR " + url.path)
+                return url
+            }
+            print("[DEBUG] IBL: configured HDR not found (" + url.path + ") — bundled fallback")
+        }
+        return Bundle.module.url(forResource: environmentHDRName, withExtension: "hdr")
+    }
+
     // Loads the bundled equirectangular HDR and projects it into the env cubemap.
     // Returns nil (so the caller falls back to procedural) if the resource is
     // missing, unparseable, or any Metal step fails.
     private static func loadHDREnvCubemap(device:       MTLDevice,
                                           library:      MTLLibrary,
                                           commandQueue: MTLCommandQueue) -> MTLTexture? {
-        guard let url = Bundle.module.url(forResource: environmentHDRName,
-                                          withExtension: "hdr") else {
-            print("[DEBUG] IBL: HDR '\(environmentHDRName).hdr' not bundled — procedural fallback")
+        guard let url = resolveHDRURL() else {
+            print("[DEBUG] IBL: no HDR available — procedural fallback")
             return nil
         }
         guard let hdr = HDRImage(url: url) else {

@@ -26,6 +26,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var modelInspectorPanel: NSPanel?
     private var modelInspectorState: ModelInspectorState?
 
+    // Global settings panel.
+    private var settingsPanel: NSPanel?
+
     // Edit > Remove submenu — repopulated dynamically by NSMenuDelegate.
     private var removeSubmenu: NSMenu?
 
@@ -433,6 +436,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         appMenu.addItem(.separator())
 
+        let settingsItem = NSMenuItem(
+            title: "Settings…",
+            action: #selector(showSettings(_:)),
+            keyEquivalent: ","
+        )
+        settingsItem.target = self
+        appMenu.addItem(settingsItem)
+
+        appMenu.addItem(.separator())
+
         appMenu.addItem(NSMenuItem(
             title: "Quit ThreeDViewport",
             action: #selector(NSApplication.terminate(_:)),
@@ -695,28 +708,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     // MARK: - Default directories
 
-    /// Returns ~/Documents/ThreeDViewport/<subfolder>, creating it if needed.
+    /// Returns the configured folder for a category ("Projects", "Movies",
+    /// "Models"), creating it if needed.  Paths come from AppSettings (which
+    /// default to ~/Documents/ThreeDViewport/<subfolder>).
     private func defaultDirectory(for subfolder: String) -> URL {
-        let base = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("ThreeDViewport")
-            .appendingPathComponent(subfolder)
-        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-        return base
+        let s = AppSettings.shared
+        let path: String
+        switch subfolder {
+        case "Projects": path = s.projectsPath
+        case "Movies":   path = s.moviesPath
+        case "Models":   path = s.modelsPathSecondary
+        default:
+            // Unknown category — preserve the original Documents-based behavior.
+            let base = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("ThreeDViewport")
+                .appendingPathComponent(subfolder)
+            try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+            return base
+        }
+        let url = AppSettings.expand(path)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
     }
 
-    /// Default starting folder for any "pick a model file" sheet.  If a
-    /// `Models/Favorites/` subfolder exists, jumps straight to it; otherwise
-    /// falls back to the Models root.  Favorites is never auto-created — the
-    /// user opts in by making the folder themselves.
+    /// Default starting folder for any "pick a model file" sheet.  Uses the
+    /// primary models path if it exists, otherwise the secondary (fallback).
+    /// The primary is never auto-created — the user opts in by making it.
     private func defaultModelDirectory() -> URL {
-        let models    = defaultDirectory(for: "Models")
-        let favorites = models.appendingPathComponent("Favorites")
+        let primary = AppSettings.expand(AppSettings.shared.modelsPathPrimary)
         var isDir: ObjCBool = false
-        if FileManager.default.fileExists(atPath: favorites.path, isDirectory: &isDir),
+        if FileManager.default.fileExists(atPath: primary.path, isDirectory: &isDir),
            isDir.boolValue {
-            return favorites
+            return primary
         }
-        return models
+        return defaultDirectory(for: "Models")
     }
 
     /// Returns the next "rev letter" project filename derived from `baseName`.
@@ -1268,6 +1293,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             menuItem.state = isOn ? .on : .off
         }
         return true
+    }
+
+    // MARK: - Settings
+
+    @objc private func showSettings(_ sender: Any) {
+        // Toggle: close if visible, otherwise create/show.
+        if let panel = settingsPanel {
+            if panel.isVisible { panel.orderOut(nil) } else { panel.makeKeyAndOrderFront(nil) }
+            return
+        }
+
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 460),
+            styleMask:   [.titled, .closable, .utilityWindow],
+            backing:     .buffered,
+            defer:       false
+        )
+        panel.title           = "Settings"
+        panel.isFloatingPanel = true
+        panel.hidesOnDeactivate = false
+
+        let view = SettingsPanel(settings: AppSettings.shared,
+                                 onClose: { [weak self] in self?.settingsPanel?.orderOut(nil) })
+        panel.contentView = NSHostingView(rootView: view)
+        panel.center()
+
+        settingsPanel = panel
+        panel.makeKeyAndOrderFront(nil)
+        print("[DEBUG] AppDelegate: settings panel opened")
     }
 
     // MARK: - Lights & Background Inspector (Phase 7)
@@ -1961,7 +2015,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let popup = NSPopUpButton(frame: .zero, pullsDown: false)
         popup.addItem(withTitle: ExportCodec.proRes4444.displayName)
         popup.addItem(withTitle: ExportCodec.proRes422HQ.displayName)
-        popup.selectItem(at: 1)   // default: ProRes 422 HQ
+        // Default to the codec saved in settings (index 0 = 4444, 1 = 422 HQ).
+        popup.selectItem(at: AppSettings.shared.exportCodecID == "proRes422HQ" ? 1 : 0)
         popup.sizeToFit()
 
         let stack = NSStackView(views: [label, popup])

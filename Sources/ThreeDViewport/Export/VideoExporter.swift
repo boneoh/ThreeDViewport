@@ -44,14 +44,26 @@ enum ExportCodec {
 
     /// True only for 4444 — the luma-alpha CPU pass is skipped for 422.
     var needsLumaAlpha: Bool { self == .proRes4444 }
+
+    /// Stable string identifier for settings persistence.
+    var id: String {
+        switch self {
+        case .proRes4444:  return "proRes4444"
+        case .proRes422HQ: return "proRes422HQ"
+        }
+    }
+
+    static func from(id: String) -> ExportCodec {
+        id == "proRes422HQ" ? .proRes422HQ : .proRes4444
+    }
 }
 
 final class VideoExporter {
 
-    // MARK: - Export resolution (must match viewport)
+    // MARK: - Export resolution (from AppSettings; camera aspect is matched at export)
 
-    let width:  Int = 1920
-    let height: Int = 1080
+    let width:  Int = AppSettings.shared.exportWidth
+    let height: Int = AppSettings.shared.exportHeight
 
     // MARK: - Private dependencies
 
