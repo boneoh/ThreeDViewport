@@ -10,6 +10,9 @@ struct TimelinePanel: View {
 
     var onAddKeyframe:       () -> Void
     var onExport:            () -> Void
+    /// Requests a duration change.  The host (AppDelegate) decides whether to
+    /// rescale existing keyframes (via a prompt) and then applies the new value.
+    var onSetDuration:       (Double) -> Void
 
     @State private var showDurationPopover: Bool   = false
     @State private var durationInput:       String = ""
@@ -179,20 +182,18 @@ struct TimelinePanel: View {
         }
         .padding(14)
         .frame(width: 320)
+        // Paint an opaque backing so the (translucent) popover material doesn't
+        // let a bright viewport object behind it wash out the controls.
+        .background(Color(NSColor.windowBackgroundColor))
     }
 
     private func applyDuration() {
         // Accept plain seconds ("30") or decimal ("12.5").
         // Clamp to a sensible range: 1 s – 3600 s (1 hour).
+        // The host applies the value (and may prompt to rescale keyframes).
         if let secs = Double(durationInput.trimmingCharacters(in: .whitespaces)) {
             let clamped = max(1.0, min(3600.0, secs))
-            timeline.duration = clamped
-            // If the playhead is past the new end, pull it back.
-            if timeline.currentTime > clamped {
-                timeline.seek(to: clamped)
-            }
-            print("[DEBUG] TimelinePanel: duration set to "
-                + String(format: "%.1f", clamped) + "s")
+            onSetDuration(clamped)
         }
         showDurationPopover = false
     }

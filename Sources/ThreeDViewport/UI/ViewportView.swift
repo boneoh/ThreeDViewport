@@ -489,21 +489,32 @@ final class ViewportView: MTKView {
 
     /// Sets the active control mode from outside the viewport (e.g. AppDelegate keyframe edit wiring).
     /// Updates the HUD overlay and notifies the timeline editor to highlight the matching lane.
+    /// The TrackRef matching the current control mode + selection.  Single source
+    /// of truth for "which timeline lane is active", reused by setControlMode and
+    /// emitCurrentControlMode.
+    var currentTrackRef: TrackRef {
+        switch controlMode {
+        case .camera: return .camera
+        case .object: return .object(sceneManager.selectedIndex)
+        case .light:  return .light(lightManager.selectedIndex)
+        case .model:
+            // The group header lane when the selection belongs to a group.
+            if let gid = sceneManager.selectedGroupID { return .group(gid) }
+            return .object(sceneManager.selectedIndex)
+        }
+    }
+
     func setControlMode(_ mode: ControlMode) {
         controlMode = mode
         syncOverlayState()
-        switch mode {
-        case .camera:        onControlModeChanged?(.camera)
-        case .object:        onControlModeChanged?(.object(sceneManager.selectedIndex))
-        case .light:         onControlModeChanged?(.light(lightManager.selectedIndex))
-        case .model:
-            // Broadcast the group lane so the timeline highlights the right header row.
-            if let gid = sceneManager.selectedGroupID {
-                onControlModeChanged?(.group(gid))
-            } else {
-                onControlModeChanged?(.object(sceneManager.selectedIndex))
-            }
-        }
+        onControlModeChanged?(currentTrackRef)
+    }
+
+    /// Re-broadcasts the current selection via onControlModeChanged.  Called when
+    /// the Timeline Editor opens so it highlights the active lane immediately,
+    /// instead of waiting for the next selection change.
+    func emitCurrentControlMode() {
+        onControlModeChanged?(currentTrackRef)
     }
 
     // MARK: - Overlay sync
@@ -851,6 +862,57 @@ final class ViewportView: MTKView {
         let finalCenter = worldCenter * scale
         print("[DEBUG] ViewportView: autoNormalize scale=\(scale) — worldRadius \(worldRadius) → \(targetRadius)")
         return (finalCenter, targetRadius)
+    }
+
+    // MARK: - Timeline duration
+
+    /// True if any track (object / camera / light / group) holds at least one keyframe.
+    /// Used to decide whether changing the duration needs the rescale prompt.
+    var hasAnyKeyframes: Bool {
+        if let kf = camera.keyframeTrack?.keyframes, !kf.isEmpty { return true }
+        if sceneManager.objects.contains(where: { !($0.keyframeTrack?.keyframes.isEmpty ?? true) }) { return true }
+        if lightManager.keyframeTracks.contains(where: { !($0?.keyframes.isEmpty ?? true) }) { return true }
+        if sceneManager.groupKeyframeTracks.values.contains(where: { !$0.keyframes.isEmpty }) { return true }
+        return false
+    }
+
+    /// Sets the timeline duration.  When `rescaleKeyframes` is true, every keyframe
+    /// across all tracks is repositioned proportionally (time × new/old), snapped to
+    /// the frame grid and clamped to the new range, so an animation built at one
+    /// length fits the new length.  Project load / new-project paths call
+    /// `timeline.duration` directly and never rescale.
+    func setTimelineDuration(_ newDuration: Double, rescaleKeyframes: Bool) {
+        let old = timeline.duration
+        if rescaleKeyframes, old > 0.0001, abs(newDuration - old) > 1e-9 {
+            rescaleAllKeyframeTimes(by: newDuration / old, newDuration: newDuration)
+        }
+        timeline.duration = newDuration
+        if timeline.currentTime > newDuration { timeline.seek(to: newDuration) }
+        // Force re-evaluation so the viewport reflects the moved keyframes immediately.
+        renderer?.invalidateAnimationCache()
+    }
+
+    /// Scales every keyframe's time by `factor`, snapped to the frame grid and
+    /// clamped to `[0, newDuration]`, then re-sorts each track.
+    private func rescaleAllKeyframeTimes(by factor: Double, newDuration: Double) {
+        let fr = timeline.frameRate
+        func remap(_ t: Double) -> Double {
+            min(max(0, (t * factor * fr).rounded() / fr), newDuration)
+        }
+        func rescale(_ track: KeyframeTrack) {
+            for i in track.keyframes.indices { track.keyframes[i].time = remap(track.keyframes[i].time) }
+            track.keyframes.sort { $0.time < $1.time }
+        }
+        for obj in sceneManager.objects { if let tr = obj.keyframeTrack { rescale(tr) } }
+        for tr in sceneManager.groupKeyframeTracks.values { rescale(tr) }
+        if let tr = camera.keyframeTrack {
+            for i in tr.keyframes.indices { tr.keyframes[i].time = remap(tr.keyframes[i].time) }
+            tr.keyframes.sort { $0.time < $1.time }
+        }
+        for case let tr? in lightManager.keyframeTracks {
+            for i in tr.keyframes.indices { tr.keyframes[i].time = remap(tr.keyframes[i].time) }
+            tr.keyframes.sort { $0.time < $1.time }
+        }
     }
 
     // MARK: - Add Object Keyframe

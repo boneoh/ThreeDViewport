@@ -176,6 +176,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             },
             onExport: { [weak self] in
                 self?.showExportPanel()
+            },
+            onSetDuration: { [weak self] newDuration in
+                self?.changeTimelineDuration(to: newDuration)
             }
         )
 
@@ -1615,6 +1618,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         print("[DEBUG] AppDelegate: model inspector panel opened")
     }
 
+    // MARK: - Timeline Duration
+
+    /// Applies a new timeline duration requested from the TimelinePanel.
+    /// If keyframes exist, prompts whether to rescale them to fit; otherwise
+    /// applies the change silently.
+    private func changeTimelineDuration(to newDuration: Double) {
+        guard let viewport = viewportView else { return }
+        let old = viewport.timeline.duration
+        guard abs(newDuration - old) > 1e-9 else { return }   // no actual change
+
+        // No keyframes anywhere → nothing to rescale; just apply.
+        guard viewport.hasAnyKeyframes else {
+            viewport.setTimelineDuration(newDuration, rescaleKeyframes: false)
+            markDirty()
+            timelineEditorWC?.editorView.needsDisplay = true
+            return
+        }
+
+        // Defer the modal so the SwiftUI duration popover can dismiss first.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let viewport = self.viewportView else { return }
+            let alert = NSAlert()
+            alert.messageText = String(format: "Change timeline duration to %.1f s?", newDuration)
+            alert.informativeText =
+                "Rescale Keyframes — existing keyframes are repositioned proportionally "
+                + "(expanded or contracted) to fit the new duration.\n\n"
+                + "Keep Times — the duration changes but keyframes stay at their current times. "
+                + "Shortening the timeline may leave keyframes beyond the new end, where they "
+                + "can't be reached or edited.\n\n"
+                + "Cancel — make no change. (Tip: use File ▸ Save Project As… first if you want "
+                + "a backup before a large change.)"
+            alert.addButton(withTitle: "Rescale Keyframes")   // first = default (Return)
+            alert.addButton(withTitle: "Keep Times")
+            alert.addButton(withTitle: "Cancel")              // Esc
+
+            switch alert.runModal() {
+            case .alertFirstButtonReturn:
+                viewport.setTimelineDuration(newDuration, rescaleKeyframes: true)
+                self.markDirty()
+                self.timelineEditorWC?.editorView.needsDisplay = true
+            case .alertSecondButtonReturn:
+                viewport.setTimelineDuration(newDuration, rescaleKeyframes: false)
+                self.markDirty()
+                self.timelineEditorWC?.editorView.needsDisplay = true
+            default:
+                break   // Cancel — leave duration unchanged
+            }
+        }
+    }
+
     // MARK: - Timeline Editor
 
     @objc private func showTimelineEditor(_ sender: Any) {
@@ -1625,6 +1678,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             } else {
                 wc.showWindow(nil)
                 positionTimelineEditor(wc)
+                // Highlight the currently-selected lane right away on re-open.
+                viewportView?.emitCurrentControlMode()
             }
             return
         }
@@ -1944,6 +1999,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         timelineEditorWC = wc
         wc.showWindow(nil)
         positionTimelineEditor(wc)
+        // Highlight the currently-selected lane immediately, rather than waiting
+        // for the next selection change.
+        viewport.emitCurrentControlMode()
         print("[DEBUG] AppDelegate: timeline editor panel opened")
     }
 

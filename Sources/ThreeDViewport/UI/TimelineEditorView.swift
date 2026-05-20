@@ -288,57 +288,81 @@ final class TimelineEditorView: NSView {
 
     private typealias TrackList = [TrackRow]
 
-    /// Ordered track list: Camera first, then scene objects (grouped or flat), then lights.
-    /// Multi-part models appear as a single collapsible header row; clicking the row
-    /// or the disclosure triangle expands it to show per-part rows sorted A→Z.
+    /// Track list sorted alphabetically (natural order) by display name across
+    /// every row type — Camera, standalone objects, multi-part model groups, and
+    /// lights are all folded into one A→Z list.  Multi-part models appear as a
+    /// single collapsible header row (sorted by group name); expanding it shows
+    /// per-part rows sorted A→Z directly beneath the header.
     private func buildTracks() -> TrackList {
-        var result: TrackList = [TrackRow(name: "Camera", ref: .camera)]
-        let objects = sceneManager?.objects ?? []
+        let objects    = sceneManager?.objects ?? []
+        let lightCount = lightManager?.lights.count ?? 0
 
-        // Build an index of (groupID → sorted [(globalIndex, object)]) so expanded
-        // groups emit their parts in alphabetical order rather than load order.
+        // Index group parts by groupID (preserving each part's global index).
         var groupOrder: [Int: [(idx: Int, obj: SceneObject)]] = [:]
-        var ungrouped:  [(idx: Int, obj: SceneObject)]        = []
-
         for (i, obj) in objects.enumerated() {
             if let gid = obj.groupID {
                 groupOrder[gid, default: []].append((i, obj))
-            } else {
-                ungrouped.append((i, obj))
             }
         }
 
-        // Emit groups in the order their first part appears in the objects array.
+        // One top-level entry per row, tagged with the name used to sort it and a
+        // monotonic `order` used only as a stable tiebreaker for equal names.
+        enum RowEntry {
+            case camera
+            case standalone(idx: Int, obj: SceneObject)
+            case group(gid: Int)
+            case light(idx: Int)
+        }
+        var entries: [(sortName: String, order: Int, entry: RowEntry)] = []
+        var order = 0
+        func add(_ name: String, _ entry: RowEntry) {
+            entries.append((name, order, entry)); order += 1
+        }
+
+        add("Camera", .camera)
         var seenGroups = Set<Int>()
         for (i, obj) in objects.enumerated() {
             if let gid = obj.groupID {
-                if !seenGroups.contains(gid) {
-                    seenGroups.insert(gid)
-                    let gName = sceneManager?.groupName(for: gid) ?? "Group"
-                    let parts = groupOrder[gid] ?? []
-                    let label = "\(gName)  (\(parts.count) parts)"
-                    result.append(TrackRow(name: label, ref: .group(gid),
-                                           isGroupHeader: true, groupID: gid))
-
-                    if expandedGroups.contains(gid) {
-                        // Emit parts sorted alphabetically by name.
-                        let sorted = parts.sorted { $0.obj.name.localizedCaseInsensitiveCompare($1.obj.name) == .orderedAscending }
-                        for pair in sorted {
-                            result.append(TrackRow(name: pair.obj.name,
-                                                   ref: .object(pair.idx),
-                                                   isIndented: true))
-                        }
-                    }
-                }
+                guard seenGroups.insert(gid).inserted else { continue }
+                add(sceneManager?.groupName(for: gid) ?? "Group", .group(gid: gid))
             } else {
-                // Standalone (no group) — already collected in ungrouped, emit in place.
-                result.append(TrackRow(name: obj.name, ref: .object(i)))
+                add(obj.name, .standalone(idx: i, obj: obj))
             }
         }
-        _ = ungrouped   // already emitted inline above
+        for i in 0..<lightCount {
+            add("Light \(i + 1)", .light(idx: i))
+        }
 
-        for i in 0..<(lightManager?.lights.count ?? 0) {
-            result.append(TrackRow(name: "Light \(i + 1)", ref: .light(i)))
+        entries.sort {
+            let c = $0.sortName.localizedStandardCompare($1.sortName)
+            return c == .orderedSame ? ($0.order < $1.order) : (c == .orderedAscending)
+        }
+
+        var result: TrackList = []
+        for (_, _, entry) in entries {
+            switch entry {
+            case .camera:
+                result.append(TrackRow(name: "Camera", ref: .camera))
+            case .standalone(let idx, let obj):
+                result.append(TrackRow(name: obj.name, ref: .object(idx)))
+            case .light(let idx):
+                result.append(TrackRow(name: "Light \(idx + 1)", ref: .light(idx)))
+            case .group(let gid):
+                let gName = sceneManager?.groupName(for: gid) ?? "Group"
+                let parts = groupOrder[gid] ?? []
+                let label = "\(gName)  (\(parts.count) parts)"
+                result.append(TrackRow(name: label, ref: .group(gid),
+                                       isGroupHeader: true, groupID: gid))
+                if expandedGroups.contains(gid) {
+                    // Parts sorted alphabetically by name, beneath their header.
+                    let sorted = parts.sorted { $0.obj.name.localizedStandardCompare($1.obj.name) == .orderedAscending }
+                    for pair in sorted {
+                        result.append(TrackRow(name: pair.obj.name,
+                                               ref: .object(pair.idx),
+                                               isIndented: true))
+                    }
+                }
+            }
         }
         return result
     }
@@ -425,22 +449,25 @@ final class TimelineEditorView: NSView {
 
         // ── Lane rows ─────────────────────────────────────────────────────────
         for (i, row) in tracks.enumerated() {
-            let isHeader = row.isGroupHeader
-            // Group-header rows span the full width (including label column) so they
-            // stand out visually.  Normal rows only fill the track area.
-            let rowRect  = NSRect(x: isHeader ? 0 : labelWidth,
-                                  y: laneTop(i),
-                                  width: isHeader ? w : w - labelWidth,
-                                  height: laneHeight)
+            let isHeader   = row.isGroupHeader
+            let isSelected = (i == selectedTrackIndex)
+            // Group-header rows always span full width so they stand out as
+            // structure.  Selected rows also span full width so the highlight
+            // covers the name/label column, not just the empty lane area.
+            let fullWidth  = isHeader || isSelected
+            let rowRect    = NSRect(x: fullWidth ? 0 : labelWidth,
+                                    y: laneTop(i),
+                                    width: fullWidth ? w : w - labelWidth,
+                                    height: laneHeight)
 
-            if i == selectedTrackIndex {
+            if isSelected {
                 let bg: NSColor
-                if isHeader {
-                    bg = NSColor(red: 0.22, green: 0.17, blue: 0.06, alpha: 1)   // warm amber header
-                } else if isEditingKeyframe {
-                    bg = NSColor(red: 0.30, green: 0.22, blue: 0.08, alpha: 1)   // editing amber
+                if isEditingKeyframe {
+                    bg = NSColor(red: 0.30, green: 0.22, blue: 0.08, alpha: 1)   // editing amber (any lane)
+                } else if isHeader {
+                    bg = NSColor(red: 0.22, green: 0.42, blue: 0.68, alpha: 1)   // selected group header — lighter blue
                 } else {
-                    bg = NSColor(white: 0.27, alpha: 1)
+                    bg = NSColor(red: 0.14, green: 0.30, blue: 0.52, alpha: 1)   // selected lane — bold blue
                 }
                 bg.setFill()
             } else if isHeader {
@@ -1015,8 +1042,9 @@ final class TimelineEditorView: NSView {
             + String(format: "%.3f", editKFTime))
         onCommitEdit?()
         isEditingKeyframe  = false
-        selectedTrackIndex = nil
         selectedKFIndex    = nil
+        // Keep selectedTrackIndex so the lane stays highlighted to match the
+        // current selection after the edit ends.
         needsDisplay       = true
     }
 
@@ -1043,7 +1071,17 @@ final class TimelineEditorView: NSView {
     /// without this guard, the round-trip clears the diamond and breaks drag.
     func selectTrack(_ ref: TrackRef) {
         let tracks = buildTracks()
-        guard let idx = tracks.firstIndex(where: { $0.ref == ref }) else { return }
+        // If an object's own row isn't visible because it lives inside a collapsed
+        // group, highlight that group's header row instead — so cycling (O) onto a
+        // grouped object still shows the blue highlight rather than leaving the
+        // header grey.
+        var targetRef = ref
+        if case .object(let i) = ref,
+           !tracks.contains(where: { $0.ref == ref }),
+           let gid = sceneManager?.objects[safe: i]?.groupID {
+            targetRef = .group(gid)
+        }
+        guard let idx = tracks.firstIndex(where: { $0.ref == targetRef }) else { return }
         guard idx != selectedTrackIndex else { return }   // same lane — keep diamond selection
         selectedTrackIndex = idx
         selectedKFIndex    = nil
@@ -1057,8 +1095,9 @@ final class TimelineEditorView: NSView {
                 + String(format: "%.3f", editKFTime))
             onCommitEdit?()
             isEditingKeyframe  = false
-            selectedTrackIndex = nil
             selectedKFIndex    = nil
+            // Keep selectedTrackIndex so the lane stays highlighted to match the
+            // current selection after the edit ends.
             needsDisplay       = true
         } else {
             // ── Enter edit mode ────────────────────────────────────────────────
@@ -1085,8 +1124,9 @@ final class TimelineEditorView: NSView {
                 + String(format: "%.3f", editKFTime))
             onCancelEdit?()
             isEditingKeyframe  = false
-            selectedTrackIndex = nil
             selectedKFIndex    = nil
+            // Keep selectedTrackIndex so the lane stays highlighted to match the
+            // current selection after the edit ends.
             needsDisplay       = true
         } else {
             // If not editing, Esc deselects everything
