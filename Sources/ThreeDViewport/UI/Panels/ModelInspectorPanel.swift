@@ -94,6 +94,14 @@ struct ModelInspectorPanel: View {
             }
             .toggleStyle(.switch)
 
+            Toggle(isOn: $state.occludeWhenHidden) {
+                Text("Holdout (occlude while hidden)")
+                    .font(.caption)
+            }
+            .toggleStyle(.switch)
+            .help("When hidden, this object still blocks objects behind it — cutting "
+                + "a hole in the matte without drawing itself. Only takes effect while hidden.")
+
             HStack(spacing: 6) {
                 Text("Normals")
                     .frame(width: 64, alignment: .leading)

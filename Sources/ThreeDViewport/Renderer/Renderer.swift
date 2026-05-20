@@ -15,6 +15,10 @@ final class Renderer: NSObject, MTKViewDelegate {
     // Scene geometry pipeline
     var pipelineState: MTLRenderPipelineState?
     var depthStencilState: MTLDepthStencilState?
+    // Holdout pipeline — identical to the scene pipeline but with color writes
+    // masked off, so holdout objects write depth (occluding others) without
+    // drawing themselves.  Uses the same depthStencilState.
+    var holdoutPipelineState: MTLRenderPipelineState?
 
     // Background gradient pipeline
     var backgroundPipelineState: MTLRenderPipelineState?
@@ -173,6 +177,16 @@ final class Renderer: NSObject, MTKViewDelegate {
         } catch {
             print("[DEBUG] Renderer: scene pipeline failed — " + error.localizedDescription)
         }
+
+        // Holdout variant: same descriptor, color writes masked off (depth only).
+        pipelineDesc.colorAttachments[0].writeMask = []
+        do {
+            holdoutPipelineState = try device.makeRenderPipelineState(descriptor: pipelineDesc)
+            print("[DEBUG] Renderer: holdout pipeline created")
+        } catch {
+            print("[DEBUG] Renderer: holdout pipeline failed — " + error.localizedDescription)
+        }
+        pipelineDesc.colorAttachments[0].writeMask = .all   // restore for any later reuse
 
         let depthDesc = MTLDepthStencilDescriptor()
         depthDesc.depthCompareFunction = .less
@@ -498,6 +512,28 @@ final class Renderer: NSObject, MTKViewDelegate {
         // feedback path so fp.process ticks every frame and the drawable gets
         // content when feedback is rendering to sceneTexture.
         let visibleObjects = sceneManager.objects.filter { $0.isVisible }
+        // Holdout objects: hidden but flagged to occlude.  Drawn depth-only BEFORE
+        // visible geometry so visible fragments behind them are cut to background.
+        let holdoutObjects = sceneManager.objects.filter { !$0.isVisible && $0.occludeWhenHidden }
+
+        if !holdoutObjects.isEmpty, let ds = depthStencilState, let holdout = holdoutPipelineState {
+            SceneGeometryEncoder.encode(
+                into:            encoder,
+                objects:         holdoutObjects,
+                groupTransforms: sceneManager.groupTransforms,
+                lightUniforms:   lightManager.buildLightUniforms(),
+                context: SceneGeometryEncoder.Context(
+                    viewProjection:    viewCamera.viewProjectionMatrix,
+                    eyePosition:       viewCamera.eyePosition,
+                    pipelineState:     holdout,
+                    depthStencilState: ds,
+                    isColorMode:       isColorMode,
+                    isWireframe:       false,   // holdout is depth-only; never wireframe
+                    exposure:          colorGradeSettings?.exposure ?? 1.0,
+                    ibl:               ibl,
+                    dummyUV:           dummyUVBuffer,
+                    dummyTangent:      dummyTangentBuffer))
+        }
 
         if !visibleObjects.isEmpty, let ds = depthStencilState {
             SceneGeometryEncoder.encode(

@@ -285,6 +285,8 @@ struct ObjectData: Codable {
     // metallicFactor / roughnessFactor: -1 = not overridden (use file value).
     // baseColorFactor: empty = not overridden.
     var isVisible:       Bool    = true
+    // v17: holdout — when hidden, still occlude objects behind it (depth-only).
+    var occludeWhenHidden: Bool  = false
     var normalMode:      Int     = 0
     var metallicFactor:  Float   = -1
     var roughnessFactor: Float   = -1
@@ -298,6 +300,7 @@ struct ObjectData: Codable {
         baseTransformMatrix  = (try? c.decode([Float].self,       forKey: .baseTransformMatrix)) ?? []
         easingMode           = (try? c.decode(Int.self,           forKey: .easingMode))          ?? 0
         isVisible            = (try? c.decode(Bool.self,          forKey: .isVisible))           ?? true
+        occludeWhenHidden    = (try? c.decode(Bool.self,          forKey: .occludeWhenHidden))   ?? false
         normalMode           = (try? c.decode(Int.self,           forKey: .normalMode))          ?? 0
         metallicFactor       = (try? c.decode(Float.self,         forKey: .metallicFactor))      ?? -1
         roughnessFactor      = (try? c.decode(Float.self,         forKey: .roughnessFactor))     ?? -1
@@ -306,7 +309,7 @@ struct ObjectData: Codable {
 
     init(name: String, keyframes: [KeyframeData],
          baseTransformMatrix: [Float] = [], easingMode: Int = 0,
-         isVisible: Bool = true, normalMode: Int = 0,
+         isVisible: Bool = true, occludeWhenHidden: Bool = false, normalMode: Int = 0,
          metallicFactor: Float = -1, roughnessFactor: Float = -1,
          baseColorFactor: [Float] = []) {
         self.name                = name
@@ -314,6 +317,7 @@ struct ObjectData: Codable {
         self.baseTransformMatrix = baseTransformMatrix
         self.easingMode          = easingMode
         self.isVisible           = isVisible
+        self.occludeWhenHidden   = occludeWhenHidden
         self.normalMode          = normalMode
         self.metallicFactor      = metallicFactor
         self.roughnessFactor     = roughnessFactor

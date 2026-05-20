@@ -70,6 +70,11 @@ final class SceneObject {
 
     var isVisible: Bool
 
+    // Holdout: when the object is hidden (isVisible == false) but this is true, it
+    // is still rendered depth-only — occluding objects behind it without drawing
+    // itself.  Used to "bite holes" out of mattes for later compositing.
+    var occludeWhenHidden: Bool = false
+
     // Normal shading mode — set by the Model Inspector.
     // cpuPositions, cpuIndices, and originalNormals are kept so the GPU normal
     // buffer can be regenerated on demand without re-reading the .glb file.

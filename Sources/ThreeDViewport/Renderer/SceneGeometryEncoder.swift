@@ -24,16 +24,17 @@ enum SceneGeometryEncoder {
         let dummyTangent:      MTLBuffer?
     }
 
-    // Encodes every visible object into `encoder`.  Binds light + IBL state once,
-    // then per-object uniforms/material/textures and the draw call.
+    // Encodes the given objects into `encoder` (the caller decides the set — e.g.
+    // visible objects, or the holdout set for a depth-only pass).  Binds light +
+    // IBL state once, then per-object uniforms/material/textures and the draw call.
     static func encode(into encoder: MTLRenderCommandEncoder,
                        objects: [SceneObject],
                        groupTransforms: [Int: matrix_float4x4],
                        lightUniforms: LightUniforms,
                        context: Context) {
 
-        let visible = objects.filter { $0.isVisible }
-        guard !visible.isEmpty else { return }
+        let toDraw = objects
+        guard !toDraw.isEmpty else { return }
 
         encoder.setRenderPipelineState(context.pipelineState)
         encoder.setDepthStencilState(context.depthStencilState)
@@ -61,7 +62,7 @@ enum SceneGeometryEncoder {
         }
 
         // ── Per-object ─────────────────────────────────────────────────────────
-        for object in visible {
+        for object in toDraw {
             guard let posBuffer = object.positionBuffer,
                   let idxBuffer = object.indexBuffer,
                   object.indexCount > 0 else { continue }

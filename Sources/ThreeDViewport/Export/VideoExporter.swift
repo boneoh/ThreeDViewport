@@ -75,6 +75,9 @@ final class VideoExporter {
     private let backgroundConfig:  BackgroundConfig
     private let pipelineState:     MTLRenderPipelineState
     private let depthStencilState: MTLDepthStencilState
+    // Holdout (depth-only) pipeline — shared from the Renderer so exports occlude
+    // identically to the preview.  nil disables the holdout pass.
+    private let holdoutPipelineState: MTLRenderPipelineState?
     private let animDuration:      Double
     private let frameRate:         Double
 
@@ -130,7 +133,8 @@ final class VideoExporter {
           backgroundConfig:  BackgroundConfig,
           timeline:          Timeline,
           pipelineState:     MTLRenderPipelineState,
-          depthStencilState: MTLDepthStencilState) {
+          depthStencilState: MTLDepthStencilState,
+          holdoutPipelineState: MTLRenderPipelineState? = nil) {
 
         self.device            = device
         self.commandQueue      = commandQueue
@@ -140,6 +144,7 @@ final class VideoExporter {
         self.backgroundConfig  = backgroundConfig
         self.pipelineState     = pipelineState
         self.depthStencilState = depthStencilState
+        self.holdoutPipelineState = holdoutPipelineState
         self.animDuration      = timeline.duration
         self.frameRate         = timeline.frameRate
 
@@ -599,9 +604,32 @@ final class VideoExporter {
             // ── Scene geometry ────────────────────────────────────────────────
             // Shared with the live Renderer via SceneGeometryEncoder so material,
             // flat-normal, and IBL handling stay identical between preview/export.
+            // Holdout objects (hidden but occluding) are drawn depth-only first so
+            // visible geometry behind them is cut to background — matches preview.
+            let holdoutObjects = sceneManager.objects.filter { !$0.isVisible && $0.occludeWhenHidden }
+            if !holdoutObjects.isEmpty, let holdout = holdoutPipelineState {
+                SceneGeometryEncoder.encode(
+                    into:            encoder,
+                    objects:         holdoutObjects,
+                    groupTransforms: sceneManager.groupTransforms,
+                    lightUniforms:   lightManager.buildLightUniforms(),
+                    context: SceneGeometryEncoder.Context(
+                        viewProjection:    camera.viewProjectionMatrix,
+                        eyePosition:       camera.eyePosition,
+                        pipelineState:     holdout,
+                        depthStencilState: depthStencilState,
+                        isColorMode:       isColorMode,
+                        isWireframe:       false,
+                        exposure:          colorGradeSettings?.exposure ?? 1.0,
+                        ibl:               ibl,
+                        dummyUV:           dummyUVBuffer,
+                        dummyTangent:      dummyTangentBuffer))
+            }
+
+            let visibleObjects = sceneManager.objects.filter { $0.isVisible }
             SceneGeometryEncoder.encode(
                 into:            encoder,
-                objects:         sceneManager.objects,
+                objects:         visibleObjects,
                 groupTransforms: sceneManager.groupTransforms,
                 lightUniforms:   lightManager.buildLightUniforms(),
                 context: SceneGeometryEncoder.Context(
