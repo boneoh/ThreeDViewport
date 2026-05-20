@@ -14,6 +14,10 @@ final class RenderSettings: ObservableObject {
     // corner of the viewport (and included in video exports).
     @Published var showAxesGizmo: Bool = false
 
+    // Phase C: image-based-lighting intensity, 0 = off, 1 = full.
+    // Written through to Renderer.ibl?.intensity by ViewportView's Combine sink.
+    @Published var iblIntensity: Float = 1.0
+
     init() {
         print("[DEBUG] RenderSettings: initialized — color mode")
     }

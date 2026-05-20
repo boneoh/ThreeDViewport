@@ -81,6 +81,10 @@ final class VideoExporter {
     // Color grade settings — nil or identity = no grade pass during export
     var colorGradeSettings: ColorGradeSettings?
 
+    // Phase C: image-based lighting — shared with the live Renderer so exports
+    // match the viewport.  Set by ViewportView after construction.
+    var ibl: IBL?
+
     // Fallback buffers for objects without UVs / tangents
     private var dummyUVBuffer:      MTLBuffer?
     private var dummyTangentBuffer: MTLBuffer?
@@ -581,78 +585,23 @@ final class VideoExporter {
             }
 
             // ── Scene geometry ────────────────────────────────────────────────
-            encoder.setRenderPipelineState(pipelineState)
-            encoder.setDepthStencilState(depthStencilState)
-            encoder.setTriangleFillMode(isWireframe ? .lines : .fill)
-
-            // LightUniforms — constant across all objects
-            var lightUniforms = lightManager.buildLightUniforms()
-            encoder.setFragmentBytes(&lightUniforms,
-                                     length: MemoryLayout<LightUniforms>.stride,
-                                     index: 3)
-
-            let vp  = camera.viewProjectionMatrix
-            let eye = camera.eyePosition
-
-            for object in sceneManager.objects {
-                guard object.isVisible,
-                      let posBuffer = object.positionBuffer,
-                      let idxBuffer = object.indexBuffer,
-                      object.indexCount > 0 else { continue }
-
-                // Apply the group-level transform layer on top of the per-part
-                // transform, mirroring the live Renderer's geometry loop.
-                let modelMatrix: matrix_float4x4
-                if let gid = object.groupID,
-                   let gt  = sceneManager.groupTransforms[gid] {
-                    modelMatrix = gt * object.transform
-                } else {
-                    modelMatrix = object.transform
-                }
-
-                let normalMatrix = simd_transpose(simd_inverse(modelMatrix))
-                var uniforms = Uniforms(
-                    modelMatrix:          modelMatrix,
-                    viewProjectionMatrix: vp,
-                    normalMatrix:         normalMatrix,
-                    cameraPosition:       SIMD4<Float>(eye.x, eye.y, eye.z, 0)
-                )
-
-                encoder.setVertexBuffer(posBuffer, offset: 0, index: 0)
-                if let n = object.normalBuffer { encoder.setVertexBuffer(n, offset: 0, index: 1) }
-                encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 2)
-
-                let uvBuf  = object.uvBuffer      ?? dummyUVBuffer
-                let tanBuf = object.tangentBuffer ?? dummyTangentBuffer
-                encoder.setVertexBuffer(uvBuf,  offset: 0, index: 4)
-                encoder.setVertexBuffer(tanBuf, offset: 0, index: 5)
-
-                encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 2)
-
-                let mat = object.material
-                var mu  = MaterialUniforms()
-                mu.baseColorFactor     = mat.baseColorFactor
-                mu.emissiveFactor      = SIMD4<Float>(mat.emissiveFactor.x,
-                                                      mat.emissiveFactor.y,
-                                                      mat.emissiveFactor.z, 0)
-                mu.metallicFactor      = mat.metallicFactor
-                mu.roughnessFactor     = mat.roughnessFactor
-                mu.hasBaseColorTex     = mat.baseColorTexture     != nil ? 1 : 0
-                mu.hasNormalTex        = mat.normalTexture        != nil ? 1 : 0
-                mu.hasMetallicRoughTex = mat.metallicRoughnessTexture != nil ? 1 : 0
-                mu.hasEmissiveTex      = mat.emissiveTexture      != nil ? 1 : 0
-                mu.colorMode           = isColorMode ? 1 : 0
-                encoder.setFragmentBytes(&mu, length: MemoryLayout<MaterialUniforms>.stride, index: 4)
-
-                if let t = mat.baseColorTexture          { encoder.setFragmentTexture(t, index: 0) }
-                if let t = mat.normalTexture             { encoder.setFragmentTexture(t, index: 1) }
-                if let t = mat.metallicRoughnessTexture  { encoder.setFragmentTexture(t, index: 2) }
-                if let t = mat.emissiveTexture           { encoder.setFragmentTexture(t, index: 3) }
-
-                encoder.drawIndexedPrimitives(
-                    type: .triangle, indexCount: object.indexCount,
-                    indexType: .uint32, indexBuffer: idxBuffer, indexBufferOffset: 0)
-            }
+            // Shared with the live Renderer via SceneGeometryEncoder so material,
+            // flat-normal, and IBL handling stay identical between preview/export.
+            SceneGeometryEncoder.encode(
+                into:            encoder,
+                objects:         sceneManager.objects,
+                groupTransforms: sceneManager.groupTransforms,
+                lightUniforms:   lightManager.buildLightUniforms(),
+                context: SceneGeometryEncoder.Context(
+                    viewProjection:    camera.viewProjectionMatrix,
+                    eyePosition:       camera.eyePosition,
+                    pipelineState:     pipelineState,
+                    depthStencilState: depthStencilState,
+                    isColorMode:       isColorMode,
+                    isWireframe:       isWireframe,
+                    ibl:               ibl,
+                    dummyUV:           dummyUVBuffer,
+                    dummyTangent:      dummyTangentBuffer))
             // ── Laser beam visuals + hit effects ──────────────────────────────
             let exportSize = SIMD2<Float>(Float(width), Float(height))
             drawLaserBeamsInEncoder(encoder,

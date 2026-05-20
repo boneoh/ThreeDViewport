@@ -67,6 +67,15 @@ struct LightsInspectorPanel: View {
                 }
             }
             .toggleStyle(.switch)
+
+            // Phase C: image-based-lighting intensity.
+            HStack {
+                Text("IBL")
+                Slider(value: $renderSettings.iblIntensity, in: 0.0...2.0)
+                Text(String(format: "%.2f", renderSettings.iblIntensity))
+                    .font(.system(.caption, design: .monospaced))
+                    .frame(width: 36, alignment: .trailing)
+            }
         }
     }
 

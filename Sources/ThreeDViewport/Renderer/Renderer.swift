@@ -102,8 +102,10 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// (natural end of playback) from "scrubbed while paused".
     private var lastWasPlaying:   Bool   = false
 
-    // One-shot material diagnostics — prints once per object on the first draw
-    private var materialDebugPrinted: Set<String> = []
+    // Phase C: image-based lighting resources (BRDF LUT, env cubemaps).
+    // nil until precompute finishes; the scene shader gates IBL sampling on
+    // texture presence so a nil here just disables the IBL contribution.
+    var ibl: IBL?
 
     // MARK: - Init
 
@@ -132,6 +134,16 @@ final class Renderer: NSObject, MTKViewDelegate {
         super.init()
         buildPipeline()
         buildDummyBuffers()
+        buildIBL()
+    }
+
+    private func buildIBL() {
+        guard let library = try? device.makeDefaultLibrary(bundle: Bundle.module) else {
+            print("[DEBUG] Renderer: buildIBL — makeDefaultLibrary failed")
+            return
+        }
+        ibl = IBL(device: device, library: library, commandQueue: commandQueue)
+        if ibl == nil { print("[DEBUG] Renderer: IBL precompute failed") }
     }
 
     // MARK: - Pipeline setup
@@ -487,73 +499,22 @@ final class Renderer: NSObject, MTKViewDelegate {
         // content when feedback is rendering to sceneTexture.
         let visibleObjects = sceneManager.objects.filter { $0.isVisible }
 
-        if !visibleObjects.isEmpty {
-            encoder.setRenderPipelineState(pipeline)
-            if let ds = depthStencilState { encoder.setDepthStencilState(ds) }
-
-            // LightUniforms — constant across all objects this frame
-            var lightUniforms = lightManager.buildLightUniforms()
-            encoder.setFragmentBytes(&lightUniforms,
-                                     length: MemoryLayout<LightUniforms>.stride,
-                                     index: 3)
-
-            let vp  = viewCamera.viewProjectionMatrix
-            let eye = viewCamera.eyePosition
-
-            for object in visibleObjects {
-                guard let posBuffer = object.positionBuffer,
-                      let idxBuffer = object.indexBuffer,
-                      object.indexCount > 0 else { continue }
-
-                // Phase 2: apply the group-level transform layer on top of the
-                // per-part transform so groups animated as a unit render correctly.
-                let modelMatrix: matrix_float4x4
-                if let gid = object.groupID,
-                   let gt  = sceneManager.groupTransforms[gid] {
-                    modelMatrix = gt * object.transform
-                } else {
-                    modelMatrix = object.transform
-                }
-
-                // Correct normal matrix: inverse-transpose of model matrix
-                let normalMatrix = simd_transpose(simd_inverse(modelMatrix))
-
-                var uniforms = Uniforms(
-                    modelMatrix:          modelMatrix,
-                    viewProjectionMatrix: vp,
-                    normalMatrix:         normalMatrix,
-                    cameraPosition:       SIMD4<Float>(eye.x, eye.y, eye.z, 0)
-                )
-
-                encoder.setVertexBuffer(posBuffer, offset: 0, index: 0)
-                if let n = object.normalBuffer   { encoder.setVertexBuffer(n, offset: 0, index: 1) }
-                encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 2)
-
-                // UV buffer — use dummy if not present (keeps buffer(4) always valid)
-                let uvBuf  = object.uvBuffer      ?? dummyUVBuffer
-                let tanBuf = object.tangentBuffer ?? dummyTangentBuffer
-                encoder.setVertexBuffer(uvBuf,  offset: 0, index: 4)
-                encoder.setVertexBuffer(tanBuf, offset: 0, index: 5)
-
-                // Fragment: Uniforms + LightUniforms already bound; add MaterialUniforms
-                encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 2)
-                var matUniforms = buildMaterialUniforms(for: object)
-                encoder.setFragmentBytes(&matUniforms,
-                                         length: MemoryLayout<MaterialUniforms>.stride,
-                                         index: 4)
-
-                // Bind textures (always bind all slots; shader checks flags before sampling)
-                bindTextures(encoder: encoder, material: object.material)
-
-                encoder.setTriangleFillMode(isWireframe ? .lines : .fill)
-                encoder.drawIndexedPrimitives(
-                    type:              .triangle,
-                    indexCount:        object.indexCount,
-                    indexType:         .uint32,
-                    indexBuffer:       idxBuffer,
-                    indexBufferOffset: 0
-                )
-            }
+        if !visibleObjects.isEmpty, let ds = depthStencilState {
+            SceneGeometryEncoder.encode(
+                into:            encoder,
+                objects:         visibleObjects,
+                groupTransforms: sceneManager.groupTransforms,
+                lightUniforms:   lightManager.buildLightUniforms(),
+                context: SceneGeometryEncoder.Context(
+                    viewProjection:    viewCamera.viewProjectionMatrix,
+                    eyePosition:       viewCamera.eyePosition,
+                    pipelineState:     pipeline,
+                    depthStencilState: ds,
+                    isColorMode:       isColorMode,
+                    isWireframe:       isWireframe,
+                    ibl:               ibl,
+                    dummyUV:           dummyUVBuffer,
+                    dummyTangent:      dummyTangentBuffer))
         }
 
         // ── Laser hit detection + particle update ─────────────────────────────
@@ -1012,52 +973,6 @@ final class Renderer: NSObject, MTKViewDelegate {
         encoder.setVertexBytes(&u, length: MemoryLayout<WidgetUniforms>.stride, index: 1)
 
         encoder.drawPrimitives(type: .line, vertexStart: 0, vertexCount: vertices.count)
-    }
-
-    // MARK: - Material helpers
-
-    private func buildMaterialUniforms(for object: SceneObject) -> MaterialUniforms {
-        let mat = object.material
-        var mu  = MaterialUniforms()
-        mu.baseColorFactor     = mat.baseColorFactor
-        mu.emissiveFactor      = SIMD4<Float>(mat.emissiveFactor.x,
-                                              mat.emissiveFactor.y,
-                                              mat.emissiveFactor.z, 0)
-        mu.metallicFactor      = mat.metallicFactor
-        mu.roughnessFactor     = mat.roughnessFactor
-        mu.hasBaseColorTex     = mat.baseColorTexture     != nil ? 1 : 0
-        mu.hasNormalTex        = mat.normalTexture        != nil ? 1 : 0
-        mu.hasMetallicRoughTex = mat.metallicRoughnessTexture != nil ? 1 : 0
-        mu.hasEmissiveTex      = mat.emissiveTexture      != nil ? 1 : 0
-        mu.colorMode           = isColorMode ? 1 : 0
-
-        // Flat shading: explicit user pick, or .auto on a file that shipped no normals.
-        let wantFlat = object.normalMode == .flat
-                    || (object.normalMode == .auto && !object.fileHadNormals)
-        mu.useFlatNormals = wantFlat ? 1 : 0
-
-        if !materialDebugPrinted.contains(object.name) {
-            materialDebugPrinted.insert(object.name)
-            print("[DEBUG] Renderer materialUniforms '\(object.name)'"
-                + " hasBaseColorTex=\(mu.hasBaseColorTex)"
-                + " hasNormalTex=\(mu.hasNormalTex)"
-                + " hasMetallicRoughTex=\(mu.hasMetallicRoughTex)"
-                + " hasEmissiveTex=\(mu.hasEmissiveTex)"
-                + " colorMode=\(mu.colorMode)"
-                + " useFlatNormals=\(mu.useFlatNormals)"
-                + " metallic=\(String(format: "%.3f", mu.metallicFactor))"
-                + " roughness=\(String(format: "%.3f", mu.roughnessFactor))"
-                + " texNonNil=\(mat.baseColorTexture != nil)")
-        }
-
-        return mu
-    }
-
-    private func bindTextures(encoder: MTLRenderCommandEncoder, material: PBRMaterial) {
-        if let t = material.baseColorTexture          { encoder.setFragmentTexture(t, index: 0) }
-        if let t = material.normalTexture             { encoder.setFragmentTexture(t, index: 1) }
-        if let t = material.metallicRoughnessTexture  { encoder.setFragmentTexture(t, index: 2) }
-        if let t = material.emissiveTexture           { encoder.setFragmentTexture(t, index: 3) }
     }
 
     // MARK: - Animation evaluation

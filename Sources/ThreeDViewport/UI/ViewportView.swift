@@ -51,6 +51,7 @@ final class ViewportView: MTKView {
     let renderSettings = RenderSettings()
     private var colorModeCancellable:   AnyCancellable?
     private var axesGizmoCancellable:   AnyCancellable?
+    private var iblIntensityCancellable: AnyCancellable?
     private var loopRevCancellable:     AnyCancellable?
 
     // Feedback delay-line system
@@ -195,6 +196,10 @@ final class ViewportView: MTKView {
         axesGizmoCancellable = renderSettings.$showAxesGizmo.sink { [weak self] value in
             self?.renderer?.showAxesGizmo = value
             print("[DEBUG] ViewportView: showAxesGizmo = \(value)")
+        }
+        iblIntensityCancellable = renderSettings.$iblIntensity.sink { [weak self] value in
+            self?.renderer?.ibl?.intensity = value
+            self?.needsDisplay = true
         }
 
         // Reset feedback queue whenever playback starts so old frames don't contaminate new runs
@@ -1199,6 +1204,7 @@ final class ViewportView: MTKView {
         exporter.showAxesGizmo      = renderSettings.showAxesGizmo
         exporter.feedbackSettings   = feedbackSettings
         exporter.colorGradeSettings = colorGradeSettings
+        exporter.ibl                = renderer?.ibl   // share IBL so exports match preview
         feedbackProcessor.reset()   // clear live queue; exporter has its own processor
         timeline.pause()
         isPaused = true

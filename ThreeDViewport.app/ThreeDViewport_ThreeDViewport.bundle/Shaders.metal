@@ -175,18 +175,25 @@ static bool sampleLight(ShaderLight light,
 // ── Scene fragment shader ─────────────────────────────────────────────────────
 
 fragment float4 fragment_main(
-    VertexOut               in           [[stage_in]],
-    constant Uniforms      &uniforms     [[buffer(2)]],
-    constant LightUniforms &lightData    [[buffer(3)]],
-    constant MaterialUniforms &matData   [[buffer(4)]],
-    texture2d<float>        baseColorTex [[texture(0)]],
-    texture2d<float>        normalTex    [[texture(1)]],
-    texture2d<float>        mrTex        [[texture(2)]],
-    texture2d<float>        emissiveTex  [[texture(3)]]
+    VertexOut               in            [[stage_in]],
+    constant Uniforms      &uniforms      [[buffer(2)]],
+    constant LightUniforms &lightData     [[buffer(3)]],
+    constant MaterialUniforms &matData    [[buffer(4)]],
+    texture2d<float>        baseColorTex  [[texture(0)]],
+    texture2d<float>        normalTex     [[texture(1)]],
+    texture2d<float>        mrTex         [[texture(2)]],
+    texture2d<float>        emissiveTex   [[texture(3)]],
+    // Phase C: image-based lighting.  Intensity travels in lightData.ambientColor.w.
+    texturecube<float>      iblIrradiance [[texture(4)]],
+    texturecube<float>      iblSpecular   [[texture(5)]],
+    texture2d<float>        iblBRDF       [[texture(6)]]
 ) {
     constexpr sampler texSampler(filter::linear,
                                   mip_filter::linear,
                                   address::repeat);
+    constexpr sampler envSampler(filter::linear,
+                                  mip_filter::linear,
+                                  address::clamp_to_edge);
 
     // ── Surface normal ─────────────────────────────────────────────────────
     float3 N;
@@ -231,15 +238,30 @@ fragment float4 fragment_main(
     // ── PBR dielectric/metallic F0 ─────────────────────────────────────────
     float3 F0 = mix(float3(0.04), albedo, metallic);
 
-    // ── Ambient term (global + Ambient-type lights) ────────────────────────
-    float3 ambientLight = lightData.ambientColor.rgb;
+    // ── Ambient / IBL diffuse ──────────────────────────────────────────────
+    // When IBL is active (intensity > 0), the diffuse irradiance cubemap
+    // replaces the flat ambientColor.rgb term.  Ambient-type lights placed by
+    // the user are treated as additional fill and still contribute either way.
+    float iblIntensity = lightData.ambientColor.w;
     uint count = lightData.countAndPad.x;
-    for (uint i = 0; i < count; i++) {
-        if (int(lightData.lights[i].position.w) == LIGHT_AMBIENT) {
-            ambientLight += lightData.lights[i].color.rgb;
+    float3 color;
+    if (iblIntensity > 0.0) {
+        float3 irradiance = iblIrradiance.sample(envSampler, N).rgb;
+        color = irradiance * iblIntensity * albedo * (1.0 - metallic);
+        for (uint i = 0; i < count; i++) {
+            if (int(lightData.lights[i].position.w) == LIGHT_AMBIENT) {
+                color += lightData.lights[i].color.rgb * albedo * (1.0 - metallic * 0.9);
+            }
         }
+    } else {
+        float3 ambientLight = lightData.ambientColor.rgb;
+        for (uint i = 0; i < count; i++) {
+            if (int(lightData.lights[i].position.w) == LIGHT_AMBIENT) {
+                ambientLight += lightData.lights[i].color.rgb;
+            }
+        }
+        color = ambientLight * albedo * (1.0 - metallic * 0.9);
     }
-    float3 color = ambientLight * albedo * (1.0 - metallic * 0.9);
 
     // ── Per-light BRDF accumulation ────────────────────────────────────────
     float NdotV = max(dot(N, V), 0.0001);
@@ -271,6 +293,19 @@ fragment float4 fragment_main(
         float3 diffuse = kD * albedo / M_PI_F;
 
         color += (diffuse + specular) * NdotL * light.color.rgb * atten;
+    }
+
+    // ── IBL specular (split-sum approximation) ─────────────────────────────
+    // Mip level is roughness × (numMips - 1).  BRDF LUT folds in the F0
+    // scale + bias so we don't re-importance-sample at runtime.
+    if (iblIntensity > 0.0) {
+        float3 R       = reflect(-V, N);
+        float  mipMax  = float(iblSpecular.get_num_mip_levels() - 1);
+        float  lod     = roughness * mipMax;
+        float3 prefilt = iblSpecular.sample(envSampler, R, level(lod)).rgb;
+        float2 brdf    = iblBRDF.sample(envSampler, float2(NdotV, roughness)).rg;
+        float3 specIBL = prefilt * (F0 * brdf.x + brdf.y);
+        color += specIBL * iblIntensity;
     }
 
     // ── Emissive ───────────────────────────────────────────────────────────

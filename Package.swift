@@ -21,7 +21,10 @@ let package = Package(
                 .process("Renderer/FeedbackShaders.metal"),
                 .process("Renderer/LaserBeamShaders.metal"),
                 .process("Renderer/WidgetShaders.metal"),
-                .process("Renderer/ColorGradeShaders.metal")
+                .process("Renderer/ColorGradeShaders.metal"),
+                .process("Renderer/IBLShaders.metal"),
+                .copy("Renderer/brown_photostudio_02_2k.hdr"),
+                .copy("Renderer/studio_small_08_2k.hdr")
             ],
             linkerSettings: [
                 .linkedFramework("AVFoundation"),
