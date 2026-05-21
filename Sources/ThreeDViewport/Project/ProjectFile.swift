@@ -103,7 +103,8 @@ final class ProjectFile {
         // ── Timeline ──────────────────────────────────────────────────────────
         let timelineData = TimelineData(
             duration:    tl.duration,
-            currentTime: tl.currentTime
+            currentTime: tl.currentTime,
+            frameRate:   tl.frameRate
         )
 
         // ── Objects — paths + keyframes ───────────────────────────────────────
@@ -283,7 +284,7 @@ final class ProjectFile {
         }
 
         return ProjectData(
-            version:             18,
+            version:             20,
             modelPath:           nil,           // v3+ uses modelPaths instead
             modelPaths:          modelPaths,
             timeline:            timelineData,
@@ -302,7 +303,13 @@ final class ProjectFile {
             windowLayout:        windowLayout,
             colorGrade:          colorGradeData,
             groupKeyframeTracks: groupTrackData,
-            iblIntensity:        vp.renderSettings.iblIntensity
+            iblIntensity:        vp.renderSettings.iblIntensity,
+            fog:                 FogData(isEnabled: vp.fogSettings.isEnabled,
+                                         r: vp.fogSettings.color.x,
+                                         g: vp.fogSettings.color.y,
+                                         b: vp.fogSettings.color.z,
+                                         density: vp.fogSettings.density,
+                                         start:   vp.fogSettings.startDistance)
         )
     }
 
@@ -313,6 +320,7 @@ final class ProjectFile {
 
         // ── Timeline ──────────────────────────────────────────────────────────
         vp.timeline.duration    = data.timeline.duration
+        vp.timeline.frameRate   = data.timeline.frameRate   // v20: project frame rate
         vp.timeline.currentTime = 0.0   // always start from the beginning on load
         vp.timeline.isPlaying   = false
         print("[DEBUG] ProjectFile: timeline duration=" + String(format: "%.2f", data.timeline.duration))
@@ -504,6 +512,13 @@ final class ProjectFile {
         // ── IBL intensity (v16) ───────────────────────────────────────────────
         vp.renderSettings.iblIntensity = data.iblIntensity
         print("[DEBUG] ProjectFile: iblIntensity=\(data.iblIntensity)")
+
+        // ── Fog (v19) ─────────────────────────────────────────────────────────
+        vp.fogSettings.isEnabled     = data.fog.isEnabled
+        vp.fogSettings.color         = SIMD3<Float>(data.fog.r, data.fog.g, data.fog.b)
+        vp.fogSettings.density       = data.fog.density
+        vp.fogSettings.startDistance = data.fog.start
+        print("[DEBUG] ProjectFile: fog enabled=\(data.fog.isEnabled) density=\(data.fog.density)")
 
         // Force the Renderer to re-evaluate keyframes on the next draw.
         // Without this, lastAnimatedTime == currentTime (both 0) so applyAnimation()

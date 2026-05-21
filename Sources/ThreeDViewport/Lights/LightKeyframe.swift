@@ -28,9 +28,13 @@ final class LightKeyframeTrack {
 
     // MARK: - Mutation
 
-    func addKeyframe(_ kf: LightKeyframe) {
-        // Replace any existing keyframe within 1 ms of the same time.
-        keyframes.removeAll { abs($0.time - kf.time) < 0.001 }
+    func addKeyframe(_ kf: LightKeyframe, mergeTolerance: Double = 0.001) {
+        // Replace the NEAREST existing keyframe within `mergeTolerance` (see KeyframeTrack).
+        if let idx = keyframes.indices
+            .filter({ abs(keyframes[$0].time - kf.time) <= mergeTolerance })
+            .min(by: { abs(keyframes[$0].time - kf.time) < abs(keyframes[$1].time - kf.time) }) {
+            keyframes.remove(at: idx)
+        }
         keyframes.append(kf)
         keyframes.sort { $0.time < $1.time }
         print("[DEBUG] LightKeyframeTrack: added keyframe at t="

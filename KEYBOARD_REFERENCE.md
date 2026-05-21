@@ -29,8 +29,8 @@ Available in the main viewport (no modifier unless noted).
 | **⌘+** / **⌘−** | Dolly Director in / out (only in Scene mode) |
 | **Escape** | Cancel keyframe edit |
 | **Return** | Commit keyframe edit |
-| **Shift+Tab** | Previous keyframe on active track |
-| **Tab** | Next keyframe on active track |
+| **Shift+Tab** | Previous keyframe across visible Timeline rows |
+| **Tab** | Next keyframe across visible Timeline rows |
 
 <div style="page-break-after: always;"></div>
 
@@ -43,6 +43,7 @@ Available in the main viewport (no modifier unless noted).
 | **⌘F** | Window | Feedback panel |
 | **⌘G** | View | Render Mode (cycles Greyscale → Color → Black + White) |
 | **⌘⇧G** | Window | Color Grade panel |
+| **⌘⇧A** | Window | Atmosphere panel (Fog) |
 | **⌘J** | Window | Timeline Editor |
 | **⌘K** | Window | Camera panel (follow-target picker + stamp button) |
 | **⌘L** | Window | Lights & Background panel |
@@ -156,14 +157,14 @@ The Timeline Editor is a floating window (⌘J) that shows every keyframe on eve
 | **⌘C** | Copy selected keyframe(s) to internal clipboard |
 | **D** / **Delete** / **Backspace** | Delete selected keyframe(s) |
 | **F** | Nudge selected keyframe(s) 1 frame forward (whole multi-selection moves together) |
-| **I** / **Insert** | Stamp a keyframe on the selected lane at the playhead (replaces one already at this time) |
+| **I** / **Insert** | Stamp a keyframe on the selected lane at the playhead (replaces the nearest existing one within 1.5 frames) |
 | **⌘V** | Paste clipboard at current playhead on selected lane(s) |
 | **End** | Seek playhead to end |
 | **Escape** | Cancel keyframe edit |
 | **Home** | Seek playhead to start |
 | **Return** | Enter edit mode on the selected diamond (or commit while editing) |
-| **Shift+Tab** | Previous keyframe in the selected lane |
-| **Tab** | Next keyframe in the selected lane |
+| **Shift+Tab** | Previous keyframe across all rows currently visible on screen |
+| **Tab** | Next keyframe across all rows currently visible on screen |
 
 ### Mouse
 

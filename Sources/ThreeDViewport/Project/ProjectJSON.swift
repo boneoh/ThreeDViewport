@@ -54,6 +54,7 @@ struct ProjectData: Codable {
     /// v14 (Phase 2): group-level animation tracks, one per loaded multi-part model.
     var groupKeyframeTracks: [GroupTrackData] = []
     var iblIntensity:        Float = 1.0                 // v16; per-scene IBL strength.
+    var fog:                 FogData = FogData()         // v19; distance fog (atmosphere).
 
     // MARK: - Memberwise init (required because we define init(from:) below)
 
@@ -76,7 +77,8 @@ struct ProjectData: Codable {
          windowLayout:        WindowLayoutData       = WindowLayoutData(),
          colorGrade:          ColorGradeData         = ColorGradeData(),
          groupKeyframeTracks: [GroupTrackData]       = [],
-         iblIntensity:        Float                  = 1.0) {
+         iblIntensity:        Float                  = 1.0,
+         fog:                 FogData                = FogData()) {
         self.version             = version
         self.modelPath           = modelPath
         self.modelPaths          = modelPaths
@@ -97,6 +99,7 @@ struct ProjectData: Codable {
         self.colorGrade          = colorGrade
         self.groupKeyframeTracks = groupKeyframeTracks
         self.iblIntensity        = iblIntensity
+        self.fog                 = fog
     }
 
     // MARK: - Custom decoder
@@ -131,6 +134,7 @@ struct ProjectData: Codable {
         colorGrade          = (try? c.decode(ColorGradeData.self,        forKey: .colorGrade))          ?? ColorGradeData()
         groupKeyframeTracks = (try? c.decode([GroupTrackData].self,      forKey: .groupKeyframeTracks)) ?? []
         iblIntensity        = (try? c.decode(Float.self,                 forKey: .iblIntensity))        ?? 1.0
+        fog                 = (try? c.decode(FogData.self,               forKey: .fog))                 ?? FogData()
     }
 }
 
@@ -157,6 +161,35 @@ struct ColorGradeData: Codable {
         self.brightness = brightness
         self.contrast   = contrast
         self.gamma      = gamma
+    }
+}
+
+// v19: Distance fog (atmosphere).  Defaults match FogSettings (off, mid-grey) so
+// older project files load with fog disabled.
+struct FogData: Codable {
+    var isEnabled: Bool  = false
+    var r: Float = 0.5
+    var g: Float = 0.5
+    var b: Float = 0.5
+    var density: Float = 0.15
+    var start:   Float = 0.0
+
+    init(from decoder: Decoder) throws {
+        let c     = try decoder.container(keyedBy: CodingKeys.self)
+        isEnabled = (try? c.decode(Bool.self,  forKey: .isEnabled)) ?? false
+        r         = (try? c.decode(Float.self, forKey: .r))         ?? 0.5
+        g         = (try? c.decode(Float.self, forKey: .g))         ?? 0.5
+        b         = (try? c.decode(Float.self, forKey: .b))         ?? 0.5
+        density   = (try? c.decode(Float.self, forKey: .density))   ?? 0.15
+        start     = (try? c.decode(Float.self, forKey: .start))     ?? 0.0
+    }
+
+    init(isEnabled: Bool = false, r: Float = 0.5, g: Float = 0.5, b: Float = 0.5,
+         density: Float = 0.15, start: Float = 0.0) {
+        self.isEnabled = isEnabled
+        self.r = r; self.g = g; self.b = b
+        self.density = density
+        self.start   = start
     }
 }
 
@@ -239,6 +272,20 @@ struct WindowLayoutData: Codable {
 struct TimelineData: Codable {
     var duration:    Double
     var currentTime: Double
+    var frameRate:   Double = 30.0   // v20; absent in older files → 30 fps
+
+    init(from decoder: Decoder) throws {
+        let c       = try decoder.container(keyedBy: CodingKeys.self)
+        duration    = try  c.decode(Double.self, forKey: .duration)
+        currentTime = try  c.decode(Double.self, forKey: .currentTime)
+        frameRate   = (try? c.decode(Double.self, forKey: .frameRate)) ?? 30.0
+    }
+
+    init(duration: Double, currentTime: Double, frameRate: Double = 30.0) {
+        self.duration    = duration
+        self.currentTime = currentTime
+        self.frameRate   = frameRate
+    }
 }
 
 struct CameraData: Codable {

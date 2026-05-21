@@ -163,6 +163,24 @@ struct LaserHitUniforms {
     var time:       Float
 }
 
+// ── Fog uniforms (fragment buffer index 5 in the scene pass) ─────────────────
+// Must match `struct FogUniforms` in Shaders.metal exactly.
+// Layout (16-byte aligned):
+//   color    float3  16   display-space RGB (float3 occupies 16 bytes in Metal)
+//   density  float    4   exponential density
+//   start    float    4   distance before fog begins
+//   enabled  uint     4   0 = off, 1 = on
+//   _pad     float    4   alignment padding to 32
+//   ─────────────────────────────────────
+//   Total               32
+struct FogUniforms {
+    var color:   SIMD3<Float>
+    var density: Float
+    var start:   Float
+    var enabled: UInt32
+    var _pad:    Float = 0
+}
+
 // ── Spark particle GPU data (per-element in the instanced spark buffer) ───────
 // Must match `struct SparkParticleGPU` in LaserBeamShaders.metal exactly.
 // Layout (16-byte aligned):

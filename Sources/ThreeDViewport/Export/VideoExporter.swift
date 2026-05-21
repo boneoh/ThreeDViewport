@@ -14,6 +14,50 @@ import CoreVideo
 // IMPORTANT: The MTKView render loop must be paused (isPaused = true) before
 // calling export(to:...) to prevent transform race conditions on SceneObjects.
 
+// Export resolution presets shown in the export panel.
+struct ExportResolution: Equatable {
+    let display: String
+    let width:   Int
+    let height:  Int
+
+    static let presets: [ExportResolution] = [
+        ExportResolution(display: "720 × 480",   width: 720,  height: 480),
+        ExportResolution(display: "720 × 576",   width: 720,  height: 576),
+        ExportResolution(display: "1280 × 720",  width: 1280, height: 720),
+        ExportResolution(display: "1920 × 1080", width: 1920, height: 1080),
+    ]
+
+    /// The preset matching w×h, or 1920×1080 if none match.
+    static func matching(width w: Int, height h: Int) -> ExportResolution {
+        presets.first { $0.width == w && $0.height == h } ?? presets[3]
+    }
+}
+
+// Export frame-rate presets.  Rational timescale/duration keeps NTSC rates exact
+// (e.g. 29.97 = 30000/1001), which a plain CMTimeScale(Double) would truncate.
+struct ExportFrameRate: Equatable {
+    let display:       String
+    let value:         Double   // fps as a Double (animation sampling, totalFrames)
+    let timescale:     Int32    // CMTime timescale
+    let frameDuration: Int32    // CMTime value advanced per frame
+
+    static let presets: [ExportFrameRate] = [
+        ExportFrameRate(display: "23.976", value: 24000.0 / 1001.0, timescale: 24000, frameDuration: 1001),
+        ExportFrameRate(display: "24",     value: 24.0,             timescale: 24000, frameDuration: 1000),
+        ExportFrameRate(display: "25",     value: 25.0,             timescale: 25000, frameDuration: 1000),
+        ExportFrameRate(display: "29.97",  value: 30000.0 / 1001.0, timescale: 30000, frameDuration: 1001),
+        ExportFrameRate(display: "30",     value: 30.0,             timescale: 30000, frameDuration: 1000),
+        ExportFrameRate(display: "50",     value: 50.0,             timescale: 50000, frameDuration: 1000),
+        ExportFrameRate(display: "59.94",  value: 60000.0 / 1001.0, timescale: 60000, frameDuration: 1001),
+        ExportFrameRate(display: "60",     value: 60.0,             timescale: 60000, frameDuration: 1000),
+    ]
+
+    /// The preset whose value is closest to `fps` (used to preselect from the project rate).
+    static func closest(to fps: Double) -> ExportFrameRate {
+        presets.min { abs($0.value - fps) < abs($1.value - fps) } ?? presets[4]
+    }
+}
+
 // Codec choice presented to the user in the NSSavePanel accessory view.
 enum ExportCodec {
 
@@ -80,6 +124,8 @@ final class VideoExporter {
     private let holdoutPipelineState: MTLRenderPipelineState?
     private let animDuration:      Double
     private let frameRate:         Double
+    private let frameTimescale:    Int32   // CMTime timescale (rational, exact for NTSC)
+    private let frameTicks:        Int32   // CMTime value advanced per frame
 
     // Phase 8+: rendering options matching the live display
     var colorMode:     RenderColorMode = .color
@@ -95,6 +141,9 @@ final class VideoExporter {
 
     // Color grade settings — nil or identity = no grade pass during export
     var colorGradeSettings: ColorGradeSettings?
+
+    // Fog settings — nil = no fog during export
+    var fogSettings: FogSettings?
 
     // Phase C: image-based lighting — shared with the live Renderer so exports
     // match the viewport.  Set by ViewportView after construction.
@@ -132,6 +181,7 @@ final class VideoExporter {
           lightManager:      LightManager,
           backgroundConfig:  BackgroundConfig,
           timeline:          Timeline,
+          fps:               ExportFrameRate,
           pipelineState:     MTLRenderPipelineState,
           depthStencilState: MTLDepthStencilState,
           holdoutPipelineState: MTLRenderPipelineState? = nil) {
@@ -146,7 +196,9 @@ final class VideoExporter {
         self.depthStencilState = depthStencilState
         self.holdoutPipelineState = holdoutPipelineState
         self.animDuration      = timeline.duration
-        self.frameRate         = timeline.frameRate
+        self.frameRate         = fps.value
+        self.frameTimescale    = fps.timescale
+        self.frameTicks        = fps.frameDuration
 
         // Dummy buffers for objects without UV / tangent data
         var dummyUV:  [Float] = [0, 0]
@@ -435,12 +487,11 @@ final class VideoExporter {
             writer.startSession(atSourceTime: .zero)
             print("[DEBUG] VideoExporter: writer started, status=" + String(writer.status.rawValue))
 
-            let timescale = CMTimeScale(self.frameRate)
-
             for frameIndex in 0..<totalFrames {
-                let t               = Double(frameIndex) / self.frameRate
-                let presentationTime = CMTime(value: CMTimeValue(frameIndex),
-                                              timescale: timescale)
+                // Rational timing — exact for NTSC rates (e.g. 30000/1001).
+                let presentationTime = CMTime(value: CMTimeValue(frameIndex) * CMTimeValue(self.frameTicks),
+                                              timescale: self.frameTimescale)
+                let t = Double(frameIndex) * Double(self.frameTicks) / Double(self.frameTimescale)
 
                 // Evaluate animation at this exact time — does NOT touch Timeline.currentTime
                 self.applyAnimation(at: t)
@@ -606,6 +657,7 @@ final class VideoExporter {
             // flat-normal, and IBL handling stay identical between preview/export.
             // Holdout objects (hidden but occluding) are drawn depth-only first so
             // visible geometry behind them is cut to background — matches preview.
+            let fogUniforms = fogSettings?.uniforms ?? FogSettings.disabledUniforms
             let holdoutObjects = sceneManager.objects.filter { !$0.isVisible && $0.occludeWhenHidden }
             if !holdoutObjects.isEmpty, let holdout = holdoutPipelineState {
                 SceneGeometryEncoder.encode(
@@ -619,6 +671,7 @@ final class VideoExporter {
                         pipelineState:     holdout,
                         depthStencilState: depthStencilState,
                         colorMode:         colorMode,
+                        fog:               fogUniforms,
                         isWireframe:       false,
                         exposure:          colorGradeSettings?.exposure ?? 1.0,
                         ibl:               ibl,
@@ -638,6 +691,7 @@ final class VideoExporter {
                     pipelineState:     pipelineState,
                     depthStencilState: depthStencilState,
                     colorMode:         colorMode,
+                    fog:               fogUniforms,
                     isWireframe:       isWireframe,
                     exposure:          colorGradeSettings?.exposure ?? 1.0,
                     ibl:               ibl,

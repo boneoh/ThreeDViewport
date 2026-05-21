@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     // Brightness / contrast color grade panel.
     private var colorGradePanel: NSPanel?
+    private var atmospherePanel: NSPanel?
 
     // Camera keyframe inspector panel.
     private var cameraPanel: NSPanel?
@@ -416,6 +417,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             .sink { [weak self] in self?.markDirty() }
             .store(in: &settingsCancellables)
 
+        // FogSettings (atmosphere).
+        viewport.fogSettings.objectWillChange
+            .sink { [weak self] in self?.markDirty() }
+            .store(in: &settingsCancellables)
+
         print("[DEBUG] AppDelegate: subscribed to settings changes for dirty tracking")
     }
 
@@ -653,6 +659,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         )
         colorGradeItem.target = self
         windowMenu.addItem(colorGradeItem)
+
+        let atmosphereItem = NSMenuItem(
+            title: "Atmosphere…",
+            action: #selector(showAtmospherePanel(_:)),
+            keyEquivalent: "A"   // ⌘⇧A
+        )
+        atmosphereItem.target = self
+        windowMenu.addItem(atmosphereItem)
 
         let feedbackItem = NSMenuItem(
             title: "Feedback…",
@@ -1485,6 +1499,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         print("[DEBUG] AppDelegate: color grade panel opened")
     }
 
+    // MARK: - Atmosphere Panel
+
+    @objc private func showAtmospherePanel(_ sender: Any) {
+        if let panel = atmospherePanel {
+            panel.isVisible ? panel.orderOut(nil) : panel.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        guard let viewport = viewportView else { return }
+
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 296, height: 280),
+            styleMask:   [.titled, .closable, .miniaturizable, .resizable, .utilityWindow, .nonactivatingPanel],
+            backing:     .buffered,
+            defer:       false
+        )
+        panel.title              = "Atmosphere"
+        panel.isFloatingPanel    = true
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.hidesOnDeactivate  = false
+
+        let atmoView = AtmospherePanel(fog: viewport.fogSettings)
+        panel.contentView = NSHostingView(rootView: atmoView)
+
+        if let win = window {
+            let winFrame  = win.frame
+            let panelSize = panel.frame.size
+            let originX   = winFrame.maxX - panelSize.width - 20
+            let originY   = winFrame.maxY - panelSize.height - 40 - 740 - 300 - 220
+            panel.setFrameOrigin(NSPoint(x: originX, y: max(originY, 40)))
+        } else {
+            panel.center()
+        }
+
+        atmospherePanel = panel
+        panel.makeKeyAndOrderFront(nil)
+        print("[DEBUG] AppDelegate: atmosphere panel opened")
+    }
+
     // MARK: - Camera Panel
 
     /// Refreshes the Camera panel's Follow Target list from the current scene.
@@ -2065,7 +2118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                                                  withIntermediateDirectories: true)
         let defaultName = nextMovieFilename(projectName: projectName, in: projectMovieDir)
 
-        let (accessory, codecPopup) = makeCodecAccessoryView()
+        let (accessory, codecPopup, resPopup, fpsPopup) = makeExportAccessoryView()
 
         let panel = NSSavePanel()
         panel.title                = "Export ProRes Video"
@@ -2090,38 +2143,80 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             let codec: ExportCodec = codecPopup.indexOfSelectedItem == 0
                 ? .proRes4444
                 : .proRes422HQ
-            print("[DEBUG] AppDelegate: export destination — " + url.lastPathComponent
-                + " codec=" + codec.displayName)
+            let res = ExportResolution.presets[max(0, resPopup.indexOfSelectedItem)]
+            let fps = ExportFrameRate.presets[max(0, fpsPopup.indexOfSelectedItem)]
             guard let self = self else { return }
-            self.viewportView?.startExport(to: url, codec: codec, exportState: self.exportState)
+
+            // Persist resolution + codec globally (AppSettings); the FPS is the
+            // project's frame rate, so set it on the timeline (and mark dirty).
+            AppSettings.shared.exportWidth   = res.width
+            AppSettings.shared.exportHeight  = res.height
+            AppSettings.shared.exportCodecID = (codec == .proRes422HQ) ? "proRes422HQ" : "proRes4444"
+            AppSettings.shared.save()
+            if let tl = self.viewportView?.timeline, abs(tl.frameRate - fps.value) > 1e-9 {
+                tl.frameRate = fps.value
+                self.markDirty()
+            }
+
+            print("[DEBUG] AppDelegate: export — " + url.lastPathComponent
+                + " codec=" + codec.displayName
+                + " res=\(res.width)×\(res.height) fps=" + fps.display)
+            self.viewportView?.startExport(to: url, codec: codec, fps: fps, exportState: self.exportState)
         }
     }
 
-    private func makeCodecAccessoryView() -> (view: NSView, popup: NSPopUpButton) {
-        let label = NSTextField(labelWithString: "Format:")
-        label.font            = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
-        label.alignment       = .right
-        label.isEditable      = false
-        label.isBezeled       = false
-        label.drawsBackground = false
+    private func makeExportAccessoryView() -> (view: NSView,
+                                               codec: NSPopUpButton,
+                                               resolution: NSPopUpButton,
+                                               fps: NSPopUpButton) {
+        func label(_ s: String) -> NSTextField {
+            let l = NSTextField(labelWithString: s)
+            l.font      = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+            l.alignment = .right
+            l.setContentHuggingPriority(.required, for: .horizontal)
+            return l
+        }
+        func row(_ text: String, _ popup: NSPopUpButton) -> NSStackView {
+            let s = NSStackView(views: [label(text), popup])
+            s.orientation = .horizontal
+            s.alignment   = .centerY
+            s.spacing     = 8
+            return s
+        }
 
-        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
-        popup.addItem(withTitle: ExportCodec.proRes4444.displayName)
-        popup.addItem(withTitle: ExportCodec.proRes422HQ.displayName)
-        // Default to the codec saved in settings (index 0 = 4444, 1 = 422 HQ).
-        popup.selectItem(at: AppSettings.shared.exportCodecID == "proRes422HQ" ? 1 : 0)
-        popup.sizeToFit()
+        // Format / codec
+        let codecPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+        codecPopup.addItem(withTitle: ExportCodec.proRes4444.displayName)
+        codecPopup.addItem(withTitle: ExportCodec.proRes422HQ.displayName)
+        codecPopup.selectItem(at: AppSettings.shared.exportCodecID == "proRes422HQ" ? 1 : 0)
 
-        let stack = NSStackView(views: [label, popup])
-        stack.orientation  = .horizontal
-        stack.alignment    = .centerY
-        stack.spacing      = 8
-        stack.edgeInsets   = NSEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
+        // Resolution
+        let resPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+        for r in ExportResolution.presets { resPopup.addItem(withTitle: r.display) }
+        let curRes = ExportResolution.matching(width: AppSettings.shared.exportWidth,
+                                               height: AppSettings.shared.exportHeight)
+        resPopup.selectItem(at: ExportResolution.presets.firstIndex(of: curRes) ?? 3)
+
+        // FPS — defaults to the current project frame rate.
+        let fpsPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+        for f in ExportFrameRate.presets { fpsPopup.addItem(withTitle: f.display) }
+        let curFps = ExportFrameRate.closest(to: viewportView?.timeline.frameRate ?? 30.0)
+        fpsPopup.selectItem(at: ExportFrameRate.presets.firstIndex(of: curFps) ?? 4)
+
+        let stack = NSStackView(views: [
+            row("Format:",     codecPopup),
+            row("Resolution:", resPopup),
+            row("FPS:",        fpsPopup),
+        ])
+        stack.orientation = .vertical
+        stack.alignment   = .trailing
+        stack.spacing     = 8
+        stack.edgeInsets  = NSEdgeInsets(top: 12, left: 16, bottom: 12, right: 16)
         stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.frame = NSRect(x: 0, y: 0, width: 420, height: 44)
+        stack.frame = NSRect(x: 0, y: 0, width: 460, height: 132)
 
-        print("[DEBUG] AppDelegate: codec accessory view created")
-        return (stack, popup)
+        print("[DEBUG] AppDelegate: export accessory view created")
+        return (stack, codecPopup, resPopup, fpsPopup)
     }
 
     // MARK: - Edit > Remove

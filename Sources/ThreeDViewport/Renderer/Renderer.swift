@@ -98,6 +98,9 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     var colorGradeSettings:    ColorGradeSettings?
     private var colorGradePipeline: MTLRenderPipelineState?
+
+    // MARK: - Fog (optional — set by ViewportView after init)
+    var fogSettings: FogSettings?
     private var gradeTexture:  MTLTexture?   // intermediate; rebuilt on size change
 
     // MARK: - Laser hit effect
@@ -555,6 +558,8 @@ final class Renderer: NSObject, MTKViewDelegate {
             holdoutObjects = sceneManager.objects.filter { !$0.isVisible && $0.occludeWhenHidden }
         }
 
+        let fogUniforms = fogSettings?.uniforms ?? FogSettings.disabledUniforms
+
         if !holdoutObjects.isEmpty, let ds = depthStencilState, let holdout = holdoutPipelineState {
             SceneGeometryEncoder.encode(
                 into:            encoder,
@@ -567,6 +572,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                     pipelineState:     holdout,
                     depthStencilState: ds,
                     colorMode:         colorMode,
+                    fog:               fogUniforms,
                     isWireframe:       false,   // holdout is depth-only; never wireframe
                     exposure:          colorGradeSettings?.exposure ?? 1.0,
                     ibl:               ibl,
@@ -586,6 +592,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                     pipelineState:     pipeline,
                     depthStencilState: ds,
                     colorMode:         colorMode,
+                    fog:               fogUniforms,
                     isWireframe:       isWireframe,
                     exposure:          colorGradeSettings?.exposure ?? 1.0,
                     ibl:               ibl,

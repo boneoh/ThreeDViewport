@@ -1023,10 +1023,9 @@ final class TimelineEditorView: NSView {
             if let dur = timeline?.duration { timeline?.seek(to: dur) }
             needsDisplay = true
 
-        case 48:        // Tab / Shift+Tab → jump to adjacent keyframe in selected lane
+        case 48:        // Tab / Shift+Tab → jump to adjacent keyframe across visible rows
             guard !isEditingKeyframe else { super.keyDown(with: event); return }
-            seekToAdjacentKeyframe(backward: event.modifierFlags.contains(.shift),
-                                   tracks: tracks)
+            seekAdjacentVisibleKeyframe(backward: event.modifierFlags.contains(.shift))
 
         case 123:       // Left arrow → always forward to viewport (incl. edit mode).
             forwardToViewport(event)
@@ -1381,11 +1380,24 @@ final class TimelineEditorView: NSView {
 
     /// Seeks the playhead to the keyframe before or after the current time on the
     /// selected lane.  Used by Tab / Shift+Tab in keyDown.
-    private func seekToAdjacentKeyframe(backward: Bool, tracks: TrackList) {
-        guard let ti = selectedTrackIndex else { return }
-        let ref   = tracks[ti].ref
-        let times = keyframeTimes(for: ref).sorted()
+    /// Seeks the playhead to the next / previous keyframe across every row that is
+    /// currently visible on screen — disclosed (collapsed-group parts are absent
+    /// from buildTracks()) and within the scroll viewport, below the floating
+    /// ruler header.  Public so the viewport's Tab can share this behaviour.
+    func seekAdjacentVisibleKeyframe(backward: Bool) {
+        let tracks = buildTracks()
+        // Visible content area = the scroll viewport minus the floating header band.
+        let vis        = visibleRect
+        let contentTop = vis.minY + rulerHeight
+        var times: [Double] = []
+        for (i, row) in tracks.enumerated() {
+            let top = laneTop(i)
+            let bot = top + laneHeight
+            guard bot > contentTop && top < vis.maxY else { continue }   // on-screen rows only
+            times.append(contentsOf: keyframeTimes(for: row.ref))
+        }
         guard !times.isEmpty else { return }
+        times.sort()
         let cur = timeline?.currentTime ?? 0
         let eps = 1.0 / (timeline?.frameRate ?? 30.0) / 2
         if backward {

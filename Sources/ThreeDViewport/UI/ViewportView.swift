@@ -77,6 +77,7 @@ final class ViewportView: MTKView {
     let feedbackSettings    = FeedbackSettings()
     let feedbackProcessor:   FeedbackProcessor   // created after Metal device is ready
     let colorGradeSettings = ColorGradeSettings()
+    let fogSettings        = FogSettings()
 
     // Camera panel — sticky follow-target picker shared with the floating
     // CameraPanel inspector.  Lives here so the choice survives panel
@@ -206,6 +207,7 @@ final class ViewportView: MTKView {
         renderer?.feedbackProcessor   = feedbackProcessor
         renderer?.feedbackSettings    = feedbackSettings
         renderer?.colorGradeSettings  = colorGradeSettings
+        renderer?.fogSettings         = fogSettings
 
         // Sync renderSettings → renderer whenever toggles change
         colorModeCancellable = renderSettings.$colorMode.sink { [weak self] value in
@@ -1029,6 +1031,11 @@ final class ViewportView: MTKView {
 
     // MARK: - Add Object Keyframe
 
+    /// Merge window for stamping: a new keyframe within 1.5 frames of an existing
+    /// one on the same track replaces it instead of stacking a near-duplicate.
+    /// Tracks the project frame rate.
+    private var stampMergeTolerance: Double { 1.5 / timeline.frameRate }
+
     /// Stamps a keyframe for the currently selected (or primary) object.
     /// Called by the timeline panel's "Add Object Keyframe" button.
     func addKeyframeAtCurrentTime() {
@@ -1087,7 +1094,7 @@ final class ViewportView: MTKView {
             rotation:    rotation,
             scale:       scale
         )
-        obj.keyframeTrack?.addKeyframe(kf)
+        obj.keyframeTrack?.addKeyframe(kf, mergeTolerance: stampMergeTolerance)
 
         print("[DEBUG] ViewportView: keyframe added at t=" + String(format: "%.3f", timeline.currentTime)
             + " for '" + obj.name + "'")
@@ -1135,7 +1142,7 @@ final class ViewportView: MTKView {
             rotation:    rotation,
             scale:       scale
         )
-        sceneManager.groupKeyframeTracks[gid]?.addKeyframe(kf)
+        sceneManager.groupKeyframeTracks[gid]?.addKeyframe(kf, mergeTolerance: stampMergeTolerance)
         print("[DEBUG] ViewportView: group keyframe added at t="
             + String(format: "%.3f", timeline.currentTime)
             + " for groupID=\(gid)")
@@ -1171,7 +1178,7 @@ final class ViewportView: MTKView {
             range:         light.range,
             beamThickness: light.beamThickness
         )
-        lightManager.keyframeTracks[index]?.addKeyframe(kf)
+        lightManager.keyframeTracks[index]?.addKeyframe(kf, mergeTolerance: stampMergeTolerance)
 
         print("[DEBUG] ViewportView: light keyframe added at t="
             + String(format: "%.3f", timeline.currentTime)
@@ -1195,7 +1202,7 @@ final class ViewportView: MTKView {
             target:   camera.target,
             fov:      camera.fovYRadians
         )
-        camera.keyframeTrack?.addKeyframe(kf)
+        camera.keyframeTrack?.addKeyframe(kf, mergeTolerance: stampMergeTolerance)
 
         print("[DEBUG] ViewportView: camera keyframe added at t="
             + String(format: "%.3f", timeline.currentTime)
@@ -1267,7 +1274,7 @@ final class ViewportView: MTKView {
             targetOffset:       targetOffset,
             followForwardLocal: followForwardLocal
         )
-        camera.keyframeTrack?.addKeyframe(kf)
+        camera.keyframeTrack?.addKeyframe(kf, mergeTolerance: stampMergeTolerance)
 
         let yawOffStr   = followYawOffset  .map { String(format: "%.4f", $0) } ?? "nil"
         let pitchOffStr = followPitchOffset.map { String(format: "%.4f", $0) } ?? "nil"
@@ -1318,7 +1325,7 @@ final class ViewportView: MTKView {
             targetOffset:       targetOffset,
             followForwardLocal: followForwardLocal
         )
-        camera.keyframeTrack?.addKeyframe(kf)
+        camera.keyframeTrack?.addKeyframe(kf, mergeTolerance: stampMergeTolerance)
 
         let yawOffStr   = followYawOffset  .map { String(format: "%.4f", $0) } ?? "nil"
         let pitchOffStr = followPitchOffset.map { String(format: "%.4f", $0) } ?? "nil"
@@ -1352,7 +1359,7 @@ final class ViewportView: MTKView {
 
     // MARK: - Video Export
 
-    func startExport(to url: URL, codec: ExportCodec, exportState: ExportState) {
+    func startExport(to url: URL, codec: ExportCodec, fps: ExportFrameRate, exportState: ExportState) {
         guard let dev = device else {
             print("[DEBUG] ViewportView: startExport — Metal device is nil")
             return
@@ -1372,6 +1379,7 @@ final class ViewportView: MTKView {
             lightManager:      lightManager,
             backgroundConfig:  backgroundConfig,
             timeline:          timeline,
+            fps:               fps,
             pipelineState:     pipeline,
             depthStencilState: depth,
             holdoutPipelineState: r.holdoutPipelineState
@@ -1385,6 +1393,7 @@ final class ViewportView: MTKView {
         exporter.showAxesGizmo      = renderSettings.showAxesGizmo
         exporter.feedbackSettings   = feedbackSettings
         exporter.colorGradeSettings = colorGradeSettings
+        exporter.fogSettings        = fogSettings
         exporter.ibl                = renderer?.ibl   // share IBL so exports match preview
         feedbackProcessor.reset()   // clear live queue; exporter has its own processor
         timeline.pause()
@@ -2117,10 +2126,17 @@ final class ViewportView: MTKView {
             return
         }
 
-        // ── Tab / Shift+Tab — next / previous keyframe for active track ───────
+        // ── Tab / Shift+Tab — next / previous visible keyframe ────────────────
+        // When the Timeline Editor is open, share its "visible rows" navigation so
+        // viewport and editor behave identically; otherwise fall back to the
+        // active-track seek.
         if kc == KC.tab, !event.isARepeat {
             let backward = event.modifierFlags.contains(.shift)
-            seekToAdjacentKeyframe(backward: backward)
+            if let editor = timelineKeyTarget, editor.window?.isVisible == true {
+                editor.seekAdjacentVisibleKeyframe(backward: backward)
+            } else {
+                seekToAdjacentKeyframe(backward: backward)
+            }
             return
         }
 

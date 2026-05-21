@@ -14,7 +14,10 @@ final class Timeline: ObservableObject {
     /// ViewportView subscribes to this to clear the feedback buffer on each loop.
     @Published var loopRevolution: Int = 0
 
-    let frameRate: Double = 30.0
+    /// Project frame rate — drives playback advance, F/B nudge, frame snapping,
+    /// the keyframe replace tolerance, and export.  Settable via the Export panel's
+    /// FPS dropdown and persisted with the project (default 30).
+    @Published var frameRate: Double = 30.0
 
     init() {
         print("[DEBUG] Timeline: initialized, duration=" + String(duration) + "s frameRate=30")

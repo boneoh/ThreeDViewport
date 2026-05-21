@@ -31,9 +31,15 @@ final class KeyframeTrack {
         print("[DEBUG] KeyframeTrack: initialized, count=0")
     }
 
-    func addKeyframe(_ kf: TransformKeyframe) {
-        // Replace any existing keyframe within 1 ms of the same time (matches CameraKeyframeTrack)
-        keyframes.removeAll { abs($0.time - kf.time) < 0.001 }
+    func addKeyframe(_ kf: TransformKeyframe, mergeTolerance: Double = 0.001) {
+        // Replace the NEAREST existing keyframe within `mergeTolerance` of the new
+        // time.  Default 1 ms (moves / project restore); stamping passes ~1.5
+        // frames so a near-miss replaces instead of stacking a near-duplicate.
+        if let idx = keyframes.indices
+            .filter({ abs(keyframes[$0].time - kf.time) <= mergeTolerance })
+            .min(by: { abs(keyframes[$0].time - kf.time) < abs(keyframes[$1].time - kf.time) }) {
+            keyframes.remove(at: idx)
+        }
         keyframes.append(kf)
         keyframes.sort { $0.time < $1.time }
         print("[DEBUG] KeyframeTrack: added keyframe at t=" + String(format: "%.3f", kf.time)
