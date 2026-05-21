@@ -23,6 +23,8 @@ Available in the main viewport (no modifier unless noted).
 | **⌘R** | Re-auto-fit Director (only in Scene mode) |
 | **S** | Toggle Scene mode (Director's POV — see camera, lights, models from above and behind); auto-engages Director mode |
 | **1**–**6** | Snap Director to a standard view of the selection — Front/Left/Rear/Right/Top/Bottom (Scene mode only) |
+| **7** | Solo: hide everything except the selected object's group (Scene mode only) |
+| **8** | Solo: make the hidden others still occlude (Scene mode only; pairs with 7) |
 | **W** | Wireframe toggle |
 | **⌘+** / **⌘−** | Dolly Director in / out (only in Scene mode) |
 | **Return** | Commit keyframe edit |
@@ -126,6 +128,17 @@ In Scene mode, the number keys snap the Director to an axis-aligned view of the 
 | **6** | Bottom |
 
 The snap uses the object's pose at the **current playhead** — if you scrub to a frame where the object has turned, press the key again to re-frame. Works in any control mode while Scene mode is active, so the flow is: **S** → select via **O** (or click a Timeline lane) → press **1–6** → pose the part.
+
+### Solo while posing (7 / 8)
+
+In Scene mode, two keys declutter the view around what you're posing. They are **non-destructive** — your real Visible / Holdout settings are never changed, and leaving Scene mode restores the normal view instantly.
+
+| Key | Action |
+|-----|--------|
+| **7** | Hide everything except the **selected object's group** (e.g. just the robot stays). Press again to restore. |
+| **8** | Make those hidden others still **occlude** (holdout) — so you can judge how the part sits behind / in front of them. Only has effect while **7** is on. |
+
+Solo tracks the selection live (cycle with **O** and the kept group follows). The HUD shows `[Solo]` / `[Solo+Occlude]` while active. Both reset when you leave Scene mode.
 
 <div style="page-break-after: always;"></div>
 

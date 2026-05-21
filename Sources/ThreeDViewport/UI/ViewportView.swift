@@ -44,6 +44,17 @@ final class ViewportView: MTKView {
     var sceneModeActive: Bool = false {
         didSet { renderer?.sceneModeActive = sceneModeActive }
     }
+    /// Scene-mode "solo" view aids (keys 7 / 8).  Non-destructive — they only
+    /// affect what the live Renderer draws; real isVisible / occludeWhenHidden are
+    /// never changed.  Reset when leaving Scene mode.
+    ///   7 → hide everything except the selected object's group.
+    ///   8 → make those hidden others still occlude (holdout); only matters with 7.
+    var sceneSoloHideOthers: Bool = false {
+        didSet { renderer?.sceneSoloHideOthers = sceneSoloHideOthers }
+    }
+    var sceneSoloOccludeOthers: Bool = false {
+        didSet { renderer?.sceneSoloOccludeOthers = sceneSoloOccludeOthers }
+    }
     /// First-time-per-session auto-fit guard.  Toggling Scene off then on does
     /// NOT re-fit; the user has to press ⌘R to refit.
     private var directorEverFit: Bool = false
@@ -550,6 +561,12 @@ final class ViewportView: MTKView {
             }
         case .director:
             overlayState.selectedItemName = "POV"
+        }
+        // Solo aids (Scene mode) — show a marker so it's clear the others are
+        // hidden by solo, not actually removed from the scene.
+        if sceneModeActive && sceneSoloHideOthers {
+            let marker = sceneSoloOccludeOthers ? "[Solo+Occlude]" : "[Solo]"
+            overlayState.selectedItemName += overlayState.selectedItemName.isEmpty ? marker : "  " + marker
         }
     }
 
@@ -2010,6 +2027,8 @@ final class ViewportView: MTKView {
         static let num4:     UInt16 = 21   // Right
         static let num5:     UInt16 = 23   // Top
         static let num6:     UInt16 = 22   // Bottom
+        static let num7:     UInt16 = 26   // Solo: hide others (Scene mode)
+        static let num8:     UInt16 = 28   // Solo: occlude hidden others (Scene mode)
         // Regular arrow keys
         static let left:     UInt16 = 123
         static let right:    UInt16 = 124
@@ -2215,6 +2234,11 @@ final class ViewportView: MTKView {
             case KC.num5: if sceneModeActive { snapDirectorToObjectView(.top);    return }
             case KC.num6: if sceneModeActive { snapDirectorToObjectView(.bottom); return }
 
+            // 7 / 8: Scene-mode solo aids — hide / occlude everything except the
+            // selected object's group.  Non-destructive; reset on leaving Scene mode.
+            case KC.num7: if sceneModeActive { sceneSoloHideOthers.toggle();    syncOverlayState(); return }
+            case KC.num8: if sceneModeActive { sceneSoloOccludeOthers.toggle(); syncOverlayState(); return }
+
             case KC.r:
                 // R — reset rotation / orientation to defaults.
                 //   ⌘R while in Scene mode: re-auto-fit the Director.
@@ -2252,6 +2276,12 @@ final class ViewportView: MTKView {
                     // Camera and restore the matching timeline-lane highlight.
                     controlMode = .camera
                     onControlModeChanged?(.camera)
+                }
+                if !sceneModeActive {
+                    // Solo is a Scene-mode aid — clear it on exit so the real
+                    // visibility / occlusion settings are shown again.
+                    sceneSoloHideOthers    = false
+                    sceneSoloOccludeOthers = false
                 }
                 syncOverlayState()
                 print("[DEBUG] ViewportView: Scene mode = " + (sceneModeActive ? "ON" : "OFF"))

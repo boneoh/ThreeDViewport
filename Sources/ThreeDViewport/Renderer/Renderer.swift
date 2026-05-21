@@ -42,6 +42,13 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// (so the scene camera moves on its track), but the *view* is the director's.
     var sceneModeActive:  Bool = false
 
+    /// Scene-mode "solo" view aids (mirrored from ViewportView, keys 7 / 8).
+    /// When `sceneSoloHideOthers` is set, only the selected object's group is drawn;
+    /// when `sceneSoloOccludeOthers` is also set, the hidden others still occlude
+    /// (depth-only).  Non-destructive — object isVisible is never changed.
+    var sceneSoloHideOthers:    Bool = false
+    var sceneSoloOccludeOthers: Bool = false
+
     /// True when the viewport's controlMode is `.camera`.  Used (together with
     /// `timeline.isPlaying`) to decide whether `applyCameraFollow` should yield
     /// the camera to the user: in camera mode while paused, follow stops
@@ -409,6 +416,18 @@ final class Renderer: NSObject, MTKViewDelegate {
         print("[DEBUG] Renderer: gradeTexture rebuilt \(width)×\(height)")
     }
 
+    /// The "kept" object set for Scene-mode solo: the selected object's group
+    /// (all members sharing its groupID), or just the selected object if it has no
+    /// group.  Returns nil when there's no selection (so solo shows everything
+    /// rather than blanking the view).
+    private func soloKeptGroup() -> [SceneObject]? {
+        guard let sel = sceneManager.selectedObject else { return nil }
+        if let gid = sel.groupID {
+            return sceneManager.objects(inGroup: gid)
+        }
+        return [sel]
+    }
+
     func draw(in view: MTKView) {
         // Wall-clock dt for hit effect animation (independent of timeline)
         let now = CFAbsoluteTimeGetCurrent()
@@ -511,10 +530,30 @@ final class Renderer: NSObject, MTKViewDelegate {
         // Do NOT early-return here: even an empty scene must go through the
         // feedback path so fp.process ticks every frame and the drawable gets
         // content when feedback is rendering to sceneTexture.
-        let visibleObjects = sceneManager.objects.filter { $0.isVisible }
-        // Holdout objects: hidden but flagged to occlude.  Drawn depth-only BEFORE
-        // visible geometry so visible fragments behind them are cut to background.
-        let holdoutObjects = sceneManager.objects.filter { !$0.isVisible && $0.occludeWhenHidden }
+        //
+        // Scene-mode "solo": when active (and a selection exists), only the
+        // selected object's group is drawn.  Non-kept objects are hidden, or — if
+        // sceneSoloOccludeOthers — kept as depth-only holdouts.  This never mutates
+        // object isVisible; it's purely a view override for the live preview.
+        let visibleObjects: [SceneObject]
+        let holdoutObjects: [SceneObject]
+        let soloKept = (sceneModeActive && sceneSoloHideOthers)
+            ? soloKeptGroup() : nil
+        if let kept = soloKept {
+            visibleObjects = kept.filter { $0.isVisible }
+            holdoutObjects = sceneManager.objects.filter { obj in
+                if kept.contains(where: { $0 === obj }) {
+                    return !obj.isVisible && obj.occludeWhenHidden     // normal rule, kept group
+                } else {
+                    return sceneSoloOccludeOthers                       // others: occlude only with key 8
+                }
+            }
+        } else {
+            visibleObjects = sceneManager.objects.filter { $0.isVisible }
+            // Holdout objects: hidden but flagged to occlude.  Drawn depth-only BEFORE
+            // visible geometry so visible fragments behind them are cut to background.
+            holdoutObjects = sceneManager.objects.filter { !$0.isVisible && $0.occludeWhenHidden }
+        }
 
         if !holdoutObjects.isEmpty, let ds = depthStencilState, let holdout = holdoutPipelineState {
             SceneGeometryEncoder.encode(
