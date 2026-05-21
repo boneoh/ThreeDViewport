@@ -70,19 +70,21 @@ struct SceneOverlayView: View {
 
     private var modeIcon: String {
         switch state.controlMode {
-        case .camera: return "camera.fill"
-        case .light:  return "lightbulb.fill"
-        case .object: return "cube.fill"
-        case .model:  return "square.3.layers.3d"
+        case .camera:   return "camera.fill"
+        case .light:    return "lightbulb.fill"
+        case .object:   return "cube.fill"
+        case .model:    return "square.3.layers.3d"
+        case .director: return "move.3d"
         }
     }
 
     private var modeColor: Color {
         switch state.controlMode {
-        case .camera: return Color(NSColor.systemBlue)
-        case .light:  return Color(NSColor.systemYellow)
-        case .object: return Color(NSColor.systemGreen)
-        case .model:  return Color(NSColor.systemOrange)
+        case .camera:   return Color(NSColor.systemBlue)
+        case .light:    return Color(NSColor.systemYellow)
+        case .object:   return Color(NSColor.systemGreen)
+        case .model:    return Color(NSColor.systemOrange)
+        case .director: return Color(NSColor.systemPurple)
         }
     }
 }

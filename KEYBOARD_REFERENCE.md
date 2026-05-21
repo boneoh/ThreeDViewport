@@ -8,7 +8,8 @@ Available in the main viewport (no modifier unless noted).
 |-----|--------|
 | **B** | Nudge selected keyframe 1 frame backward |
 | **C** | Camera mode |
-| **D** / **Delete** / **Backspace** | Delete selected keyframe(s) (forwarded to Timeline Editor) |
+| **D** | Director mode — navigate the Director's POV (Scene mode only) |
+| **Delete** / **Backspace** | Delete selected keyframe(s) (forwarded to Timeline Editor) |
 | **E** / **End** | Jump playhead to end |
 | **F** | Nudge selected keyframe 1 frame forward |
 | **G** | Greyscale toggle |
@@ -20,7 +21,8 @@ Available in the main viewport (no modifier unless noted).
 | **P** | Play / Pause |
 | **R** | Reset current object, light, or camera orientation |
 | **⌘R** | Re-auto-fit Director (only in Scene mode) |
-| **S** | Toggle Scene mode (Director's POV — see camera, lights, models from above and behind) |
+| **S** | Toggle Scene mode (Director's POV — see camera, lights, models from above and behind); auto-engages Director mode |
+| **1**–**6** | Snap Director to a standard view of the selection — Front/Left/Rear/Right/Top/Bottom (Scene mode only) |
 | **W** | Wireframe toggle |
 | **⌘+** / **⌘−** | Dolly Director in / out (only in Scene mode) |
 | **Return** | Commit keyframe edit |
@@ -86,6 +88,44 @@ Hold for smooth repeat. Numpad equivalents: 4/6/8/2/+/−
 | **Space + Left drag** | Free orbit (orbits Director in Scene mode, scene camera otherwise) | Free orbit | Free orbit |
 | **Scroll wheel** | Dolly in / out | Move forward / backward (camera depth) | Dolly in / out (positional only) |
 | **Option + Scroll wheel** | — | Uniform scale around object/group centre | — |
+
+<div style="page-break-after: always;"></div>
+
+
+## Director Mode (Scene Mode Only)
+
+Press **D** in Scene mode — or just press **S**, which auto-engages Director mode — to fly the Director's POV (the free editing viewpoint) without disturbing the keyframed scene camera. This makes it easy to frame individual parts (hands, feet, arms, legs) for posing. Controls mirror Camera mode but drive the Director:
+
+| Input | Director action |
+|-------|-----------------|
+| **Scroll wheel** | Dolly in / out (move toward / away from a part) |
+| **Left drag** | Truck + Pedestal (pan) |
+| **Right drag** | Free-look (aim) |
+| **Space + Left drag** | Orbit |
+| **← → ↑ ↓** | Pan |
+| **Shift + arrows** | Free-look (aim) |
+| **+** / **−** | FOV narrow / wide |
+| **⌘+** / **⌘−** | Dolly in / out |
+| **⌘R** | Re-auto-fit the Director to the scene |
+
+The Director is never keyframed or saved. Typical flow: **S** to enter Scene mode, frame the part, **O** to select and pose it, **D** to reframe. Leaving Scene mode (**S**) returns to Camera mode.
+
+> **Note:** **D** means *Director mode* in the viewport, but *delete keyframe* in the Timeline Editor window — two separate views. The viewport always consumes **D**, so it can never delete a keyframe by accident.
+
+### Snap to a standard view (number row 1–6)
+
+In Scene mode, the number keys snap the Director to an axis-aligned view of the **selected object's group**, centered and framed to fit. Views are **object-relative** — they follow the object's own orientation, so "Front" always shows the object's front no matter how it's flown or turned. (The orbit Director can't roll, so a banked object appears tilted in frame but is seen from the correct side.)
+
+| Key | View |
+|-----|------|
+| **1** | Front |
+| **2** | Left |
+| **3** | Rear |
+| **4** | Right |
+| **5** | Top |
+| **6** | Bottom |
+
+The snap uses the object's pose at the **current playhead** — if you scrub to a frame where the object has turned, press the key again to re-frame. Works in any control mode while Scene mode is active, so the flow is: **S** → select via **O** (or click a Timeline lane) → press **1–6** → pose the part.
 
 <div style="page-break-after: always;"></div>
 

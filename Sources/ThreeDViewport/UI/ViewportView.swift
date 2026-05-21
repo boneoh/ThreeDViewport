@@ -11,13 +11,15 @@ enum ControlMode {
     case light
     case object   // individual part
     case model    // all parts of a group move as one rigid body
+    case director // Scene-mode only: arrow keys / mouse navigate the Director POV
 
     var displayName: String {
         switch self {
-        case .camera: return "Camera"
-        case .light:  return "Light"
-        case .object: return "Object"
-        case .model:  return "Model"
+        case .camera:   return "Camera"
+        case .light:    return "Light"
+        case .object:   return "Object"
+        case .model:    return "Model"
+        case .director: return "Director"
         }
     }
 }
@@ -492,7 +494,9 @@ final class ViewportView: MTKView {
     /// The TrackRef matching the current control mode + selection.  Single source
     /// of truth for "which timeline lane is active", reused by setControlMode and
     /// emitCurrentControlMode.
-    var currentTrackRef: TrackRef {
+    /// The TrackRef matching the current control mode + selection, or nil for
+    /// `.director` (the Director POV is not a timeline track).
+    var currentTrackRef: TrackRef? {
         switch controlMode {
         case .camera: return .camera
         case .object: return .object(sceneManager.selectedIndex)
@@ -501,20 +505,22 @@ final class ViewportView: MTKView {
             // The group header lane when the selection belongs to a group.
             if let gid = sceneManager.selectedGroupID { return .group(gid) }
             return .object(sceneManager.selectedIndex)
+        case .director:
+            return nil
         }
     }
 
     func setControlMode(_ mode: ControlMode) {
         controlMode = mode
         syncOverlayState()
-        onControlModeChanged?(currentTrackRef)
+        if let ref = currentTrackRef { onControlModeChanged?(ref) }
     }
 
     /// Re-broadcasts the current selection via onControlModeChanged.  Called when
     /// the Timeline Editor opens so it highlights the active lane immediately,
     /// instead of waiting for the next selection change.
     func emitCurrentControlMode() {
-        onControlModeChanged?(currentTrackRef)
+        if let ref = currentTrackRef { onControlModeChanged?(ref) }
     }
 
     // MARK: - Overlay sync
@@ -542,6 +548,8 @@ final class ViewportView: MTKView {
             } else {
                 overlayState.selectedItemName = sceneManager.selectedObject?.name ?? ""
             }
+        case .director:
+            overlayState.selectedItemName = "POV"
         }
     }
 
@@ -672,6 +680,93 @@ final class ViewportView: MTKView {
             + String(format: "%.2f", center.z) + ")"
             + " radius=" + String(format: "%.2f", radius)
             + " distance=" + String(format: "%.2f", director.distance))
+    }
+
+    // MARK: - Director standard views (Scene mode)
+
+    /// One of the six axis-aligned views the number keys 1–6 snap the Director to.
+    enum StandardView { case front, left, rear, right, top, bottom }
+
+    /// Snaps the Director to an object-relative standard view of the current
+    /// selection's group, framed to fit.  Object-relative: the view axes come from
+    /// the group root's (parent's) current world orientation, so "Front" always
+    /// shows the object's front no matter how it's flown / turned.  The orbit
+    /// Director can't roll, so a banked object appears tilted but is seen from the
+    /// correct side.  One-shot snap at the current pose — re-press after scrubbing.
+    func snapDirectorToObjectView(_ view: StandardView) {
+        guard sceneModeActive else { return }
+        let parts = groupParts()
+        guard !parts.isEmpty else { return }
+
+        // Orientation reference: the group root (parentIndex == nil), else the
+        // selected object.  Its rendered world rotation gives the local axes.
+        let root   = parts.first(where: { $0.parentIndex == nil }) ?? parts[0]
+        let groupT = root.groupID.flatMap { sceneManager.groupTransforms[$0] }
+                   ?? matrix_identity_float4x4
+        let world  = groupT * root.transform
+        let localRight = simd_normalize(SIMD3<Float>(world.columns.0.x, world.columns.0.y, world.columns.0.z))
+        let localUp    = simd_normalize(SIMD3<Float>(world.columns.1.x, world.columns.1.y, world.columns.1.z))
+        let localFwd   = simd_normalize(SIMD3<Float>(world.columns.2.x, world.columns.2.y, world.columns.2.z))
+
+        // Eye direction (object centre → camera).  This model's front is +Z, right
+        // is +X, up is +Y.  Flip a pair here if a model reads reversed.
+        let eyeDir: SIMD3<Float>
+        switch view {
+        case .front:  eyeDir =  localFwd
+        case .rear:   eyeDir = -localFwd
+        case .right:  eyeDir =  localRight
+        case .left:   eyeDir = -localRight
+        case .top:    eyeDir =  localUp
+        case .bottom: eyeDir = -localUp
+        }
+
+        let (center, radius) = groupWorldBounds(parts)
+        // Convert the world view direction into the orbit camera's yaw / pitch.
+        let dir   = simd_normalize(eyeDir)
+        var pitch = asin(max(-1, min(1, dir.y)))
+        pitch     = max(-Float.pi / 2 + 0.01, min(Float.pi / 2 - 0.01, pitch))
+        let yaw   = atan2(dir.x, dir.z)
+        // Fit distance for the Director's current FOV (small margin so it isn't flush).
+        let fov      = director.fovYRadians
+        let distance = radius / max(sin(fov * 0.5), 0.01) * 1.05
+
+        director.target   = center
+        director.yaw      = yaw
+        director.pitch    = pitch
+        director.distance = max(distance, 0.1)
+
+        print("[DEBUG] ViewportView: director snapped to \(view)")
+    }
+
+    /// World-space bounding sphere (centre + radius) over `parts` at their current
+    /// pose, including the group-transform layer.  Mirrors autoFitDirector's AABB.
+    private func groupWorldBounds(_ parts: [SceneObject]) -> (center: SIMD3<Float>, radius: Float) {
+        let gid    = parts.first?.groupID
+        let groupT = gid.flatMap { sceneManager.groupTransforms[$0] } ?? matrix_identity_float4x4
+        var wMin = SIMD3<Float>(repeating:  Float.infinity)
+        var wMax = SIMD3<Float>(repeating: -Float.infinity)
+        for obj in parts {
+            let rendered = groupT * obj.transform
+            let corners: [SIMD3<Float>] = [
+                SIMD3(obj.boundingMin.x, obj.boundingMin.y, obj.boundingMin.z),
+                SIMD3(obj.boundingMax.x, obj.boundingMin.y, obj.boundingMin.z),
+                SIMD3(obj.boundingMin.x, obj.boundingMax.y, obj.boundingMin.z),
+                SIMD3(obj.boundingMax.x, obj.boundingMax.y, obj.boundingMin.z),
+                SIMD3(obj.boundingMin.x, obj.boundingMin.y, obj.boundingMax.z),
+                SIMD3(obj.boundingMax.x, obj.boundingMin.y, obj.boundingMax.z),
+                SIMD3(obj.boundingMin.x, obj.boundingMax.y, obj.boundingMax.z),
+                SIMD3(obj.boundingMax.x, obj.boundingMax.y, obj.boundingMax.z),
+            ]
+            for c in corners {
+                let w4 = rendered * SIMD4<Float>(c, 1)
+                wMin = simd_min(wMin, SIMD3<Float>(w4.x, w4.y, w4.z))
+                wMax = simd_max(wMax, SIMD3<Float>(w4.x, w4.y, w4.z))
+            }
+        }
+        let center     = (wMin + wMax) * 0.5
+        let halfExtent = (wMax - wMin) * 0.5
+        let radius     = max(simd_length(halfExtent), 0.1)
+        return (center, radius)
     }
 
     // MARK: - Load error alert
@@ -1416,6 +1511,21 @@ final class ViewportView: MTKView {
                 break
             }
 
+        } else if controlMode == .director {
+            // Director POV: axis-locked pan of the viewpoint (Scene mode only).
+            if dragLockAxis == .none {
+                dragAccumX += dx
+                dragAccumY += dy
+                let dist = (dragAccumX * dragAccumX + dragAccumY * dragAccumY).squareRoot()
+                guard dist >= dragLockThreshold else { return }
+                dragLockAxis = abs(dragAccumX) >= abs(dragAccumY) ? .horizontal : .vertical
+            }
+            switch dragLockAxis {
+            case .horizontal: director.pan(deltaX: -dx, deltaY: 0)
+            case .vertical:   director.pan(deltaX: 0,  deltaY: dy)
+            case .none:       return
+            }
+
         } else {
             // Camera mode: axis-locked pan.
             if dragLockAxis == .none {
@@ -1471,8 +1581,14 @@ final class ViewportView: MTKView {
                                                      axis: viewCamera.rightVector))
             let rot  = vRot * hRot   // horizontal applied first, vertical on top
 
-            let localCentre = (obj.boundingMin + obj.boundingMax) * 0.5
-            let wc4   = obj.transform * SIMD4<Float>(localCentre, 1)
+            // Pivot in the part's LOCAL space: rigged parts (those with a parent)
+            // pivot at the joint origin (0,0,0) so the whole sub-chain swings around
+            // the joint — true FK posing, matching the keyboard.  Standalone objects
+            // keep pivoting around their visual centre.
+            let localPivot = obj.parentIndex != nil
+                ? SIMD3<Float>(0, 0, 0)
+                : (obj.boundingMin + obj.boundingMax) * 0.5
+            let wc4   = obj.transform * SIMD4<Float>(localPivot, 1)
             let pivot = SIMD3<Float>(wc4.x, wc4.y, wc4.z)
 
             let c0 = rot * SIMD4<Float>(obj.transform.columns.0.x,
@@ -1488,7 +1604,7 @@ final class ViewportView: MTKView {
             obj.transform.columns.1 = SIMD4<Float>(c1.x, c1.y, c1.z, 0)
             obj.transform.columns.2 = SIMD4<Float>(c2.x, c2.y, c2.z, 0)
 
-            let mc4    = obj.transform * SIMD4<Float>(localCentre, 0)
+            let mc4    = obj.transform * SIMD4<Float>(localPivot, 0)
             let newPos = pivot - SIMD3<Float>(mc4.x, mc4.y, mc4.z)
             obj.transform.columns.3 = SIMD4<Float>(newPos.x, newPos.y, newPos.z, 1)
             syncLocalTransform(obj)
@@ -1511,6 +1627,10 @@ final class ViewportView: MTKView {
         case .camera:
             // Right drag: free-look on both axes.
             camera.freeLook(deltaYaw: -dx * sensitivity, deltaPitch: dy * sensitivity)
+
+        case .director:
+            // Director POV (Scene mode only): free-look the viewpoint.
+            director.freeLook(deltaYaw: -dx * sensitivity, deltaPitch: dy * sensitivity)
         }
     }
 
@@ -1596,6 +1716,13 @@ final class ViewportView: MTKView {
             }
         }
 
+        // Director mode (Scene mode only): scroll wheel dollies the Director POV
+        // in / out — the "get closer to the part" move.
+        if controlMode == .director, !timeline.isPlaying {
+            director.dolly(delta: delta)
+            return
+        }
+
         // Camera mode: scroll wheel dollies the rig (translates along forward).
         // Focal-length / FOV change is on the +/− keys instead.
         if controlMode == .camera, !timeline.isPlaying {
@@ -1675,6 +1802,9 @@ final class ViewportView: MTKView {
             times = idx < sceneManager.objects.count
                 ? (sceneManager.objects[idx].keyframeTrack?.keyframes.map { $0.time } ?? [])
                 : []
+        case .director:
+            // The Director POV has no keyframe track.
+            times = []
         }
         guard !times.isEmpty else { return }
         let sorted = times.sorted()
@@ -1739,6 +1869,15 @@ final class ViewportView: MTKView {
                 } else {
                     camera.pan(deltaX: -dxF * panStep, deltaY: dyF * panStep)
                 }
+            }
+
+        case .director:
+            // Navigate the Director POV (Scene mode only).  Mirrors Camera mode
+            // but operates on `director`: plain arrows pan, Shift+arrows aim.
+            if shift {
+                director.freeLook(deltaYaw: dxF * rotStep, deltaPitch: dyF * rotStep)
+            } else {
+                director.pan(deltaX: -dxF * panStep, deltaY: dyF * panStep)
             }
 
         case .light:
@@ -1815,6 +1954,10 @@ final class ViewportView: MTKView {
             // +/− changes focal length (FOV). Scroll wheel handles dolly.
             camera.lensZoom(delta: sign * zoomStep / 0.05)
 
+        case .director:
+            // Director POV (Scene mode only): +/− changes the Director's FOV.
+            director.lensZoom(delta: sign * zoomStep / 0.05)
+
         case .light:
             lightManager.translateSelected(by: fwd * (sign * translateStep * 2))
 
@@ -1859,6 +2002,14 @@ final class ViewportView: MTKView {
         static let p:        UInt16 = 35   // play / pause
         static let r:        UInt16 = 15   // reset object orientation to base
         static let s:        UInt16 = 1    // toggle Scene mode (Director view)
+        static let d:        UInt16 = 2    // Director mode (Scene mode only)
+        // Number row 1–6 — Director standard views (Scene mode only)
+        static let num1:     UInt16 = 18   // Front
+        static let num2:     UInt16 = 19   // Left
+        static let num3:     UInt16 = 20   // Rear
+        static let num4:     UInt16 = 21   // Right
+        static let num5:     UInt16 = 23   // Top
+        static let num6:     UInt16 = 22   // Bottom
         // Regular arrow keys
         static let left:     UInt16 = 123
         static let right:    UInt16 = 124
@@ -1929,6 +2080,8 @@ final class ViewportView: MTKView {
                 }
             case .light:
                 addLightKeyframeAtCurrentTime(forLightAt: lightManager.selectedIndex)
+            case .director:
+                break   // Director POV has no keyframes
             }
             return
         }
@@ -1988,6 +2141,8 @@ final class ViewportView: MTKView {
                     }
                 case .light:
                     addLightKeyframeAtCurrentTime(forLightAt: lightManager.selectedIndex)
+                case .director:
+                    break   // Director POV has no keyframes
                 }
                 return
 
@@ -2040,6 +2195,26 @@ final class ViewportView: MTKView {
                 }
                 return
 
+            case KC.d:
+                // D — Director navigation mode.  Only meaningful in Scene mode, but
+                // always consumed here so it never forwards to the Timeline Editor
+                // (where D deletes a keyframe).
+                if sceneModeActive {
+                    controlMode = .director
+                    syncOverlayState()
+                    // Director POV has no timeline lane — don't broadcast a selection.
+                }
+                return
+
+            // Number row 1–6: snap the Director to a standard view of the selection
+            // (Scene mode only).  Outside Scene mode they fall through unconsumed.
+            case KC.num1: if sceneModeActive { snapDirectorToObjectView(.front);  return }
+            case KC.num2: if sceneModeActive { snapDirectorToObjectView(.left);   return }
+            case KC.num3: if sceneModeActive { snapDirectorToObjectView(.rear);   return }
+            case KC.num4: if sceneModeActive { snapDirectorToObjectView(.right);  return }
+            case KC.num5: if sceneModeActive { snapDirectorToObjectView(.top);    return }
+            case KC.num6: if sceneModeActive { snapDirectorToObjectView(.bottom); return }
+
             case KC.r:
                 // R — reset rotation / orientation to defaults.
                 //   ⌘R while in Scene mode: re-auto-fit the Director.
@@ -2068,8 +2243,15 @@ final class ViewportView: MTKView {
                 //   First entry in this session auto-fits the Director to the scene.
                 //   Subsequent toggles keep the last Director pose (⌘R to re-fit).
                 sceneModeActive.toggle()
-                if sceneModeActive && !directorEverFit {
-                    autoFitDirector()
+                if sceneModeActive {
+                    if !directorEverFit { autoFitDirector() }
+                    // Auto-engage Director navigation — you usually reframe first.
+                    controlMode = .director
+                } else if controlMode == .director {
+                    // Director mode is meaningless outside Scene mode — revert to
+                    // Camera and restore the matching timeline-lane highlight.
+                    controlMode = .camera
+                    onControlModeChanged?(.camera)
                 }
                 syncOverlayState()
                 print("[DEBUG] ViewportView: Scene mode = " + (sceneModeActive ? "ON" : "OFF"))
