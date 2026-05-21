@@ -796,8 +796,9 @@ final class TimelineEditorView: NSView {
             } else {
                 // ── Plain click on an unselected diamond ───────────────────────
                 // Collapse the multi-selection; this diamond becomes the only one.
+                // NOTE: don't clear multiClipboard here — it's a copy buffer, not a
+                // selection, so it must survive clicks (only a new copy resets it).
                 multiSelectedDiamonds.removeAll()
-                multiClipboard.removeAll()
             }
 
             // Always update single-select and seek so the playhead follows the click.
@@ -820,10 +821,10 @@ final class TimelineEditorView: NSView {
         if let lane = hitTestLane(at: pt, tracks: tracks) {
             let row = tracks[lane]
 
-            // Plain lane click (no modifier) clears multi-selection.
+            // Plain lane click (no modifier) clears multi-selection (but not the
+            // copy buffer — multiClipboard persists until the next copy).
             if !isOption {
                 multiSelectedDiamonds.removeAll()
-                multiClipboard.removeAll()
             }
 
             if row.isGroupHeader, let gid = row.groupID {
@@ -849,9 +850,8 @@ final class TimelineEditorView: NSView {
             return
         }
 
-        // Click outside all lanes → deselect everything.
+        // Click outside all lanes → deselect everything (keep the copy buffer).
         multiSelectedDiamonds.removeAll()
-        multiClipboard.removeAll()
         select(trackIndex: nil, kfIndex: nil)
     }
 
