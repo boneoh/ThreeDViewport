@@ -39,7 +39,8 @@ struct ProjectData: Codable {
     var camera:              CameraData
     var objects:             [ObjectData]
     var cameraKeyframes:     [CameraKeyframeData] = []  // v2; empty = no camera animation.
-    var isColorMode:         Bool = true                // v4; color / greyscale toggle.
+    var isColorMode:         Bool = true                // v4; legacy color/greyscale flag (kept for migration + old-app compat).
+    var colorMode:           Int  = 1                   // v18; RenderColorMode raw (0=greyscale, 1=color, 2=black+white).
     var feedback:            FeedbackData = FeedbackData()  // v5; feedback delay-line settings.
     /// v6: one inner array per light slot (index 0–3).
     var lightKeyframeTracks: [[LightKeyframeData]] = []
@@ -64,6 +65,7 @@ struct ProjectData: Codable {
          objects:             [ObjectData],
          cameraKeyframes:     [CameraKeyframeData]   = [],
          isColorMode:         Bool                   = true,
+         colorMode:           Int                    = 1,
          feedback:            FeedbackData           = FeedbackData(),
          lightKeyframeTracks: [[LightKeyframeData]]  = [],
          isLooping:           Bool                   = false,
@@ -83,6 +85,7 @@ struct ProjectData: Codable {
         self.objects             = objects
         self.cameraKeyframes     = cameraKeyframes
         self.isColorMode         = isColorMode
+        self.colorMode           = colorMode
         self.feedback            = feedback
         self.lightKeyframeTracks = lightKeyframeTracks
         self.isLooping           = isLooping
@@ -114,6 +117,9 @@ struct ProjectData: Codable {
         modelPaths          = (try? c.decode([String].self,              forKey: .modelPaths))          ?? []
         cameraKeyframes     = (try? c.decode([CameraKeyframeData].self,  forKey: .cameraKeyframes))     ?? []
         isColorMode         = (try? c.decode(Bool.self,                  forKey: .isColorMode))         ?? true
+        // v18: prefer the explicit 3-state colorMode; older files only have the
+        // legacy isColorMode bool, so map true→color(1), false→greyscale(0).
+        colorMode           = (try? c.decode(Int.self,                   forKey: .colorMode))           ?? (isColorMode ? 1 : 0)
         feedback            = (try? c.decode(FeedbackData.self,          forKey: .feedback))            ?? FeedbackData()
         lightKeyframeTracks = (try? c.decode([[LightKeyframeData]].self, forKey: .lightKeyframeTracks)) ?? []
         isLooping           = (try? c.decode(Bool.self,                  forKey: .isLooping))           ?? false

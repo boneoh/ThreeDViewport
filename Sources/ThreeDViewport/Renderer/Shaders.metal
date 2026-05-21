@@ -331,10 +331,16 @@ fragment float4 fragment_main(
     // ── Gamma encode for .bgra8Unorm render target ─────────────────────────
     color = pow(saturate(color), float3(1.0 / 2.2));
 
-    // ── Greyscale mode — convert to Rec.709 luminance ─────────────────────
+    // ── Render mode ───────────────────────────────────────────────────────
+    //   0 = greyscale (Rec.709 luminance)
+    //   1 = color (leave as-is)
+    //   2 = black + white matte: every object fragment is solid white so it
+    //       forms a clean, hole-free silhouette over the (black) background.
     if (matData.colorMode == 0) {
         float luma = dot(color, float3(0.2126, 0.7152, 0.0722));
         color = float3(luma);
+    } else if (matData.colorMode == 2) {
+        color = float3(1.0);
     }
 
     return float4(color, 1.0);

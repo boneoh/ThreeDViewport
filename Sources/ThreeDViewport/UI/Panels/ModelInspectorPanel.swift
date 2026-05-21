@@ -91,14 +91,18 @@ struct ModelInspectorPanel: View {
             Toggle(isOn: $state.isVisible) {
                 Text("Visible")
                     .font(.caption)
+                    .foregroundColor(state.isVisible ? .green : .primary)
             }
             .toggleStyle(.switch)
+            .tint(.green)
 
             Toggle(isOn: $state.occludeWhenHidden) {
                 Text("Holdout (occlude while hidden)")
                     .font(.caption)
+                    .foregroundColor(state.occludeWhenHidden ? .green : .primary)
             }
             .toggleStyle(.switch)
+            .tint(.green)
             .help("When hidden, this object still blocks objects behind it — cutting "
                 + "a hole in the matte without drawing itself. Only takes effect while hidden.")
 

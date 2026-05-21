@@ -443,10 +443,6 @@ final class TimelineEditorView: NSView {
         NSColor(white: 0.22, alpha: 1).setFill()
         NSBezierPath.fill(NSRect(x: 0, y: 0, width: labelWidth, height: totalH))
 
-        // ── Ruler background ──────────────────────────────────────────────────
-        NSColor(white: 0.14, alpha: 1).setFill()
-        NSBezierPath.fill(NSRect(x: 0, y: 0, width: w, height: rulerHeight))
-
         // ── Lane rows ─────────────────────────────────────────────────────────
         for (i, row) in tracks.enumerated() {
             let isHeader   = row.isGroupHeader
@@ -545,37 +541,6 @@ final class TimelineEditorView: NSView {
             NSGraphicsContext.current?.restoreGraphicsState()
         }
 
-        // ── Ruler ticks + time labels ─────────────────────────────────────────
-        let tickAttrs: [NSAttributedString.Key: Any] = [
-            .font:            NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .regular),
-            .foregroundColor: NSColor(white: 0.55, alpha: 1)
-        ]
-        // Choose label density based on available pixel density
-        let labelEvery: Int = duration > 60 ? 10 : (duration > 30 ? 5 : (duration > 15 ? 2 : 1))
-
-        var t: Double = 0
-        while t <= duration + 0.0001 {
-            let x = timeToX(t)
-            if x >= labelWidth - 1 && x <= w + 1 {
-                let isFive = Int(round(t)) % 5 == 0
-                let tickH: CGFloat = isFive ? 10 : 6
-                let tick  = NSBezierPath()
-                tick.move(to: NSPoint(x: x, y: rulerHeight - tickH))
-                tick.line(to: NSPoint(x: x, y: rulerHeight))
-                NSColor(white: 0.45, alpha: 1).setStroke()
-                tick.lineWidth = isFive ? 1.5 : 0.8
-                tick.stroke()
-
-                if Int(round(t)) % labelEvery == 0 {
-                    let label = String(format: "%.0fs", t) as NSString
-                    let size  = label.size(withAttributes: tickAttrs)
-                    label.draw(at: NSPoint(x: x - size.width / 2, y: 4),
-                               withAttributes: tickAttrs)
-                }
-            }
-            t += 1
-        }
-
         // ── Duration end marker ───────────────────────────────────────────────
         let endX = timeToX(duration)
         if endX >= labelWidth && endX <= w {
@@ -645,43 +610,17 @@ final class TimelineEditorView: NSView {
             }
         }
 
-        // ── Playhead ──────────────────────────────────────────────────────────
+        // ── Playhead line through the lanes ───────────────────────────────────
+        // The ruler triangle is drawn by the floating header (drawRulerHeader) so
+        // it stays visible when the lanes are scrolled.
         let phX = timeToX(curTime)
         if phX >= labelWidth - 1 && phX <= w + 1 {
-            // Downward triangle in ruler
-            let tri = NSBezierPath()
-            tri.move(to: NSPoint(x: phX - 5, y: 0))
-            tri.line(to: NSPoint(x: phX + 5, y: 0))
-            tri.line(to: NSPoint(x: phX,     y: 9))
-            tri.close()
-            NSColor.systemRed.setFill()
-            tri.fill()
-
-            // Vertical line through all lanes
             let line = NSBezierPath()
-            line.move(to: NSPoint(x: phX, y: 9))
+            line.move(to: NSPoint(x: phX, y: rulerHeight))
             line.line(to: NSPoint(x: phX, y: totalH))
             NSColor.systemRed.withAlphaComponent(0.75).setStroke()
             line.lineWidth = 1.5
             line.stroke()
-        }
-
-        // ── Ruler bottom border ───────────────────────────────────────────────
-        NSColor(white: 0.10, alpha: 1).setFill()
-        NSBezierPath.fill(NSRect(x: 0, y: rulerHeight - 1, width: w, height: 1))
-
-        // ── Edit-mode badge ───────────────────────────────────────────────────
-        if isEditingKeyframe {
-            let badge = "● EDITING — Return to commit  ·  Esc to cancel" as NSString
-            let badgeAttrs: [NSAttributedString.Key: Any] = [
-                .font:            NSFont.systemFont(ofSize: 10, weight: .semibold),
-                .foregroundColor: NSColor(red: 1.0, green: 0.75, blue: 0.20, alpha: 1)
-            ]
-            let badgeSize = badge.size(withAttributes: badgeAttrs)
-            badge.draw(
-                at: NSPoint(x: labelWidth + 8, y: (rulerHeight - badgeSize.height) / 2),
-                withAttributes: badgeAttrs
-            )
         }
 
         // ── Rubber-band selection rectangle ───────────────────────────────────
@@ -702,6 +641,100 @@ final class TimelineEditorView: NSView {
             bandPath.lineWidth = 1
             NSColor.controlAccentColor.setStroke()
             bandPath.stroke()
+        }
+
+        // ── Floating ruler header ─────────────────────────────────────────────
+        // Drawn last, offset to the top of the scroll view's visible area, so the
+        // ruler (ticks, time labels, playhead marker, EDITING badge) stays pinned
+        // at the top while the lanes scroll beneath it.
+        drawRulerHeader(originY: visibleRect.minY, duration: duration, curTime: curTime, w: w)
+
+        // Easing dropdowns are real subviews and render above the drawn header,
+        // so hide any that have scrolled up under it.
+        updateEasingPopupOcclusion()
+    }
+
+    /// Hides easing popups whose row has scrolled under the floating ruler header
+    /// (subviews always render above drawn content, so they'd poke through it).
+    /// Re-shown when the row scrolls back below the header.
+    private func updateEasingPopupOcclusion() {
+        let band = NSRect(x: 0, y: visibleRect.minY, width: bounds.width, height: rulerHeight)
+        for popup in easingPopups {
+            popup.isHidden = popup.frame.intersects(band)
+        }
+    }
+
+    /// Draws the ruler header band at vertical offset `originY` (= the scroll
+    /// view's visible-rect top), so it floats above the scrolling lanes.
+    private func drawRulerHeader(originY: CGFloat, duration: Double, curTime: Double, w: CGFloat) {
+        // Background band (full width, including over the label column).
+        NSColor(white: 0.14, alpha: 1).setFill()
+        NSBezierPath.fill(NSRect(x: 0, y: originY, width: w, height: rulerHeight))
+
+        // ── Ticks + time labels ───────────────────────────────────────────────
+        let tickAttrs: [NSAttributedString.Key: Any] = [
+            .font:            NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .regular),
+            .foregroundColor: NSColor(white: 0.55, alpha: 1)
+        ]
+        let labelEvery: Int = duration > 60 ? 10 : (duration > 30 ? 5 : (duration > 15 ? 2 : 1))
+        var t: Double = 0
+        while t <= duration + 0.0001 {
+            let x = timeToX(t)
+            if x >= labelWidth - 1 && x <= w + 1 {
+                let isFive = Int(round(t)) % 5 == 0
+                let tickH: CGFloat = isFive ? 10 : 6
+                let tick  = NSBezierPath()
+                tick.move(to: NSPoint(x: x, y: originY + rulerHeight - tickH))
+                tick.line(to: NSPoint(x: x, y: originY + rulerHeight))
+                NSColor(white: 0.45, alpha: 1).setStroke()
+                tick.lineWidth = isFive ? 1.5 : 0.8
+                tick.stroke()
+
+                if Int(round(t)) % labelEvery == 0 {
+                    let label = String(format: "%.0fs", t) as NSString
+                    let size  = label.size(withAttributes: tickAttrs)
+                    label.draw(at: NSPoint(x: x - size.width / 2, y: originY + 4),
+                               withAttributes: tickAttrs)
+                }
+            }
+            t += 1
+        }
+
+        // ── Playhead marker (triangle + connector within the ruler band) ──────
+        let phX = timeToX(curTime)
+        if phX >= labelWidth - 1 && phX <= w + 1 {
+            let tri = NSBezierPath()
+            tri.move(to: NSPoint(x: phX - 5, y: originY))
+            tri.line(to: NSPoint(x: phX + 5, y: originY))
+            tri.line(to: NSPoint(x: phX,     y: originY + 9))
+            tri.close()
+            NSColor.systemRed.setFill()
+            tri.fill()
+
+            let connector = NSBezierPath()
+            connector.move(to: NSPoint(x: phX, y: originY + 9))
+            connector.line(to: NSPoint(x: phX, y: originY + rulerHeight))
+            NSColor.systemRed.withAlphaComponent(0.75).setStroke()
+            connector.lineWidth = 1.5
+            connector.stroke()
+        }
+
+        // ── Bottom border ─────────────────────────────────────────────────────
+        NSColor(white: 0.10, alpha: 1).setFill()
+        NSBezierPath.fill(NSRect(x: 0, y: originY + rulerHeight - 1, width: w, height: 1))
+
+        // ── Edit-mode badge ───────────────────────────────────────────────────
+        if isEditingKeyframe {
+            let badge = "● EDITING — Return to commit  ·  Esc to cancel" as NSString
+            let badgeAttrs: [NSAttributedString.Key: Any] = [
+                .font:            NSFont.systemFont(ofSize: 10, weight: .semibold),
+                .foregroundColor: NSColor(red: 1.0, green: 0.75, blue: 0.20, alpha: 1)
+            ]
+            let badgeSize = badge.size(withAttributes: badgeAttrs)
+            badge.draw(
+                at: NSPoint(x: labelWidth + 8, y: originY + (rulerHeight - badgeSize.height) / 2),
+                withAttributes: badgeAttrs
+            )
         }
     }
 
@@ -1001,13 +1034,17 @@ final class TimelineEditorView: NSView {
         case 124:       // Right arrow → always forward to viewport (incl. edit mode).
             forwardToViewport(event)
 
-        case 3:         // F → nudge selected diamond one frame forward.
+        case 3:         // F → nudge selected keyframe(s) one frame forward.
             guard !isEditingKeyframe else { super.keyDown(with: event); return }
-            nudgeSelected(by: 1.0 / 30.0, tracks: tracks)
+            nudgeSelectedKeyframe(by: 1.0 / 30.0)
 
-        case 11:        // B → nudge selected diamond one frame backward.
+        case 11:        // B → nudge selected keyframe(s) one frame backward.
             guard !isEditingKeyframe else { super.keyDown(with: event); return }
-            nudgeSelected(by: -1.0 / 30.0, tracks: tracks)
+            nudgeSelectedKeyframe(by: -1.0 / 30.0)
+
+        case 0:         // A → align multi-selected keyframes to the earliest selected.
+            guard !isEditingKeyframe else { super.keyDown(with: event); return }
+            alignSelectedKeyframes()
 
         default:
             // Forward unrecognised keys to the viewport so shortcuts like
@@ -1220,6 +1257,33 @@ final class TimelineEditorView: NSView {
         }
     }
 
+    /// Applies a batch of keyframe moves, overwriting any non-moving keyframe that
+    /// a move lands on.  Groups moves by lane so each track pulls its moving
+    /// keyframes out and re-adds them (addKeyframe's 1-ms dedupe removes victims).
+    /// Used by the discrete moves (single/group nudge, align); the live drag still
+    /// uses applyRetime so it doesn't delete keyframes mid-drag.
+    private func applyMovesOverwriting(_ moves: [(ref: TrackRef, oldTime: Double, newTime: Double)]) {
+        var refs: [TrackRef] = []
+        for m in moves where !refs.contains(m.ref) { refs.append(m.ref) }
+        for ref in refs {
+            let group = moves.filter { $0.ref == ref }
+            let from  = group.map { $0.oldTime }
+            let to    = group.map { $0.newTime }
+            switch ref {
+            case .camera:
+                camera?.keyframeTrack?.moveKeyframes(from: from, to: to)
+            case .object(let i):
+                sceneManager?.objects[safe: i]?.keyframeTrack?.moveKeyframes(from: from, to: to)
+            case .light(let i):
+                if let lm = lightManager, i < lm.keyframeTracks.count {
+                    lm.keyframeTracks[i]?.moveKeyframes(from: from, to: to)
+                }
+            case .group(let gid):
+                sceneManager?.groupKeyframeTracks[gid]?.moveKeyframes(from: from, to: to)
+            }
+        }
+    }
+
     private func deleteSelectedKeyframe(tracks: TrackList) {
         // ── Multi-select path ─────────────────────────────────────────────────
         if multiSelectedDiamonds.count >= 2 {
@@ -1339,7 +1403,90 @@ final class TimelineEditorView: NSView {
 
     /// Called by ViewportView when F or B is pressed while the viewport has focus.
     func nudgeSelectedKeyframe(by delta: Double) {
-        nudgeSelected(by: delta, tracks: buildTracks())
+        let tracks = buildTracks()
+        if multiSelectedDiamonds.count >= 2 {
+            nudgeMultiSelected(by: delta, tracks: tracks)
+        } else {
+            nudgeSelected(by: delta, tracks: tracks)
+        }
+    }
+
+    /// Moves every keyframe in the multi-selection by `delta` (one frame per F/B
+    /// press), clamped to [0, duration], keeping their relative spacing.  Mirrors
+    /// the multi-diamond drag: snapshot times first, retime, then rebuild the set.
+    private func nudgeMultiSelected(by delta: Double, tracks: TrackList) {
+        let maxT = timeline?.duration ?? Double.infinity
+        var entries: [(ref: TrackRef, oldTime: Double)] = []
+        for d in multiSelectedDiamonds {
+            guard d.trackIndex < tracks.count else { continue }
+            let ref   = tracks[d.trackIndex].ref
+            let times = keyframeTimes(for: ref)
+            guard d.kfIndex < times.count else { continue }
+            entries.append((ref, times[d.kfIndex]))
+        }
+        guard !entries.isEmpty else { return }
+
+        let moves = entries.map { (ref: $0.ref, oldTime: $0.oldTime,
+                                   newTime: max(0, min(maxT, $0.oldTime + delta))) }
+        applyMovesOverwriting(moves)
+
+        // Rebuild selection with post-move indices.
+        var updated = Set<SelectedDiamond>()
+        for m in moves {
+            if let ti = tracks.firstIndex(where: { $0.ref == m.ref }) {
+                let times = keyframeTimes(for: m.ref)
+                if let ki = times.firstIndex(where: { abs($0 - m.newTime) < 0.0005 }) {
+                    updated.insert(SelectedDiamond(trackIndex: ti, kfIndex: ki))
+                }
+            }
+        }
+        multiSelectedDiamonds = updated
+        needsDisplay = true
+    }
+
+    /// Aligns the multi-selection to a common time (the earliest selected), so
+    /// keyframes across lanes line up vertically.  Aborts (with a beep) if any
+    /// single lane has more than one selected keyframe.
+    private func alignSelectedKeyframes() {
+        guard multiSelectedDiamonds.count >= 2 else { return }
+        let tracks = buildTracks()
+
+        var seenTracks = Set<Int>()
+        var entries: [(ref: TrackRef, oldTime: Double)] = []
+        for d in multiSelectedDiamonds {
+            guard d.trackIndex < tracks.count else { continue }
+            guard seenTracks.insert(d.trackIndex).inserted else {
+                NSSound.beep()
+                print("[DEBUG] TimelineEditorView: align aborted — a lane has >1 selected keyframe")
+                return
+            }
+            let ref   = tracks[d.trackIndex].ref
+            let times = keyframeTimes(for: ref)
+            guard d.kfIndex < times.count else { continue }
+            entries.append((ref, times[d.kfIndex]))
+        }
+        guard entries.count >= 2 else { return }
+
+        // Snap to the earliest selected time.
+        let target = entries.map { $0.oldTime }.min() ?? 0
+        let moves  = entries.filter { abs($0.oldTime - target) > 0.0005 }
+                            .map { (ref: $0.ref, oldTime: $0.oldTime, newTime: target) }
+        applyMovesOverwriting(moves)
+
+        var updated = Set<SelectedDiamond>()
+        for e in entries {
+            if let ti = tracks.firstIndex(where: { $0.ref == e.ref }) {
+                let times = keyframeTimes(for: e.ref)
+                if let ki = times.firstIndex(where: { abs($0 - target) < 0.0005 }) {
+                    updated.insert(SelectedDiamond(trackIndex: ti, kfIndex: ki))
+                }
+            }
+        }
+        multiSelectedDiamonds = updated
+        timeline?.seek(to: target)
+        needsDisplay = true
+        print("[DEBUG] TimelineEditorView: aligned \(entries.count) keyframes to t="
+            + String(format: "%.3f", target))
     }
 
     private func nudgeSelected(by delta: Double, tracks: TrackList) {
@@ -1352,7 +1499,7 @@ final class TimelineEditorView: NSView {
         let maxT    = timeline?.duration ?? Double.infinity
         let newTime = max(0, min(maxT, oldTime + delta))
 
-        applyRetime(ref: ref, fromTime: oldTime, toTime: newTime)
+        applyMovesOverwriting([(ref, oldTime, newTime)])
 
         let updatedTimes = keyframeTimes(for: ref)
         selectedKFIndex  = updatedTimes.firstIndex { abs($0 - newTime) < 0.0005 }

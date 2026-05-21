@@ -82,7 +82,7 @@ final class VideoExporter {
     private let frameRate:         Double
 
     // Phase 8+: rendering options matching the live display
-    var isColorMode:   Bool = false
+    var colorMode:     RenderColorMode = .color
     var isWireframe:   Bool = false
     var showAxesGizmo: Bool = false
 
@@ -618,7 +618,7 @@ final class VideoExporter {
                         eyePosition:       camera.eyePosition,
                         pipelineState:     holdout,
                         depthStencilState: depthStencilState,
-                        isColorMode:       isColorMode,
+                        colorMode:         colorMode,
                         isWireframe:       false,
                         exposure:          colorGradeSettings?.exposure ?? 1.0,
                         ibl:               ibl,
@@ -637,7 +637,7 @@ final class VideoExporter {
                     eyePosition:       camera.eyePosition,
                     pipelineState:     pipelineState,
                     depthStencilState: depthStencilState,
-                    isColorMode:       isColorMode,
+                    colorMode:         colorMode,
                     isWireframe:       isWireframe,
                     exposure:          colorGradeSettings?.exposure ?? 1.0,
                     ibl:               ibl,

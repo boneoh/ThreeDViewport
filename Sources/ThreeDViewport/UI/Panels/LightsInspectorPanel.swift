@@ -59,14 +59,13 @@ struct LightsInspectorPanel: View {
                 .font(.headline)
                 .padding(.bottom, 2)
 
-            Toggle(isOn: $renderSettings.isColorMode) {
-                HStack(spacing: 6) {
-                    Image(systemName: renderSettings.isColorMode
-                          ? "paintpalette.fill" : "circle.lefthalf.filled")
-                    Text(renderSettings.isColorMode ? "Color (PBR)" : "Greyscale")
-                }
+            Picker("Render mode", selection: $renderSettings.colorMode) {
+                Text("Greyscale").tag(RenderColorMode.greyscale)
+                Text("Color").tag(RenderColorMode.color)
+                Text("B + W").tag(RenderColorMode.blackWhite)
             }
-            .toggleStyle(.switch)
+            .pickerStyle(.segmented)
+            .labelsHidden()
 
             // Phase C: image-based-lighting intensity.
             HStack {

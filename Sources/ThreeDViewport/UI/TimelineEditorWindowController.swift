@@ -8,6 +8,9 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
 
     private(set) var editorView: TimelineEditorView
     private let scrollView: NSScrollView
+    /// Observes clip-view scrolling so the editor fully repaints — required for
+    /// the floating ruler header to track the visible-area top.
+    private var scrollObserver: NSObjectProtocol?
 
     // The panel content height is clamped to this maximum so the timeline
     // doesn't grow taller than the screen; content beyond this scrolls.
@@ -55,6 +58,10 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
         sv.drawsBackground       = false
         sv.documentView          = editor
         sv.autoresizingMask      = [.width, .height]
+        // Emit bounds-change notifications during scroll so we can force a full
+        // editor repaint — required for the floating ruler header to re-anchor to
+        // the top of the visible area (NSClipView only repaints the exposed strip).
+        sv.contentView.postsBoundsChangedNotifications = true
         scrollView = sv
 
         let panel = NSPanel(
@@ -77,10 +84,22 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
         // expands or collapses a group in the timeline.
         editor.onLayoutChanged = { [weak self] in self?.updateWindowHeight() }
 
+        // Redraw the editor as the lanes scroll so the floating ruler header
+        // re-anchors to the top of the visible area.
+        scrollObserver = NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification,
+            object:  sv.contentView,
+            queue:   .main
+        ) { [weak editor] _ in editor?.needsDisplay = true }
+
         print("[DEBUG] TimelineEditorWindowController: initialized")
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    deinit {
+        if let obs = scrollObserver { NotificationCenter.default.removeObserver(obs) }
+    }
 
     // MARK: - Show
 

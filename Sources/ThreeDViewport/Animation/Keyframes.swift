@@ -61,6 +61,25 @@ final class KeyframeTrack {
         keyframes.sort { $0.time < $1.time }
     }
 
+    /// Moves the keyframes currently at `fromTimes` to the parallel `toTimes`,
+    /// overwriting any *other* keyframe that lands on a destination time.  The
+    /// moving keyframes are pulled out first, so they never overwrite each other
+    /// (relative order is preserved regardless of move direction) and re-adding
+    /// uses addKeyframe's 1-ms dedupe to remove collision victims.
+    func moveKeyframes(from fromTimes: [Double], to toTimes: [Double]) {
+        guard fromTimes.count == toTimes.count, !fromTimes.isEmpty else { return }
+        let tol = 0.0005
+        var moving: [TransformKeyframe] = []
+        for ft in fromTimes {
+            if let kf = keyframes.first(where: { abs($0.time - ft) < tol }) { moving.append(kf) }
+        }
+        for ft in fromTimes { keyframes.removeAll { abs($0.time - ft) < tol } }
+        for (i, kf) in moving.enumerated() {
+            var k = kf; k.time = toTimes[i]
+            addKeyframe(k)
+        }
+    }
+
     // MARK: - Evaluation
 
     // Returns the interpolated matrix at the given time, or nil if no keyframes.

@@ -12,6 +12,9 @@ final class SceneOverlayState: ObservableObject {
     /// prepends a "SCENE" badge so it's visually obvious you're not looking
     /// through the recording camera.
     @Published var sceneModeActive:  Bool       = false
+    /// True while a keyframe is being live-edited (Timeline Editor edit mode).
+    /// Drives a second HUD line mirroring the editor's EDITING badge.
+    @Published var isEditing:        Bool       = false
 
     init() {
         print("[DEBUG] SceneOverlayState: initialized")
@@ -27,27 +30,37 @@ struct SceneOverlayView: View {
     @ObservedObject var state: SceneOverlayState
 
     var body: some View {
-        HStack(spacing: 6) {
-            // SCENE badge — only when the Director's-POV view is active.
-            if state.sceneModeActive {
-                Text("SCENE")
-                    .font(.system(size: 10, weight: .heavy, design: .monospaced))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.white.opacity(0.18))
-                    .cornerRadius(4)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                // SCENE badge — only when the Director's-POV view is active.
+                if state.sceneModeActive {
+                    Text("SCENE")
+                        .font(.system(size: 10, weight: .heavy, design: .monospaced))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.white.opacity(0.18))
+                        .cornerRadius(4)
+                }
+
+                Image(systemName: modeIcon)
+                    .foregroundColor(modeColor)
+                    .font(.system(size: 11, weight: .semibold))
+
+                Text(labelText)
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundColor(modeColor)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
 
-            Image(systemName: modeIcon)
-                .foregroundColor(modeColor)
-                .font(.system(size: 11, weight: .semibold))
-
-            Text(labelText)
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .foregroundColor(modeColor)
-                .lineLimit(1)
-                .truncationMode(.middle)
+            // Second line — EDITING badge, mirrors the Timeline Editor's edit mode.
+            if state.isEditing {
+                Text("● EDITING — Return to commit  ·  Esc to cancel")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundColor(Color(red: 1.0, green: 0.75, blue: 0.20))
+                    .lineLimit(1)
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)

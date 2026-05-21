@@ -208,9 +208,9 @@ final class ViewportView: MTKView {
         renderer?.colorGradeSettings  = colorGradeSettings
 
         // Sync renderSettings → renderer whenever toggles change
-        colorModeCancellable = renderSettings.$isColorMode.sink { [weak self] value in
-            self?.renderer?.isColorMode = value
-            print("[DEBUG] ViewportView: colorMode = " + (value ? "color" : "greyscale"))
+        colorModeCancellable = renderSettings.$colorMode.sink { [weak self] value in
+            self?.renderer?.colorMode = value
+            print("[DEBUG] ViewportView: colorMode = " + value.displayName)
         }
         axesGizmoCancellable = renderSettings.$showAxesGizmo.sink { [weak self] value in
             self?.renderer?.showAxesGizmo = value
@@ -1380,7 +1380,7 @@ final class ViewportView: MTKView {
             return
         }
 
-        exporter.isColorMode        = renderSettings.isColorMode
+        exporter.colorMode          = renderSettings.colorMode
         exporter.isWireframe        = renderer?.isWireframe      ?? false
         exporter.showAxesGizmo      = renderSettings.showAxesGizmo
         exporter.feedbackSettings   = feedbackSettings
@@ -2171,7 +2171,8 @@ final class ViewportView: MTKView {
                 return
 
             case KC.g:
-                renderSettings.isColorMode.toggle()
+                // Cycle Greyscale → Color → Black+White.
+                renderSettings.colorMode = renderSettings.colorMode.next
                 return
 
             case KC.c:

@@ -59,13 +59,15 @@ struct FeedbackPanel: View {
                 // ── Header ────────────────────────────────────────────────────
                 HStack {
                     Image(systemName: settings.isEnabled ? "waveform.path.ecg" : "waveform")
-                        .foregroundColor(settings.isEnabled ? .accentColor : .secondary)
+                        .foregroundColor(settings.isEnabled ? .green : .secondary)
                     Text("Feedback")
                         .font(.headline)
+                        .foregroundColor(settings.isEnabled ? .green : .primary)
                     Spacer()
                     Toggle("", isOn: $settings.isEnabled)
                         .toggleStyle(.switch)
                         .labelsHidden()
+                        .tint(.green)
                 }
                 .padding(.bottom, 10)
 

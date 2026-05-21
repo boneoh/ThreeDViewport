@@ -69,7 +69,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     // MARK: - Render mode
 
     var isWireframe:   Bool = false
-    var isColorMode:   Bool = false   // false = greyscale (default)
+    var colorMode:     RenderColorMode = .color   // greyscale / color / black + white
     var showAxesGizmo: Bool = false
 
     // Gizmo pipeline (no depth attachment, alpha-blended 2-D overlay)
@@ -566,7 +566,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                     eyePosition:       viewCamera.eyePosition,
                     pipelineState:     holdout,
                     depthStencilState: ds,
-                    isColorMode:       isColorMode,
+                    colorMode:         colorMode,
                     isWireframe:       false,   // holdout is depth-only; never wireframe
                     exposure:          colorGradeSettings?.exposure ?? 1.0,
                     ibl:               ibl,
@@ -585,7 +585,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                     eyePosition:       viewCamera.eyePosition,
                     pipelineState:     pipeline,
                     depthStencilState: ds,
-                    isColorMode:       isColorMode,
+                    colorMode:         colorMode,
                     isWireframe:       isWireframe,
                     exposure:          colorGradeSettings?.exposure ?? 1.0,
                     ibl:               ibl,

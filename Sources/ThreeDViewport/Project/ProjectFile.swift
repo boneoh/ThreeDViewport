@@ -283,14 +283,15 @@ final class ProjectFile {
         }
 
         return ProjectData(
-            version:             17,
+            version:             18,
             modelPath:           nil,           // v3+ uses modelPaths instead
             modelPaths:          modelPaths,
             timeline:            timelineData,
             camera:              cameraData,
             objects:             objectsData,
             cameraKeyframes:     cameraKfData,
-            isColorMode:         vp.renderSettings.isColorMode,
+            isColorMode:         vp.renderSettings.colorMode == .color,   // legacy compat
+            colorMode:           vp.renderSettings.colorMode.rawValue,
             feedback:            feedbackData,
             lightKeyframeTracks: lightKfData,
             isLooping:           vp.timeline.isLooping,
@@ -405,8 +406,8 @@ final class ProjectFile {
         }
 
         // ── Color mode ────────────────────────────────────────────────────────
-        vp.renderSettings.isColorMode = data.isColorMode
-        print("[DEBUG] ProjectFile: colorMode=" + (data.isColorMode ? "color" : "greyscale"))
+        vp.renderSettings.colorMode = RenderColorMode(rawValue: data.colorMode) ?? .color
+        print("[DEBUG] ProjectFile: colorMode=" + vp.renderSettings.colorMode.displayName)
 
         // ── Feedback settings (v5) ────────────────────────────────────────────
         let fb = data.feedback

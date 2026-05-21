@@ -560,9 +560,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let viewMenu = NSMenu(title: "View")
         viewItem.submenu = viewMenu
 
-        // Greyscale Mode — checkmark driven by validateMenuItem
+        // Render Mode — cycles Greyscale → Color → Black+White; title updated in validateMenuItem
         let greyItem = NSMenuItem(
-            title: "Greyscale Mode",
+            title: "Render Mode",
             action: #selector(toggleColorMode(_:)),
             keyEquivalent: "g"
         )
@@ -1244,9 +1244,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // MARK: - Rendering Toggles
 
     @objc private func toggleColorMode(_ sender: Any) {
-        viewportView?.renderSettings.isColorMode.toggle()
-        print("[DEBUG] AppDelegate: colorMode toggled to "
-            + String(viewportView?.renderSettings.isColorMode ?? false))
+        // Cycle Greyscale → Color → Black+White (matches the G key).
+        guard let rs = viewportView?.renderSettings else { return }
+        rs.colorMode = rs.colorMode.next
+        print("[DEBUG] AppDelegate: render mode → " + rs.colorMode.displayName)
     }
 
     @objc private func toggleWireframe(_ sender: Any) {
@@ -1289,9 +1290,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             return viewportView?.sceneManager.primaryObject != nil
         }
         if menuItem.action == #selector(toggleColorMode(_:)) {
-            // Checkmark when greyscale is active (isColorMode == false).
-            let isGreyscale = !(viewportView?.renderSettings.isColorMode ?? true)
-            menuItem.state = isGreyscale ? .on : .off
+            // Three modes can't be shown by a single checkmark, so reflect the
+            // current mode in the title instead and leave the checkmark off.
+            let mode = viewportView?.renderSettings.colorMode ?? .color
+            menuItem.title = "Render Mode: " + mode.displayName
+            menuItem.state = .off
         }
         if menuItem.action == #selector(toggleWireframe(_:)) {
             let isWireframe = viewportView?.renderer?.isWireframe ?? false
@@ -1723,6 +1726,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         wc.editorView.onEnterEditMode = { [weak self, weak viewport] ref, kfTime in
             guard let self = self, let viewport = viewport else { return }
 
+            // Mirror edit mode in the viewport HUD (second line).
+            viewport.overlayState.isEditing = true
+
             // Make sure we're paused so the renderer won't keep advancing time.
             viewport.timeline.pause()
 
@@ -1861,6 +1867,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // the new pose (the user moved it live).  Write a keyframe — addKeyframe
         // deduplicates within 1 ms, so this naturally overwrites the old one.
         wc.editorView.onCommitEdit = { [weak self, weak viewport] in
+            viewport?.overlayState.isEditing = false   // clear HUD edit badge
             guard let self = self,
                   let snapshot = self.kfEditSnapshot,
                   let viewport = viewport else { return }
@@ -1910,6 +1917,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // The user pressed Escape.  Restore the saved pose so the keyframe's
         // original state is visible again.
         wc.editorView.onCancelEdit = { [weak self, weak viewport] in
+            viewport?.overlayState.isEditing = false   // clear HUD edit badge
             guard let self = self,
                   let snapshot = self.kfEditSnapshot,
                   let viewport = viewport else { return }

@@ -12,7 +12,7 @@ Available in the main viewport (no modifier unless noted).
 | **Delete** / **Backspace** | Delete selected keyframe(s) (forwarded to Timeline Editor) |
 | **E** / **End** | Jump playhead to end |
 | **F** | Nudge selected keyframe 1 frame forward |
-| **G** | Greyscale toggle |
+| **G** | Cycle render mode: Greyscale → Color → Black + White |
 | **H** / **Home** | Jump playhead to start |
 | **I** / **Insert** | Stamp keyframe for active mode |
 | **L** | Light mode (press again to cycle to next light) |
@@ -22,15 +22,15 @@ Available in the main viewport (no modifier unless noted).
 | **R** | Reset current object, light, or camera orientation |
 | **⌘R** | Re-auto-fit Director (only in Scene mode) |
 | **S** | Toggle Scene mode (Director's POV — see camera, lights, models from above and behind); auto-engages Director mode |
+| **W** | Wireframe toggle |
 | **1**–**6** | Snap Director to a standard view of the selection — Front/Left/Rear/Right/Top/Bottom (Scene mode only) |
 | **7** | Solo: hide everything except the selected object's group (Scene mode only) |
 | **8** | Solo: make the hidden others still occlude (Scene mode only; pairs with 7) |
-| **W** | Wireframe toggle |
 | **⌘+** / **⌘−** | Dolly Director in / out (only in Scene mode) |
-| **Return** | Commit keyframe edit |
 | **Escape** | Cancel keyframe edit |
-| **Tab** | Next keyframe on active track |
+| **Return** | Commit keyframe edit |
 | **Shift+Tab** | Previous keyframe on active track |
+| **Tab** | Next keyframe on active track |
 
 <div style="page-break-after: always;"></div>
 
@@ -39,19 +39,19 @@ Available in the main viewport (no modifier unless noted).
 
 | Shortcut | Menu | Action |
 |----------|------|--------|
-| **⌘Q** | ThreeDViewport | Quit |
-| **⌘O** | File | Open Model… (adds to scene) |
+| **⌘E** | File | Export ProRes Video… |
+| **⌘F** | Window | Feedback panel |
+| **⌘G** | View | Render Mode (cycles Greyscale → Color → Black + White) |
+| **⌘⇧G** | Window | Color Grade panel |
+| **⌘J** | Window | Timeline Editor |
+| **⌘K** | Window | Camera panel (follow-target picker + stamp button) |
+| **⌘L** | Window | Lights & Background panel |
+| **⌘M** | Window | Minimize |
 | **⌘N** | File | New Project |
+| **⌘O** | File | Open Model… (adds to scene) |
+| **⌘Q** | ThreeDViewport | Quit |
 | **⌘S** | File | Save Project |
 | **⌘⇧S** | File | Save Project As… |
-| **⌘E** | File | Export ProRes Video… |
-| **⌘G** | View | Greyscale Mode |
-| **⌘M** | Window | Minimize |
-| **⌘L** | Window | Lights & Background panel |
-| **⌘F** | Window | Feedback panel |
-| **⌘K** | Window | Camera panel (follow-target picker + stamp button) |
-| **⌘J** | Window | Timeline Editor |
-| **⌘⇧G** | Window | Color Grade panel |
 
 <div style="page-break-after: always;"></div>
 
@@ -100,15 +100,15 @@ Press **D** in Scene mode — or just press **S**, which auto-engages Director m
 
 | Input | Director action |
 |-------|-----------------|
-| **Scroll wheel** | Dolly in / out (move toward / away from a part) |
-| **Left drag** | Truck + Pedestal (pan) |
-| **Right drag** | Free-look (aim) |
-| **Space + Left drag** | Orbit |
 | **← → ↑ ↓** | Pan |
-| **Shift + arrows** | Free-look (aim) |
 | **+** / **−** | FOV narrow / wide |
 | **⌘+** / **⌘−** | Dolly in / out |
+| **Left drag** | Truck + Pedestal (pan) |
+| **Right drag** | Free-look (aim) |
 | **⌘R** | Re-auto-fit the Director to the scene |
+| **Scroll wheel** | Dolly in / out (move toward / away from a part) |
+| **Space + Left drag** | Orbit |
+| **Shift + arrows** | Free-look (aim) |
 
 The Director is never keyframed or saved. Typical flow: **S** to enter Scene mode, frame the part, **O** to select and pose it, **D** to reframe. Leaving Scene mode (**S**) returns to Camera mode.
 
@@ -151,28 +151,29 @@ The Timeline Editor is a floating window (⌘J) that shows every keyframe on eve
 
 | Command | Operation |
 |---------|-----------|
+| **A** | Align multi-selected keyframes to the earliest selected (one per lane; aborts if a lane has 2+ selected) |
+| **B** | Nudge selected keyframe(s) 1 frame backward (whole multi-selection moves together) |
 | **⌘C** | Copy selected keyframe(s) to internal clipboard |
-| **⌘V** | Paste clipboard at current playhead on selected lane(s) |
 | **D** / **Delete** / **Backspace** | Delete selected keyframe(s) |
-| **I** / **Insert** | Stamp a keyframe on the selected lane at the playhead |
-| **Return** | Enter edit mode on the selected diamond (or commit while editing) |
+| **F** | Nudge selected keyframe(s) 1 frame forward (whole multi-selection moves together) |
+| **I** / **Insert** | Stamp a keyframe on the selected lane at the playhead (replaces one already at this time) |
+| **⌘V** | Paste clipboard at current playhead on selected lane(s) |
+| **End** | Seek playhead to end |
 | **Escape** | Cancel keyframe edit |
 | **Home** | Seek playhead to start |
-| **End** | Seek playhead to end |
-| **Tab** | Next keyframe in the selected lane |
+| **Return** | Enter edit mode on the selected diamond (or commit while editing) |
 | **Shift+Tab** | Previous keyframe in the selected lane |
-| **F** | Nudge selected keyframe(s) 1 frame forward |
-| **B** | Nudge selected keyframe(s) 1 frame backward |
+| **Tab** | Next keyframe in the selected lane |
 
 ### Mouse
 
 | Action | Operation |
 |--------|-----------|
-| **Click ruler** | Scrub the playhead |
 | **Click diamond** | Select that keyframe and seek to its time |
-| **Double-click diamond** | Enter edit mode (live-adjust pose, then Return to commit) |
-| **Option-click diamond** | Toggle keyframe in/out of multi-selection |
-| **Drag diamond** | Move it in time (multi-selection drags together) |
-| **Control + Left drag** | Rubber-band select keyframes in a region |
 | **Click lane label** | Select the lane (selects its track for ⌘V paste) |
 | **Click group disclosure triangle** | Expand / collapse the group's lanes |
+| **Click ruler** | Scrub the playhead |
+| **Control + Left drag** | Rubber-band select keyframes in a region |
+| **Double-click diamond** | Enter edit mode (live-adjust pose, then Return to commit) |
+| **Drag diamond** | Move it in time (multi-selection drags together) |
+| **Option-click diamond** | Toggle keyframe in/out of multi-selection |

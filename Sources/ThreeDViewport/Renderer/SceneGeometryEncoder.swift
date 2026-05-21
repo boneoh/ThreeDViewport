@@ -16,7 +16,7 @@ enum SceneGeometryEncoder {
         let eyePosition:       SIMD3<Float>
         let pipelineState:     MTLRenderPipelineState
         let depthStencilState: MTLDepthStencilState
-        let isColorMode:       Bool
+        let colorMode:         RenderColorMode
         let isWireframe:       Bool
         let exposure:          Float        // pre-tone-map multiplier (Color Grade)
         let ibl:               IBL?
@@ -95,7 +95,7 @@ enum SceneGeometryEncoder {
 
             encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 2)
 
-            var mu = buildMaterialUniforms(for: object, isColorMode: context.isColorMode)
+            var mu = buildMaterialUniforms(for: object, colorMode: context.colorMode)
             encoder.setFragmentBytes(&mu,
                                      length: MemoryLayout<MaterialUniforms>.stride,
                                      index: 4)
@@ -113,7 +113,7 @@ enum SceneGeometryEncoder {
     // MARK: - Helpers (shared so preview/export build identical uniforms)
 
     static func buildMaterialUniforms(for object: SceneObject,
-                                      isColorMode: Bool) -> MaterialUniforms {
+                                      colorMode: RenderColorMode) -> MaterialUniforms {
         let mat = object.material
         var mu  = MaterialUniforms()
         mu.baseColorFactor     = mat.baseColorFactor
@@ -126,7 +126,7 @@ enum SceneGeometryEncoder {
         mu.hasNormalTex        = mat.normalTexture            != nil ? 1 : 0
         mu.hasMetallicRoughTex = mat.metallicRoughnessTexture != nil ? 1 : 0
         mu.hasEmissiveTex      = mat.emissiveTexture          != nil ? 1 : 0
-        mu.colorMode           = isColorMode ? 1 : 0
+        mu.colorMode           = UInt32(colorMode.rawValue)
 
         // Flat shading: explicit user pick, or .auto on a file with no normals.
         let wantFlat = object.normalMode == .flat
