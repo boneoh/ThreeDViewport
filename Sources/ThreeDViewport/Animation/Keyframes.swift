@@ -175,7 +175,14 @@ final class KeyframeTrack {
                     prev.scale, a.scale, b.scale, next.scale, t: rawT)
                 // simd_spline performs spherical cubic spline interpolation on the
                 // unit quaternion sphere — the quaternion equivalent of Catmull-Rom.
-                let rotation = simd_spline(prev.rotation, a.rotation, b.rotation, next.rotation, rawT)
+                // Flip the control quaternions into a consistent hemisphere first
+                // (matching squadTensioned): without this, a spin that passes 180°
+                // — where the captured quaternion's sign flips — makes the spline
+                // curve off-axis (the rotation tilts/tumbles).
+                let fPrev = EasingMode.qFlip(prev.rotation, like: a.rotation)
+                let fB    = EasingMode.qFlip(b.rotation,    like: a.rotation)
+                let fNext = EasingMode.qFlip(next.rotation, like: fB)
+                let rotation = simd_spline(fPrev, a.rotation, fB, fNext, rawT)
 
                 return makeMatrix(from: TransformKeyframe(
                     time:        time,
