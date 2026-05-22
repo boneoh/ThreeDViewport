@@ -56,6 +56,8 @@ struct ProjectData: Codable {
     var iblIntensity:        Float = 1.0                 // v16; per-scene IBL strength.
     var fog:                 FogData = FogData()         // v19/v22; fog volume (atmosphere).
     var particles:           ParticleEffectData = ParticleEffectData()  // v21; weather particles.
+    var fogKeyframes:        [AtmosphereKeyframeData] = []  // v23; fog volume animation.
+    var particleKeyframes:   [AtmosphereKeyframeData] = []  // v23; particle emitter animation.
 
     // MARK: - Memberwise init (required because we define init(from:) below)
 
@@ -80,7 +82,9 @@ struct ProjectData: Codable {
          groupKeyframeTracks: [GroupTrackData]       = [],
          iblIntensity:        Float                  = 1.0,
          fog:                 FogData                = FogData(),
-         particles:           ParticleEffectData     = ParticleEffectData()) {
+         particles:           ParticleEffectData     = ParticleEffectData(),
+         fogKeyframes:        [AtmosphereKeyframeData] = [],
+         particleKeyframes:   [AtmosphereKeyframeData] = []) {
         self.version             = version
         self.modelPath           = modelPath
         self.modelPaths          = modelPaths
@@ -103,6 +107,8 @@ struct ProjectData: Codable {
         self.iblIntensity        = iblIntensity
         self.fog                 = fog
         self.particles           = particles
+        self.fogKeyframes        = fogKeyframes
+        self.particleKeyframes   = particleKeyframes
     }
 
     // MARK: - Custom decoder
@@ -139,7 +145,20 @@ struct ProjectData: Codable {
         iblIntensity        = (try? c.decode(Float.self,                 forKey: .iblIntensity))        ?? 1.0
         fog                 = (try? c.decode(FogData.self,               forKey: .fog))                 ?? FogData()
         particles           = (try? c.decode(ParticleEffectData.self,    forKey: .particles))           ?? ParticleEffectData()
+        fogKeyframes        = (try? c.decode([AtmosphereKeyframeData].self, forKey: .fogKeyframes))      ?? []
+        particleKeyframes   = (try? c.decode([AtmosphereKeyframeData].self, forKey: .particleKeyframes)) ?? []
     }
+}
+
+// v23: One atmosphere keyframe (fog volume or particle emitter).  Mirrors
+// AtmosphereKeyframe; whole-effect snapshot at `time`.
+struct AtmosphereKeyframeData: Codable {
+    var time: Double
+    var px: Float; var py: Float; var pz: Float
+    var sx: Float; var sy: Float; var sz: Float
+    var density:  Float
+    var variance: Float
+    var r: Float; var g: Float; var b: Float
 }
 
 // v12: Brightness / contrast post-process.

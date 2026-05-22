@@ -284,7 +284,7 @@ final class ProjectFile {
         }
 
         return ProjectData(
-            version:             22,
+            version:             23,
             modelPath:           nil,           // v3+ uses modelPaths instead
             modelPaths:          modelPaths,
             timeline:            timelineData,
@@ -329,8 +329,38 @@ final class ProjectFile {
                                      variance: vp.particleEffect.variance,
                                      r: vp.particleEffect.color.x,
                                      g: vp.particleEffect.color.y,
-                                     b: vp.particleEffect.color.z)
+                                     b: vp.particleEffect.color.z),
+            fogKeyframes:        captureAtmosphereKeyframes(vp.fogSettings.keyframeTrack),
+            particleKeyframes:   captureAtmosphereKeyframes(vp.particleEffect.keyframeTrack)
         )
+    }
+
+    /// Serialises an atmosphere keyframe track (fog or particles) to Codable data.
+    private static func captureAtmosphereKeyframes(_ track: AtmosphereKeyframeTrack?) -> [AtmosphereKeyframeData] {
+        (track?.keyframes ?? []).map { kf in
+            AtmosphereKeyframeData(
+                time: kf.time,
+                px: kf.position.x, py: kf.position.y, pz: kf.position.z,
+                sx: kf.size.x,     sy: kf.size.y,     sz: kf.size.z,
+                density: kf.density, variance: kf.variance,
+                r: kf.color.x, g: kf.color.y, b: kf.color.z)
+        }
+    }
+
+    /// Rebuilds an atmosphere keyframe track from Codable data, or nil if empty.
+    private static func applyAtmosphereKeyframes(_ data: [AtmosphereKeyframeData]) -> AtmosphereKeyframeTrack? {
+        guard !data.isEmpty else { return nil }
+        let track = AtmosphereKeyframeTrack()
+        for kf in data {
+            track.addKeyframe(AtmosphereKeyframe(
+                time:     kf.time,
+                position: SIMD3<Float>(kf.px, kf.py, kf.pz),
+                size:     SIMD3<Float>(kf.sx, kf.sy, kf.sz),
+                density:  kf.density,
+                variance: kf.variance,
+                color:    SIMD3<Float>(kf.r, kf.g, kf.b)))
+        }
+        return track
     }
 
     // MARK: - Apply ProjectData → live state
@@ -552,6 +582,12 @@ final class ProjectFile {
         vp.particleEffect.variance  = pe.variance
         vp.particleEffect.color     = SIMD3<Float>(pe.r, pe.g, pe.b)
         print("[DEBUG] ProjectFile: particles enabled=\(pe.isEnabled) type=\(pe.type)")
+
+        // ── Atmosphere keyframe tracks (v23) ──────────────────────────────────
+        vp.fogSettings.keyframeTrack      = applyAtmosphereKeyframes(data.fogKeyframes)
+        vp.particleEffect.keyframeTrack   = applyAtmosphereKeyframes(data.particleKeyframes)
+        print("[DEBUG] ProjectFile: fogKeyframes=\(data.fogKeyframes.count)"
+            + " particleKeyframes=\(data.particleKeyframes.count)")
 
         // Force the Renderer to re-evaluate keyframes on the next draw.
         // Without this, lastAnimatedTime == currentTime (both 0) so applyAnimation()

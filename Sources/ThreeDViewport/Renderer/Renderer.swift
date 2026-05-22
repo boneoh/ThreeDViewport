@@ -513,6 +513,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         pass.colorAttachments[0].storeAction = .store
         guard let enc = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
         var u = makeFogVolumeUniforms(fog,
+            at:             timeline.currentTime,
             viewProjection: viewCamera.viewProjectionMatrix,
             cameraPos:      viewCamera.eyePosition,
             colorMode:      colorMode.rawValue)
@@ -543,7 +544,8 @@ final class Renderer: NSObject, MTKViewDelegate {
               let pipe  = particleFXPipelineState,
               let seeds = particleSeedBuffer,
               let ds    = laserBeamDepthState else { return }
-        let count = Int((max(0, min(1, fx.density)) * Float(ParticleEffect.maxCount)).rounded())
+        let density = fx.state(at: time).density
+        let count = Int((max(0, min(1, density)) * Float(ParticleEffect.maxCount)).rounded())
         guard count > 0 else { return }
 
         var u = makeParticleFXUniforms(fx,

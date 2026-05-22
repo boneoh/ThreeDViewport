@@ -8,6 +8,15 @@ struct AtmospherePanel: View {
     @ObservedObject var fog: FogSettings
     @ObservedObject var particle: ParticleEffect
 
+    // Stamp / clear actions wired by AppDelegate to ViewportView.
+    var onStampFog:       () -> Void = {}
+    var onClearFog:       () -> Void = {}
+    var onStampParticles: () -> Void = {}
+    var onClearParticles: () -> Void = {}
+
+    private var fogKeyCount:      Int { fog.keyframeTrack?.keyframes.count ?? 0 }
+    private var particleKeyCount: Int { particle.keyframeTrack?.keyframes.count ?? 0 }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
@@ -57,6 +66,9 @@ struct AtmospherePanel: View {
                 FogSliderRow(label: "W", value: $fog.size.x, range: 0.5...40, format: "%.1f")
                 FogSliderRow(label: "H", value: $fog.size.y, range: 0.5...40, format: "%.1f")
                 FogSliderRow(label: "D", value: $fog.size.z, range: 0.5...40, format: "%.1f")
+
+                Divider().padding(.vertical, 8)
+                KeyframeRow(count: fogKeyCount, onAdd: onStampFog, onClear: onClearFog)
 
                 Text(fog.isEnabled
                      ? "Fog volume applies in Color and Greyscale (Black + White matte stays solid white)."
@@ -109,6 +121,9 @@ struct AtmospherePanel: View {
                 FogSliderRow(label: "W", value: $particle.size.x, range: 0.5...40, format: "%.1f")
                 FogSliderRow(label: "H", value: $particle.size.y, range: 0.5...40, format: "%.1f")
                 FogSliderRow(label: "D", value: $particle.size.z, range: 0.5...40, format: "%.1f")
+
+                Divider().padding(.vertical, 8)
+                KeyframeRow(count: particleKeyCount, onAdd: onStampParticles, onClear: onClearParticles)
 
                 Text("Particles are depth-occluded by the scene and render white in Black + White matte.")
                     .font(.caption2)
@@ -182,6 +197,33 @@ private struct FogSliderRow: View {
                 ),
                 in: Double(range.lowerBound)...Double(range.upperBound)
             )
+        }
+    }
+}
+
+// MARK: - Keyframe row
+
+/// "Add Keyframe" + count + clear, shared by the Fog and Weather sections.
+private struct KeyframeRow: View {
+    let count:   Int
+    let onAdd:   () -> Void
+    let onClear: () -> Void
+
+    var body: some View {
+        HStack {
+            Button(action: onAdd) {
+                Label("Add Keyframe", systemImage: "diamond.fill")
+            }
+            .font(.caption)
+            Spacer()
+            Text("\(count) key\(count == 1 ? "" : "s")")
+                .font(.caption2.monospacedDigit())
+                .foregroundColor(.secondary)
+            Button(action: onClear) {
+                Image(systemName: "trash")
+            }
+            .font(.caption)
+            .disabled(count == 0)
         }
     }
 }

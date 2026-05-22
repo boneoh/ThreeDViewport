@@ -649,7 +649,8 @@ final class VideoExporter {
     /// export matches the live preview exactly.
     private func drawFogVolume(commandBuffer: MTLCommandBuffer,
                                dest:          MTLTexture,
-                               depthTex:      MTLTexture) {
+                               depthTex:      MTLTexture,
+                               time:          Double) {
         guard let fog = fogSettings, fog.isEnabled,
               let pipe = fogVolumePipelineState else { return }
         let pass = MTLRenderPassDescriptor()
@@ -658,6 +659,7 @@ final class VideoExporter {
         pass.colorAttachments[0].storeAction = .store
         guard let enc = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
         var u = makeFogVolumeUniforms(fog,
+            at:             time,
             viewProjection: camera.viewProjectionMatrix,
             cameraPos:      camera.eyePosition,
             colorMode:      colorMode.rawValue)
@@ -815,7 +817,8 @@ final class VideoExporter {
 
         // ── Fog volume composite (feedback off only — matches the live preview) ──
         if !feedbackActive, fogSettings?.isEnabled == true {
-            drawFogVolume(commandBuffer: commandBuffer, dest: colorTex, depthTex: depthTex)
+            drawFogVolume(commandBuffer: commandBuffer, dest: colorTex, depthTex: depthTex,
+                          time: Double(hitEffectTime))
         }
 
         // ── Axes gizmo overlay (bottom-right corner) ──────────────────────────
@@ -1026,7 +1029,8 @@ final class VideoExporter {
               let pipe  = particleFXPipelineState,
               let seeds = particleSeedBuffer,
               let ds    = laserBeamDepthState else { return }
-        let count = Int((max(0, min(1, fx.density)) * Float(ParticleEffect.maxCount)).rounded())
+        let density = fx.state(at: time).density
+        let count = Int((max(0, min(1, density)) * Float(ParticleEffect.maxCount)).rounded())
         guard count > 0 else { return }
 
         var u = makeParticleFXUniforms(fx,

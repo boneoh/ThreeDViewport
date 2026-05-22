@@ -97,6 +97,26 @@ final class ParticleEffect: ObservableObject {
     /// Particle colour (display-space RGB).
     @Published var color:     SIMD3<Float>  = SIMD3<Float>(1, 1, 1)
 
+    /// Optional timeline animation.  nil / empty = use the static values above.
+    /// Evaluated at render time (not written back) so playback never marks dirty.
+    var keyframeTrack: AtmosphereKeyframeTrack?
+
+    /// True while a keyframe is being live-edited from the panel (see FogSettings).
+    var isEditingKeyframe: Bool = false
+
+    /// Snapshot of the current static values as a keyframe at `time` (stamp source).
+    func snapshot(at time: Double) -> AtmosphereKeyframe {
+        AtmosphereKeyframe(time: time, position: position, size: size,
+                           density: density, variance: variance, color: color)
+    }
+
+    /// Effective state at `time`: the static panel values while live-editing,
+    /// the animated keyframe value if a track exists, otherwise the static values.
+    func state(at time: Double) -> AtmosphereKeyframe {
+        if isEditingKeyframe { return snapshot(at: time) }
+        return keyframeTrack?.evaluate(at: time) ?? snapshot(at: time)
+    }
+
     /// Maximum particle pool — `density` selects a fraction of this to draw.
     static let maxCount = 4000
 
@@ -117,26 +137,28 @@ final class ParticleEffect: ObservableObject {
     }
 }
 
-/// Builds the GPU uniforms for the particle pass.  Shared by Renderer and
-/// VideoExporter so preview and export stay identical.
+/// Builds the GPU uniforms for the particle pass, resolving any timeline
+/// animation of the emitter (position / size / variance / colour) at `time`.
+/// Shared by Renderer and VideoExporter so preview and export stay identical.
 func makeParticleFXUniforms(_ fx: ParticleEffect,
                             viewProjection: matrix_float4x4,
                             cameraRight: SIMD3<Float>,
                             cameraUp: SIMD3<Float>,
                             time: Float,
                             colorMode: Int) -> ParticleFXUniforms {
-    ParticleFXUniforms(
+    let s = fx.state(at: Double(time))
+    return ParticleFXUniforms(
         viewProjection: viewProjection,
         cameraRight:    SIMD4<Float>(cameraRight, 0),
         cameraUp:       SIMD4<Float>(cameraUp, 0),
-        emitterCenter:  SIMD4<Float>(fx.position, 0),
-        emitterSize:    SIMD4<Float>(fx.size, 0),
-        color:          SIMD4<Float>(fx.color, 1),
+        emitterCenter:  SIMD4<Float>(s.position, 0),
+        emitterSize:    SIMD4<Float>(s.size, 0),
+        color:          SIMD4<Float>(s.color, 1),
         time:           time,
         fallSpeed:      fx.type.fallSpeed,
         particleSize:   fx.type.particleSize,
         streak:         fx.type.streak,
-        sway:           fx.type.swayBase * fx.variance,
+        sway:           fx.type.swayBase * s.variance,
         swayFreq:       1.5,
         colorMode:      UInt32(colorMode),
         mode:           fx.type.isSmoke ? 1 : 0,

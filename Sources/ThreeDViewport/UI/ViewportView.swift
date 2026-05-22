@@ -1215,6 +1215,45 @@ final class ViewportView: MTKView {
         onKeyframeStamped?(.camera)
     }
 
+    // MARK: - Add / Clear Atmosphere Keyframes
+
+    /// Stamps a fog keyframe snapshotting the current static fog values at the
+    /// playhead.  `objectWillChange.send()` refreshes the panel's count and marks
+    /// the project dirty (the AppDelegate dirty sink observes fogSettings).
+    func addFogKeyframeAtCurrentTime() {
+        if fogSettings.keyframeTrack == nil { fogSettings.keyframeTrack = AtmosphereKeyframeTrack() }
+        fogSettings.keyframeTrack?.addKeyframe(
+            fogSettings.snapshot(at: timeline.currentTime),
+            mergeTolerance: stampMergeTolerance)
+        fogSettings.objectWillChange.send()
+        print("[DEBUG] ViewportView: fog keyframe added at t="
+            + String(format: "%.3f", timeline.currentTime))
+        onKeyframeStamped?(.fog)
+    }
+
+    func clearFogKeyframes() {
+        fogSettings.keyframeTrack = nil
+        fogSettings.objectWillChange.send()
+        print("[DEBUG] ViewportView: fog keyframes cleared")
+    }
+
+    func addParticleKeyframeAtCurrentTime() {
+        if particleEffect.keyframeTrack == nil { particleEffect.keyframeTrack = AtmosphereKeyframeTrack() }
+        particleEffect.keyframeTrack?.addKeyframe(
+            particleEffect.snapshot(at: timeline.currentTime),
+            mergeTolerance: stampMergeTolerance)
+        particleEffect.objectWillChange.send()
+        print("[DEBUG] ViewportView: particle keyframe added at t="
+            + String(format: "%.3f", timeline.currentTime))
+        onKeyframeStamped?(.particles)
+    }
+
+    func clearParticleKeyframes() {
+        particleEffect.keyframeTrack = nil
+        particleEffect.objectWillChange.send()
+        print("[DEBUG] ViewportView: particle keyframes cleared")
+    }
+
     /// World-space forward direction for the camera's current yaw / pitch.
     /// Mirrors the convention in `CameraController.eyePosition` so the
     /// inverse (`atan2(-fwd.x, -fwd.z)`, `asin(-fwd.y)`) round-trips exactly.
