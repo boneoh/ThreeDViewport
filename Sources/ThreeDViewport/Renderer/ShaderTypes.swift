@@ -163,24 +163,6 @@ struct LaserHitUniforms {
     var time:       Float
 }
 
-// ── Fog uniforms (fragment buffer index 5 in the scene pass) ─────────────────
-// Must match `struct FogUniforms` in Shaders.metal exactly.
-// Layout (16-byte aligned):
-//   color    float3  16   display-space RGB (float3 occupies 16 bytes in Metal)
-//   density  float    4   exponential density
-//   start    float    4   distance before fog begins
-//   enabled  uint     4   0 = off, 1 = on
-//   _pad     float    4   alignment padding to 32
-//   ─────────────────────────────────────
-//   Total               32
-struct FogUniforms {
-    var color:   SIMD3<Float>
-    var density: Float
-    var start:   Float
-    var enabled: UInt32
-    var _pad:    Float = 0
-}
-
 // ── Weather particle uniforms (vertex+fragment buffer 1 in the particle pass) ─
 // Must match `struct ParticleFXUniforms` in ParticleFXShaders.metal exactly.
 struct ParticleFXUniforms {
@@ -246,4 +228,30 @@ struct SparkUniforms {
 struct WidgetUniforms {
     var viewProjectionMatrix: matrix_float4x4
     var color: SIMD4<Float>
+}
+
+// ── Fog volume uniforms (fragment buffer 0 in the fog volume pass) ───────────
+// Must match `struct FogVolumeUniforms` in FogVolumeShaders.metal exactly.
+// Layout:
+//   inverseViewProjection  float4x4   64
+//   cameraPos              float4     16   (xyz)
+//   boxMin                 float4     16   (xyz)
+//   boxMax                 float4     16   (xyz)
+//   color                  float4     16   (rgb)
+//   density                float       4
+//   variance               float       4
+//   colorMode              uint        4   (0 greyscale, 1 color, 2 b+w matte)
+//   _pad                   float       4
+//   ─────────────────────────────────────
+//   Total                            144
+struct FogVolumeUniforms {
+    var inverseViewProjection: matrix_float4x4
+    var cameraPos: SIMD4<Float>
+    var boxMin:    SIMD4<Float>
+    var boxMax:    SIMD4<Float>
+    var color:     SIMD4<Float>
+    var density:   Float
+    var variance:  Float
+    var colorMode: UInt32
+    var _pad:      Float = 0
 }

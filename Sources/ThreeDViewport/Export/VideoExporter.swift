@@ -144,6 +144,7 @@ final class VideoExporter {
 
     // Fog settings — nil = no fog during export
     var fogSettings: FogSettings?
+    private var fogVolumePipelineState: MTLRenderPipelineState?
 
     // Weather particles — nil/disabled = none during export
     var particleEffect: ParticleEffect?
@@ -366,6 +367,28 @@ final class VideoExporter {
         particleSeedBuffer = device.makeBuffer(bytes: pSeeds,
                                                length: pSeeds.count * MemoryLayout<SIMD4<Float>>.stride,
                                                options: .storageModeShared)
+
+        // Fog volume pipeline (fullscreen raymarch, source-over blend)
+        if let library = try? device.makeDefaultLibrary(bundle: Bundle.module),
+           let fVert   = library.makeFunction(name: "fogvolume_vertex"),
+           let fFrag   = library.makeFunction(name: "fogvolume_fragment") {
+            let fDesc = MTLRenderPipelineDescriptor()
+            fDesc.label            = "FogVolumeExport"
+            fDesc.vertexFunction   = fVert
+            fDesc.fragmentFunction = fFrag
+            let ca = fDesc.colorAttachments[0]!
+            ca.pixelFormat                 = .bgra8Unorm
+            ca.isBlendingEnabled           = true
+            ca.sourceRGBBlendFactor        = .sourceAlpha
+            ca.destinationRGBBlendFactor   = .oneMinusSourceAlpha
+            ca.rgbBlendOperation           = .add
+            ca.sourceAlphaBlendFactor      = .one
+            ca.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+            ca.alphaBlendOperation         = .add
+            fogVolumePipelineState = try? device.makeRenderPipelineState(descriptor: fDesc)
+            print("[DEBUG] VideoExporter: fog volume pipeline "
+                + (fogVolumePipelineState != nil ? "created" : "FAILED"))
+        }
 
         // Color grade pipeline (no depth, no blend — overwrites every pixel)
         if let library    = try? device.makeDefaultLibrary(bundle: Bundle.module),
@@ -621,10 +644,34 @@ final class VideoExporter {
         return t
     }
 
+    /// Composites the raymarched fog volume over `dest` (which holds the scene),
+    /// reading `depthTex` for occlusion.  Mirrors Renderer.drawFogVolume so the
+    /// export matches the live preview exactly.
+    private func drawFogVolume(commandBuffer: MTLCommandBuffer,
+                               dest:          MTLTexture,
+                               depthTex:      MTLTexture) {
+        guard let fog = fogSettings, fog.isEnabled,
+              let pipe = fogVolumePipelineState else { return }
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture     = dest
+        pass.colorAttachments[0].loadAction  = .load
+        pass.colorAttachments[0].storeAction = .store
+        guard let enc = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
+        var u = makeFogVolumeUniforms(fog,
+            viewProjection: camera.viewProjectionMatrix,
+            cameraPos:      camera.eyePosition,
+            colorMode:      colorMode.rawValue)
+        enc.setRenderPipelineState(pipe)
+        enc.setFragmentBytes(&u, length: MemoryLayout<FogVolumeUniforms>.stride, index: 0)
+        enc.setFragmentTexture(depthTex, index: 0)
+        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        enc.endEncoding()
+    }
+
     private func makeDepthTexture() -> MTLTexture? {
         let desc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .depth32Float, width: width, height: height, mipmapped: false)
-        desc.usage       = .renderTarget
+        desc.usage       = [.renderTarget, .shaderRead]   // shaderRead: sampled by the fog pass
         desc.storageMode = .private
         let t = device.makeTexture(descriptor: desc)
         if t == nil { print("[DEBUG] VideoExporter: makeDepthTexture returned nil") }
@@ -690,7 +737,6 @@ final class VideoExporter {
             // flat-normal, and IBL handling stay identical between preview/export.
             // Holdout objects (hidden but occluding) are drawn depth-only first so
             // visible geometry behind them is cut to background — matches preview.
-            let fogUniforms = fogSettings?.uniforms ?? FogSettings.disabledUniforms
             let holdoutObjects = sceneManager.objects.filter { !$0.isVisible && $0.occludeWhenHidden }
             if !holdoutObjects.isEmpty, let holdout = holdoutPipelineState {
                 SceneGeometryEncoder.encode(
@@ -704,7 +750,6 @@ final class VideoExporter {
                         pipelineState:     holdout,
                         depthStencilState: depthStencilState,
                         colorMode:         colorMode,
-                        fog:               fogUniforms,
                         isWireframe:       false,
                         exposure:          colorGradeSettings?.exposure ?? 1.0,
                         ibl:               ibl,
@@ -724,7 +769,6 @@ final class VideoExporter {
                     pipelineState:     pipelineState,
                     depthStencilState: depthStencilState,
                     colorMode:         colorMode,
-                    fog:               fogUniforms,
                     isWireframe:       isWireframe,
                     exposure:          colorGradeSettings?.exposure ?? 1.0,
                     ibl:               ibl,
@@ -767,6 +811,11 @@ final class VideoExporter {
                                    screenSize:    exportSize,
                                    hitEffectTime: hitEffectTime,
                                    sparkGPUData:  sparkGPUData)
+        }
+
+        // ── Fog volume composite (feedback off only — matches the live preview) ──
+        if !feedbackActive, fogSettings?.isEnabled == true {
+            drawFogVolume(commandBuffer: commandBuffer, dest: colorTex, depthTex: depthTex)
         }
 
         // ── Axes gizmo overlay (bottom-right corner) ──────────────────────────

@@ -42,16 +42,24 @@ struct AtmospherePanel: View {
                     .font(.caption)
                     .padding(.bottom, 10)
 
-                FogSliderRow(label: "Density", value: $fog.density,
-                             range: 0.0...1.0, format: "%.2f")
+                FogSliderRow(label: "Density",  value: $fog.density,  range: 0.0...1.0, format: "%.2f")
+                Divider().padding(.vertical, 8)
+                FogSliderRow(label: "Variance", value: $fog.variance, range: 0.0...1.0, format: "%.2f")
 
-                Divider().padding(.vertical, 10)
+                Divider().padding(.vertical, 8)
+                Text("Position").font(.caption2).foregroundColor(.secondary)
+                FogSliderRow(label: "X", value: $fog.position.x, range: -20...20, format: "%.1f")
+                FogSliderRow(label: "Y", value: $fog.position.y, range: -20...20, format: "%.1f")
+                FogSliderRow(label: "Z", value: $fog.position.z, range: -20...20, format: "%.1f")
 
-                FogSliderRow(label: "Start", value: $fog.startDistance,
-                             range: 0.0...20.0, format: "%.1f")
+                Divider().padding(.vertical, 8)
+                Text("Size").font(.caption2).foregroundColor(.secondary)
+                FogSliderRow(label: "W", value: $fog.size.x, range: 0.5...40, format: "%.1f")
+                FogSliderRow(label: "H", value: $fog.size.y, range: 0.5...40, format: "%.1f")
+                FogSliderRow(label: "D", value: $fog.size.z, range: 0.5...40, format: "%.1f")
 
                 Text(fog.isEnabled
-                     ? "Fog applies in Color and Greyscale (Black + White matte stays solid white)."
+                     ? "Fog volume applies in Color and Greyscale (Black + White matte stays solid white)."
                      : "Fog is off.")
                     .font(.caption2)
                     .foregroundColor(.secondary)

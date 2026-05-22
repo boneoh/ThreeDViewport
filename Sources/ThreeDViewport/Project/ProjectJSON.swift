@@ -54,7 +54,7 @@ struct ProjectData: Codable {
     /// v14 (Phase 2): group-level animation tracks, one per loaded multi-part model.
     var groupKeyframeTracks: [GroupTrackData] = []
     var iblIntensity:        Float = 1.0                 // v16; per-scene IBL strength.
-    var fog:                 FogData = FogData()         // v19; distance fog (atmosphere).
+    var fog:                 FogData = FogData()         // v19/v22; fog volume (atmosphere).
     var particles:           ParticleEffectData = ParticleEffectData()  // v21; weather particles.
 
     // MARK: - Memberwise init (required because we define init(from:) below)
@@ -168,15 +168,18 @@ struct ColorGradeData: Codable {
     }
 }
 
-// v19: Distance fog (atmosphere).  Defaults match FogSettings (off, mid-grey) so
-// older project files load with fog disabled.
+// v19: distance fog.  v22: repurposed as the raymarched fog volume (box).
+// Defaults match FogSettings (off, mid-grey, ground-hugging box) so older project
+// files load with fog disabled; the legacy `start` key is simply ignored.
 struct FogData: Codable {
     var isEnabled: Bool  = false
     var r: Float = 0.5
     var g: Float = 0.5
     var b: Float = 0.5
     var density: Float = 0.15
-    var start:   Float = 0.0
+    var px: Float = 0;  var py: Float = 1; var pz: Float = 0
+    var sx: Float = 12; var sy: Float = 4; var sz: Float = 12
+    var variance: Float = 0.5
 
     init(from decoder: Decoder) throws {
         let c     = try decoder.container(keyedBy: CodingKeys.self)
@@ -185,15 +188,26 @@ struct FogData: Codable {
         g         = (try? c.decode(Float.self, forKey: .g))         ?? 0.5
         b         = (try? c.decode(Float.self, forKey: .b))         ?? 0.5
         density   = (try? c.decode(Float.self, forKey: .density))   ?? 0.15
-        start     = (try? c.decode(Float.self, forKey: .start))     ?? 0.0
+        px        = (try? c.decode(Float.self, forKey: .px))        ?? 0
+        py        = (try? c.decode(Float.self, forKey: .py))        ?? 1
+        pz        = (try? c.decode(Float.self, forKey: .pz))        ?? 0
+        sx        = (try? c.decode(Float.self, forKey: .sx))        ?? 12
+        sy        = (try? c.decode(Float.self, forKey: .sy))        ?? 4
+        sz        = (try? c.decode(Float.self, forKey: .sz))        ?? 12
+        variance  = (try? c.decode(Float.self, forKey: .variance))  ?? 0.5
     }
 
     init(isEnabled: Bool = false, r: Float = 0.5, g: Float = 0.5, b: Float = 0.5,
-         density: Float = 0.15, start: Float = 0.0) {
+         density: Float = 0.15,
+         px: Float = 0, py: Float = 1, pz: Float = 0,
+         sx: Float = 12, sy: Float = 4, sz: Float = 12,
+         variance: Float = 0.5) {
         self.isEnabled = isEnabled
         self.r = r; self.g = g; self.b = b
         self.density = density
-        self.start   = start
+        self.px = px; self.py = py; self.pz = pz
+        self.sx = sx; self.sy = sy; self.sz = sz
+        self.variance = variance
     }
 }
 

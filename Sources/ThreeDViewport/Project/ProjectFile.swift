@@ -284,7 +284,7 @@ final class ProjectFile {
         }
 
         return ProjectData(
-            version:             21,
+            version:             22,
             modelPath:           nil,           // v3+ uses modelPaths instead
             modelPaths:          modelPaths,
             timeline:            timelineData,
@@ -309,7 +309,13 @@ final class ProjectFile {
                                          g: vp.fogSettings.color.y,
                                          b: vp.fogSettings.color.z,
                                          density: vp.fogSettings.density,
-                                         start:   vp.fogSettings.startDistance),
+                                         px: vp.fogSettings.position.x,
+                                         py: vp.fogSettings.position.y,
+                                         pz: vp.fogSettings.position.z,
+                                         sx: vp.fogSettings.size.x,
+                                         sy: vp.fogSettings.size.y,
+                                         sz: vp.fogSettings.size.z,
+                                         variance: vp.fogSettings.variance),
             particles:           ParticleEffectData(
                                      isEnabled: vp.particleEffect.isEnabled,
                                      type:      vp.particleEffect.type.rawValue,
@@ -527,11 +533,13 @@ final class ProjectFile {
         vp.renderSettings.iblIntensity = data.iblIntensity
         print("[DEBUG] ProjectFile: iblIntensity=\(data.iblIntensity)")
 
-        // ── Fog (v19) ─────────────────────────────────────────────────────────
-        vp.fogSettings.isEnabled     = data.fog.isEnabled
-        vp.fogSettings.color         = SIMD3<Float>(data.fog.r, data.fog.g, data.fog.b)
-        vp.fogSettings.density       = data.fog.density
-        vp.fogSettings.startDistance = data.fog.start
+        // ── Fog volume (v19 distance fog → v22 box volume) ────────────────────
+        vp.fogSettings.isEnabled = data.fog.isEnabled
+        vp.fogSettings.color     = SIMD3<Float>(data.fog.r, data.fog.g, data.fog.b)
+        vp.fogSettings.density   = data.fog.density
+        vp.fogSettings.position  = SIMD3<Float>(data.fog.px, data.fog.py, data.fog.pz)
+        vp.fogSettings.size      = SIMD3<Float>(data.fog.sx, data.fog.sy, data.fog.sz)
+        vp.fogSettings.variance  = data.fog.variance
         print("[DEBUG] ProjectFile: fog enabled=\(data.fog.isEnabled) density=\(data.fog.density)")
 
         // ── Weather particles (v21) ───────────────────────────────────────────

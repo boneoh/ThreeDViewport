@@ -43,14 +43,6 @@ struct MaterialUniforms {
     uint    useFlatNormals;      // 0=vertex normals, 1=derivatives
 };
 
-// Distance fog (must match FogUniforms in ShaderTypes.swift).
-struct FogUniforms {
-    float3 color;     // display-space RGB
-    float  density;   // exponential density
-    float  start;     // distance before fog begins
-    uint   enabled;   // 0=off, 1=on
-};
-
 struct BackgroundUniforms {
     float4 colorTop;
     float4 colorBottom;
@@ -194,8 +186,7 @@ fragment float4 fragment_main(
     // Phase C: image-based lighting.  Intensity travels in lightData.ambientColor.w.
     texturecube<float>      iblIrradiance [[texture(4)]],
     texturecube<float>      iblSpecular   [[texture(5)]],
-    texture2d<float>        iblBRDF       [[texture(6)]],
-    constant FogUniforms   &fog           [[buffer(5)]]
+    texture2d<float>        iblBRDF       [[texture(6)]]
 ) {
     constexpr sampler texSampler(filter::linear,
                                   mip_filter::linear,
@@ -339,15 +330,6 @@ fragment float4 fragment_main(
 
     // ── Gamma encode for .bgra8Unorm render target ─────────────────────────
     color = pow(saturate(color), float3(1.0 / 2.2));
-
-    // ── Distance fog ──────────────────────────────────────────────────────
-    // Blend toward the fog colour by camera distance.  Applied before the render
-    // mode so greyscale fog reads as grey; Black + White overrides it (solid white).
-    if (fog.enabled != 0) {
-        float dist      = distance(in.worldPosition, uniforms.cameraPosition.xyz);
-        float fogFactor = 1.0 - exp(-fog.density * max(0.0, dist - fog.start));
-        color = mix(color, fog.color, saturate(fogFactor));
-    }
 
     // ── Render mode ───────────────────────────────────────────────────────
     //   0 = greyscale (Rec.709 luminance)

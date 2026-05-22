@@ -17,7 +17,6 @@ enum SceneGeometryEncoder {
         let pipelineState:     MTLRenderPipelineState
         let depthStencilState: MTLDepthStencilState
         let colorMode:         RenderColorMode
-        let fog:               FogUniforms
         let isWireframe:       Bool
         let exposure:          Float        // pre-tone-map multiplier (Color Grade)
         let ibl:               IBL?
@@ -61,10 +60,6 @@ enum SceneGeometryEncoder {
             encoder.setFragmentTexture(i.specularCube,   index: 5)
             encoder.setFragmentTexture(i.brdfLUT,        index: 6)
         }
-
-        // ── Fog (constant across all objects this pass) ────────────────────────
-        var fog = context.fog
-        encoder.setFragmentBytes(&fog, length: MemoryLayout<FogUniforms>.stride, index: 5)
 
         // ── Per-object ─────────────────────────────────────────────────────────
         for object in toDraw {

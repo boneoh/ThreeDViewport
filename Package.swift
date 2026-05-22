@@ -18,6 +18,7 @@ let package = Package(
             path: "Sources/ThreeDViewport",
             resources: [
                 .process("Renderer/Shaders.metal"),
+                .process("Renderer/FogVolumeShaders.metal"),
                 .process("Renderer/FeedbackShaders.metal"),
                 .process("Renderer/LaserBeamShaders.metal"),
                 .process("Renderer/WidgetShaders.metal"),
