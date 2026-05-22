@@ -284,7 +284,7 @@ final class ProjectFile {
         }
 
         return ProjectData(
-            version:             20,
+            version:             21,
             modelPath:           nil,           // v3+ uses modelPaths instead
             modelPaths:          modelPaths,
             timeline:            timelineData,
@@ -309,7 +309,21 @@ final class ProjectFile {
                                          g: vp.fogSettings.color.y,
                                          b: vp.fogSettings.color.z,
                                          density: vp.fogSettings.density,
-                                         start:   vp.fogSettings.startDistance)
+                                         start:   vp.fogSettings.startDistance),
+            particles:           ParticleEffectData(
+                                     isEnabled: vp.particleEffect.isEnabled,
+                                     type:      vp.particleEffect.type.rawValue,
+                                     px: vp.particleEffect.position.x,
+                                     py: vp.particleEffect.position.y,
+                                     pz: vp.particleEffect.position.z,
+                                     sx: vp.particleEffect.size.x,
+                                     sy: vp.particleEffect.size.y,
+                                     sz: vp.particleEffect.size.z,
+                                     density:  vp.particleEffect.density,
+                                     variance: vp.particleEffect.variance,
+                                     r: vp.particleEffect.color.x,
+                                     g: vp.particleEffect.color.y,
+                                     b: vp.particleEffect.color.z)
         )
     }
 
@@ -519,6 +533,17 @@ final class ProjectFile {
         vp.fogSettings.density       = data.fog.density
         vp.fogSettings.startDistance = data.fog.start
         print("[DEBUG] ProjectFile: fog enabled=\(data.fog.isEnabled) density=\(data.fog.density)")
+
+        // ── Weather particles (v21) ───────────────────────────────────────────
+        let pe = data.particles
+        vp.particleEffect.isEnabled = pe.isEnabled
+        vp.particleEffect.type      = ParticleType(rawValue: pe.type) ?? .rain
+        vp.particleEffect.position  = SIMD3<Float>(pe.px, pe.py, pe.pz)
+        vp.particleEffect.size      = SIMD3<Float>(pe.sx, pe.sy, pe.sz)
+        vp.particleEffect.density   = pe.density
+        vp.particleEffect.variance  = pe.variance
+        vp.particleEffect.color     = SIMD3<Float>(pe.r, pe.g, pe.b)
+        print("[DEBUG] ProjectFile: particles enabled=\(pe.isEnabled) type=\(pe.type)")
 
         // Force the Renderer to re-evaluate keyframes on the next draw.
         // Without this, lastAnimatedTime == currentTime (both 0) so applyAnimation()

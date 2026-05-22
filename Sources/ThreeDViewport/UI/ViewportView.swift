@@ -78,6 +78,7 @@ final class ViewportView: MTKView {
     let feedbackProcessor:   FeedbackProcessor   // created after Metal device is ready
     let colorGradeSettings = ColorGradeSettings()
     let fogSettings        = FogSettings()
+    let particleEffect     = ParticleEffect()
 
     // Camera panel — sticky follow-target picker shared with the floating
     // CameraPanel inspector.  Lives here so the choice survives panel
@@ -208,6 +209,7 @@ final class ViewportView: MTKView {
         renderer?.feedbackSettings    = feedbackSettings
         renderer?.colorGradeSettings  = colorGradeSettings
         renderer?.fogSettings         = fogSettings
+        renderer?.particleEffect      = particleEffect
 
         // Sync renderSettings → renderer whenever toggles change
         colorModeCancellable = renderSettings.$colorMode.sink { [weak self] value in
@@ -1394,6 +1396,7 @@ final class ViewportView: MTKView {
         exporter.feedbackSettings   = feedbackSettings
         exporter.colorGradeSettings = colorGradeSettings
         exporter.fogSettings        = fogSettings
+        exporter.particleEffect     = particleEffect
         exporter.ibl                = renderer?.ibl   // share IBL so exports match preview
         feedbackProcessor.reset()   // clear live queue; exporter has its own processor
         timeline.pause()

@@ -181,6 +181,29 @@ struct FogUniforms {
     var _pad:    Float = 0
 }
 
+// ── Weather particle uniforms (vertex+fragment buffer 1 in the particle pass) ─
+// Must match `struct ParticleFXUniforms` in ParticleFXShaders.metal exactly.
+struct ParticleFXUniforms {
+    var viewProjection: matrix_float4x4   // 64
+    var cameraRight:    SIMD4<Float>      // 16  (xyz, w unused)
+    var cameraUp:       SIMD4<Float>      // 16
+    var emitterCenter:  SIMD4<Float>      // 16  (xyz centre)
+    var emitterSize:    SIMD4<Float>      // 16  (xyz full extents)
+    var color:          SIMD4<Float>      // 16  (rgb)
+    var time:           Float
+    var fallSpeed:      Float
+    var particleSize:   Float
+    var streak:         Float
+    var sway:           Float
+    var swayFreq:       Float
+    var colorMode:      UInt32            // 2 = black+white matte → force white
+    var mode:           UInt32            // 0 = falling weather, 1 = smoke (rise/grow/fade)
+    var growth:         Float             // smoke: size growth over lifetime
+    var lifetime:       Float             // smoke: particle lifetime (seconds)
+    var baseAlpha:      Float             // per-particle base alpha
+    var _pad:           Float = 0
+}
+
 // ── Spark particle GPU data (per-element in the instanced spark buffer) ───────
 // Must match `struct SparkParticleGPU` in LaserBeamShaders.metal exactly.
 // Layout (16-byte aligned):

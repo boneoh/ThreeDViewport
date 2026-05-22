@@ -6,6 +6,7 @@ import simd
 struct AtmospherePanel: View {
 
     @ObservedObject var fog: FogSettings
+    @ObservedObject var particle: ParticleEffect
 
     var body: some View {
         ScrollView {
@@ -55,11 +56,77 @@ struct AtmospherePanel: View {
                     .font(.caption2)
                     .foregroundColor(.secondary)
                     .padding(.top, 10)
+
+                Divider().padding(.vertical, 14)
+
+                // ── Weather particles ─────────────────────────────────────────
+                Text("Weather")
+                    .font(.subheadline.bold())
+                    .padding(.bottom, 6)
+
+                Toggle(isOn: $particle.isEnabled) {
+                    Text("Enabled")
+                        .font(.caption)
+                        .foregroundColor(particle.isEnabled ? .green : .primary)
+                }
+                .toggleStyle(.switch)
+                .tint(.green)
+                .padding(.bottom, 10)
+
+                Picker("Type", selection: $particle.type) {
+                    ForEach(ParticleType.allCases, id: \.self) { t in
+                        Text(t.displayName).tag(t)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .padding(.bottom, 10)
+
+                ColorPicker("Color", selection: particleColorBinding, supportsOpacity: false)
+                    .font(.caption)
+                    .padding(.bottom, 10)
+
+                FogSliderRow(label: "Density",  value: $particle.density,  range: 0.0...1.0, format: "%.2f")
+                Divider().padding(.vertical, 8)
+                FogSliderRow(label: "Variance", value: $particle.variance, range: 0.0...1.0, format: "%.2f")
+
+                Divider().padding(.vertical, 8)
+                Text("Position").font(.caption2).foregroundColor(.secondary)
+                FogSliderRow(label: "X", value: $particle.position.x, range: -20...20, format: "%.1f")
+                FogSliderRow(label: "Y", value: $particle.position.y, range: -20...20, format: "%.1f")
+                FogSliderRow(label: "Z", value: $particle.position.z, range: -20...20, format: "%.1f")
+
+                Divider().padding(.vertical, 8)
+                Text("Size").font(.caption2).foregroundColor(.secondary)
+                FogSliderRow(label: "W", value: $particle.size.x, range: 0.5...40, format: "%.1f")
+                FogSliderRow(label: "H", value: $particle.size.y, range: 0.5...40, format: "%.1f")
+                FogSliderRow(label: "D", value: $particle.size.z, range: 0.5...40, format: "%.1f")
+
+                Text("Particles are depth-occluded by the scene and render white in Black + White matte.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .padding(.top, 10)
             }
             .padding(14)
         }
         .frame(width: 280)
         .background(Color(NSColor.windowBackgroundColor))
+    }
+
+    private var particleColorBinding: Binding<Color> {
+        Binding<Color>(
+            get: {
+                Color(red:   Double(particle.color.x),
+                      green: Double(particle.color.y),
+                      blue:  Double(particle.color.z))
+            },
+            set: { newColor in
+                let ns = NSColor(newColor).usingColorSpace(.sRGB) ?? NSColor(newColor)
+                particle.color = SIMD3<Float>(Float(ns.redComponent),
+                                              Float(ns.greenComponent),
+                                              Float(ns.blueComponent))
+            }
+        )
     }
 
     // Bridges the shader-side SIMD3 fog colour to SwiftUI's Color (sRGB).

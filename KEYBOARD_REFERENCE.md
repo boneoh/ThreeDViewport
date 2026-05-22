@@ -43,7 +43,7 @@ Available in the main viewport (no modifier unless noted).
 | **⌘F** | Window | Feedback panel |
 | **⌘G** | View | Render Mode (cycles Greyscale → Color → Black + White) |
 | **⌘⇧G** | Window | Color Grade panel |
-| **⌘⇧A** | Window | Atmosphere panel (Fog) |
+| **⌘⇧A** | Window | Atmosphere panel (Fog + Weather: rain/snow/sleet) |
 | **⌘J** | Window | Timeline Editor |
 | **⌘K** | Window | Camera panel (follow-target picker + stamp button) |
 | **⌘L** | Window | Lights & Background panel |

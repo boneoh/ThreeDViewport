@@ -101,6 +101,11 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     // MARK: - Fog (optional — set by ViewportView after init)
     var fogSettings: FogSettings?
+
+    // MARK: - Weather particles (optional — set by ViewportView after init)
+    var particleEffect: ParticleEffect?
+    private var particleFXPipelineState: MTLRenderPipelineState?
+    private var particleSeedBuffer:      MTLBuffer?
     private var gradeTexture:  MTLTexture?   // intermediate; rebuilt on size change
 
     // MARK: - Laser hit effect
@@ -381,6 +386,33 @@ final class Renderer: NSObject, MTKViewDelegate {
         } catch {
             print("[DEBUG] Renderer: widget pipeline failed — " + error.localizedDescription)
         }
+
+        // ── Weather particle pipeline (instanced billboards, alpha blend) ──────
+        if let pVert = library.makeFunction(name: "particlefx_vertex"),
+           let pFrag = library.makeFunction(name: "particlefx_fragment") {
+            let pDesc = MTLRenderPipelineDescriptor()
+            pDesc.label                           = "ParticleFX"
+            pDesc.vertexFunction                  = pVert
+            pDesc.fragmentFunction                = pFrag
+            pDesc.depthAttachmentPixelFormat      = .depth32Float
+            let ca = pDesc.colorAttachments[0]!
+            ca.pixelFormat                 = .bgra8Unorm
+            ca.isBlendingEnabled           = true
+            ca.sourceRGBBlendFactor        = .sourceAlpha
+            ca.destinationRGBBlendFactor   = .oneMinusSourceAlpha
+            ca.rgbBlendOperation           = .add
+            ca.sourceAlphaBlendFactor      = .sourceAlpha
+            ca.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+            ca.alphaBlendOperation         = .add
+            do {
+                particleFXPipelineState = try device.makeRenderPipelineState(descriptor: pDesc)
+                print("[DEBUG] Renderer: particle pipeline created")
+            } catch {
+                print("[DEBUG] Renderer: particle pipeline failed — " + error.localizedDescription)
+            }
+        } else {
+            print("[DEBUG] Renderer: particlefx shaders not found")
+        }
     }
 
     private func buildDummyBuffers() {
@@ -392,6 +424,12 @@ final class Renderer: NSObject, MTKViewDelegate {
         dummyTangentBuffer = device.makeBuffer(bytes: &dummyTan,
                                                 length: 4 * MemoryLayout<Float>.stride,
                                                 options: .storageModeShared)
+
+        // Static, deterministic weather-particle seed pool (positions + phase).
+        let seeds = ParticleEffect.makeSeeds()
+        particleSeedBuffer = device.makeBuffer(bytes: seeds,
+                                               length: seeds.count * MemoryLayout<SIMD4<Float>>.stride,
+                                               options: .storageModeShared)
     }
 
     // MARK: - MTKViewDelegate
@@ -429,6 +467,34 @@ final class Renderer: NSObject, MTKViewDelegate {
             return sceneManager.objects(inGroup: gid)
         }
         return [sel]
+    }
+
+    /// Draws the procedural weather particles into the open scene encoder, at the
+    /// given timeline time (so live/scrub/export all agree).  Depth-tested against
+    /// scene geometry, alpha-blended, no depth write.
+    private func drawParticleEffect(encoder: MTLRenderCommandEncoder, time: Double) {
+        guard let fx = particleEffect, fx.isEnabled,
+              let pipe  = particleFXPipelineState,
+              let seeds = particleSeedBuffer,
+              let ds    = laserBeamDepthState else { return }
+        let count = Int((max(0, min(1, fx.density)) * Float(ParticleEffect.maxCount)).rounded())
+        guard count > 0 else { return }
+
+        var u = makeParticleFXUniforms(fx,
+            viewProjection: viewCamera.viewProjectionMatrix,
+            cameraRight:    viewCamera.rightVector,
+            cameraUp:       viewCamera.upVector,
+            time:           Float(time),
+            colorMode:      colorMode.rawValue)
+
+        encoder.setRenderPipelineState(pipe)
+        encoder.setDepthStencilState(ds)
+        encoder.setCullMode(.none)
+        encoder.setVertexBuffer(seeds, offset: 0, index: 0)
+        encoder.setVertexBytes(&u, length: MemoryLayout<ParticleFXUniforms>.stride, index: 1)
+        encoder.setFragmentBytes(&u, length: MemoryLayout<ParticleFXUniforms>.stride, index: 1)
+        encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4,
+                               instanceCount: count)
     }
 
     func draw(in view: MTKView) {
@@ -599,6 +665,9 @@ final class Renderer: NSObject, MTKViewDelegate {
                     dummyUV:           dummyUVBuffer,
                     dummyTangent:      dummyTangentBuffer))
         }
+
+        // ── Weather particles (depth-tested against geometry, alpha-blended) ───
+        drawParticleEffect(encoder: encoder, time: timeline.currentTime)
 
         // ── Laser hit detection + particle update ─────────────────────────────
         let screenSize = SIMD2<Float>(Float(view.drawableSize.width),

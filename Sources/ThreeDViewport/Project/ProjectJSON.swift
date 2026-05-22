@@ -55,6 +55,7 @@ struct ProjectData: Codable {
     var groupKeyframeTracks: [GroupTrackData] = []
     var iblIntensity:        Float = 1.0                 // v16; per-scene IBL strength.
     var fog:                 FogData = FogData()         // v19; distance fog (atmosphere).
+    var particles:           ParticleEffectData = ParticleEffectData()  // v21; weather particles.
 
     // MARK: - Memberwise init (required because we define init(from:) below)
 
@@ -78,7 +79,8 @@ struct ProjectData: Codable {
          colorGrade:          ColorGradeData         = ColorGradeData(),
          groupKeyframeTracks: [GroupTrackData]       = [],
          iblIntensity:        Float                  = 1.0,
-         fog:                 FogData                = FogData()) {
+         fog:                 FogData                = FogData(),
+         particles:           ParticleEffectData     = ParticleEffectData()) {
         self.version             = version
         self.modelPath           = modelPath
         self.modelPaths          = modelPaths
@@ -100,6 +102,7 @@ struct ProjectData: Codable {
         self.groupKeyframeTracks = groupKeyframeTracks
         self.iblIntensity        = iblIntensity
         self.fog                 = fog
+        self.particles           = particles
     }
 
     // MARK: - Custom decoder
@@ -135,6 +138,7 @@ struct ProjectData: Codable {
         groupKeyframeTracks = (try? c.decode([GroupTrackData].self,      forKey: .groupKeyframeTracks)) ?? []
         iblIntensity        = (try? c.decode(Float.self,                 forKey: .iblIntensity))        ?? 1.0
         fog                 = (try? c.decode(FogData.self,               forKey: .fog))                 ?? FogData()
+        particles           = (try? c.decode(ParticleEffectData.self,    forKey: .particles))           ?? ParticleEffectData()
     }
 }
 
@@ -190,6 +194,47 @@ struct FogData: Codable {
         self.r = r; self.g = g; self.b = b
         self.density = density
         self.start   = start
+    }
+}
+
+// v21: Weather particle effect (atmosphere).  Defaults match ParticleEffect so
+// older project files load with weather disabled.
+struct ParticleEffectData: Codable {
+    var isEnabled: Bool  = false
+    var type:      Int   = 0          // ParticleType raw (0=rain,1=snow,2=sleet,3=smoke)
+    var px: Float = 0; var py: Float = 2; var pz: Float = 0
+    var sx: Float = 8; var sy: Float = 5; var sz: Float = 8
+    var density:  Float = 0.5
+    var variance: Float = 0.5
+    var r: Float = 1; var g: Float = 1; var b: Float = 1
+
+    init(from decoder: Decoder) throws {
+        let c     = try decoder.container(keyedBy: CodingKeys.self)
+        isEnabled = (try? c.decode(Bool.self,  forKey: .isEnabled)) ?? false
+        type      = (try? c.decode(Int.self,   forKey: .type))      ?? 0
+        px = (try? c.decode(Float.self, forKey: .px)) ?? 0
+        py = (try? c.decode(Float.self, forKey: .py)) ?? 2
+        pz = (try? c.decode(Float.self, forKey: .pz)) ?? 0
+        sx = (try? c.decode(Float.self, forKey: .sx)) ?? 8
+        sy = (try? c.decode(Float.self, forKey: .sy)) ?? 5
+        sz = (try? c.decode(Float.self, forKey: .sz)) ?? 8
+        density  = (try? c.decode(Float.self, forKey: .density))  ?? 0.5
+        variance = (try? c.decode(Float.self, forKey: .variance)) ?? 0.5
+        r = (try? c.decode(Float.self, forKey: .r)) ?? 1
+        g = (try? c.decode(Float.self, forKey: .g)) ?? 1
+        b = (try? c.decode(Float.self, forKey: .b)) ?? 1
+    }
+
+    init(isEnabled: Bool = false, type: Int = 0,
+         px: Float = 0, py: Float = 2, pz: Float = 0,
+         sx: Float = 8, sy: Float = 5, sz: Float = 8,
+         density: Float = 0.5, variance: Float = 0.5,
+         r: Float = 1, g: Float = 1, b: Float = 1) {
+        self.isEnabled = isEnabled; self.type = type
+        self.px = px; self.py = py; self.pz = pz
+        self.sx = sx; self.sy = sy; self.sz = sz
+        self.density = density; self.variance = variance
+        self.r = r; self.g = g; self.b = b
     }
 }
 

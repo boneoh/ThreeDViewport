@@ -422,6 +422,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             .sink { [weak self] in self?.markDirty() }
             .store(in: &settingsCancellables)
 
+        // ParticleEffect (weather).
+        viewport.particleEffect.objectWillChange
+            .sink { [weak self] in self?.markDirty() }
+            .store(in: &settingsCancellables)
+
         print("[DEBUG] AppDelegate: subscribed to settings changes for dirty tracking")
     }
 
@@ -1520,7 +1525,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.becomesKeyOnlyIfNeeded = true
         panel.hidesOnDeactivate  = false
 
-        let atmoView = AtmospherePanel(fog: viewport.fogSettings)
+        let atmoView = AtmospherePanel(fog: viewport.fogSettings,
+                                       particle: viewport.particleEffect)
         panel.contentView = NSHostingView(rootView: atmoView)
 
         if let win = window {

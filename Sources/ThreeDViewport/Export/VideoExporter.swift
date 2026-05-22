@@ -145,6 +145,11 @@ final class VideoExporter {
     // Fog settings — nil = no fog during export
     var fogSettings: FogSettings?
 
+    // Weather particles — nil/disabled = none during export
+    var particleEffect: ParticleEffect?
+    private var particleFXPipelineState: MTLRenderPipelineState?
+    private var particleSeedBuffer:      MTLBuffer?
+
     // Phase C: image-based lighting — shared with the live Renderer so exports
     // match the viewport.  Set by ViewportView after construction.
     var ibl: IBL?
@@ -333,6 +338,34 @@ final class VideoExporter {
             print("[DEBUG] VideoExporter: spark pipeline "
                 + (sparkPipelineState != nil ? "created" : "FAILED"))
         }
+
+        // Weather particle pipeline (instanced billboards, alpha blend)
+        if let library = try? device.makeDefaultLibrary(bundle: Bundle.module),
+           let pVert   = library.makeFunction(name: "particlefx_vertex"),
+           let pFrag   = library.makeFunction(name: "particlefx_fragment") {
+            let pDesc = MTLRenderPipelineDescriptor()
+            pDesc.label                           = "ParticleFXExport"
+            pDesc.vertexFunction                  = pVert
+            pDesc.fragmentFunction                = pFrag
+            pDesc.depthAttachmentPixelFormat      = .depth32Float
+            let ca = pDesc.colorAttachments[0]!
+            ca.pixelFormat                 = .bgra8Unorm
+            ca.isBlendingEnabled           = true
+            ca.sourceRGBBlendFactor        = .sourceAlpha
+            ca.destinationRGBBlendFactor   = .oneMinusSourceAlpha
+            ca.rgbBlendOperation           = .add
+            ca.sourceAlphaBlendFactor      = .sourceAlpha
+            ca.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+            ca.alphaBlendOperation         = .add
+            particleFXPipelineState = try? device.makeRenderPipelineState(descriptor: pDesc)
+            print("[DEBUG] VideoExporter: particle pipeline "
+                + (particleFXPipelineState != nil ? "created" : "FAILED"))
+        }
+        // Static deterministic seed pool (identical to the live renderer's).
+        let pSeeds = ParticleEffect.makeSeeds()
+        particleSeedBuffer = device.makeBuffer(bytes: pSeeds,
+                                               length: pSeeds.count * MemoryLayout<SIMD4<Float>>.stride,
+                                               options: .storageModeShared)
 
         // Color grade pipeline (no depth, no blend — overwrites every pixel)
         if let library    = try? device.makeDefaultLibrary(bundle: Bundle.module),
@@ -697,6 +730,10 @@ final class VideoExporter {
                     ibl:               ibl,
                     dummyUV:           dummyUVBuffer,
                     dummyTangent:      dummyTangentBuffer))
+
+            // ── Weather particles (hitEffectTime carries the frame time t) ─────
+            drawParticleEffect(encoder: encoder, time: Double(hitEffectTime))
+
             // ── Laser beam visuals + hit effects ──────────────────────────────
             let exportSize = SIMD2<Float>(Float(width), Float(height))
             drawLaserBeamsInEncoder(encoder,
@@ -932,6 +969,32 @@ final class VideoExporter {
         encoder.setVertexBytes(&su, length: MemoryLayout<SparkUniforms>.stride, index: 1)
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0,
                                vertexCount: 4, instanceCount: sparkGPUData.count)
+    }
+
+    /// Weather particles — mirrors Renderer.drawParticleEffect so export matches.
+    private func drawParticleEffect(encoder: MTLRenderCommandEncoder, time: Double) {
+        guard let fx = particleEffect, fx.isEnabled,
+              let pipe  = particleFXPipelineState,
+              let seeds = particleSeedBuffer,
+              let ds    = laserBeamDepthState else { return }
+        let count = Int((max(0, min(1, fx.density)) * Float(ParticleEffect.maxCount)).rounded())
+        guard count > 0 else { return }
+
+        var u = makeParticleFXUniforms(fx,
+            viewProjection: camera.viewProjectionMatrix,
+            cameraRight:    camera.rightVector,
+            cameraUp:       camera.upVector,
+            time:           Float(time),
+            colorMode:      colorMode.rawValue)
+
+        encoder.setRenderPipelineState(pipe)
+        encoder.setDepthStencilState(ds)
+        encoder.setCullMode(.none)
+        encoder.setVertexBuffer(seeds, offset: 0, index: 0)
+        encoder.setVertexBytes(&u, length: MemoryLayout<ParticleFXUniforms>.stride, index: 1)
+        encoder.setFragmentBytes(&u, length: MemoryLayout<ParticleFXUniforms>.stride, index: 1)
+        encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4,
+                               instanceCount: count)
     }
 
     // MARK: - Axes gizmo (mirrors Renderer.drawGizmoPass exactly)
