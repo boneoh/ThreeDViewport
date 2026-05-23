@@ -1565,11 +1565,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.becomesKeyOnlyIfNeeded = true
         panel.hidesOnDeactivate  = false
 
-        // 3a: the panel edits the selected emitter; the list UI arrives in 3b.
-        let mgr = viewport.particleManager
         let atmoView = AtmospherePanel(
             fog: viewport.fogSettings,
-            particle: mgr.emitters[mgr.selectedIndex],
+            particleManager: viewport.particleManager,
             onStampFog:       { [weak viewport] in viewport?.addFogKeyframeAtCurrentTime() },
             onClearFog:       { [weak viewport] in viewport?.clearFogKeyframes() },
             onStampParticles: { [weak viewport] in

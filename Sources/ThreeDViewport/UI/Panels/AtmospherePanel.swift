@@ -1,21 +1,30 @@
 import SwiftUI
 import simd
 
-// Floating panel for atmosphere effects.  Phase 1 hosts Fog; later phases will
-// add precipitation (rain / snow / sleet) and smoke beneath it.
+// Floating panel for atmosphere effects.  Three collapsible sections:
+//   • Fog      — single fog volume (Enabled / Color / Density + keyframes).
+//   • Weather  — a list of particle emitters (+/− to add/remove, click to select)
+//                with the selected emitter's main controls below.
+//   • Advanced — the spatial detail (Position / Size / Variance) for the fog
+//                volume and the selected emitter.
 struct AtmospherePanel: View {
 
     @ObservedObject var fog: FogSettings
-    @ObservedObject var particle: ParticleEffect
+    @ObservedObject var particleManager: ParticleManager
 
-    // Stamp / clear actions wired by AppDelegate to ViewportView.
+    // Stamp / clear actions wired by AppDelegate to ViewportView.  The particle
+    // ones target the manager's currently-selected emitter.
     var onStampFog:       () -> Void = {}
     var onClearFog:       () -> Void = {}
     var onStampParticles: () -> Void = {}
     var onClearParticles: () -> Void = {}
 
-    private var fogKeyCount:      Int { fog.keyframeTrack?.keyframes.count ?? 0 }
-    private var particleKeyCount: Int { particle.keyframeTrack?.keyframes.count ?? 0 }
+    // Section expansion — persists while the panel stays open this session.
+    @State private var fogExpanded      = true
+    @State private var weatherExpanded  = true
+    @State private var advancedExpanded = false
+
+    private var fogKeyCount: Int { fog.keyframeTrack?.keyframes.count ?? 0 }
 
     var body: some View {
         ScrollView {
@@ -25,149 +34,200 @@ struct AtmospherePanel: View {
                 HStack {
                     Image(systemName: "cloud.fog.fill")
                         .foregroundColor(fog.isEnabled ? .green : .accentColor)
-                    Text("Atmosphere")
-                        .font(.headline)
+                    Text("Atmosphere").font(.headline)
                     Spacer()
                 }
-                .padding(.bottom, 10)
+                .padding(.bottom, 8)
+                Divider().padding(.bottom, 6)
 
-                Divider().padding(.bottom, 14)
+                // ── Fog ─────────────────────────────────────────────────────────
+                DisclosureGroup(isExpanded: $fogExpanded) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Toggle(isOn: $fog.isEnabled) {
+                            Text("Enabled").font(.caption)
+                                .foregroundColor(fog.isEnabled ? .green : .primary)
+                        }
+                        .toggleStyle(.switch).tint(.green).padding(.bottom, 8)
 
-                // ── Fog ───────────────────────────────────────────────────────
-                Text("Fog")
-                    .font(.subheadline.bold())
-                    .padding(.bottom, 6)
+                        ColorPicker("Color", selection: atmoColorBinding({ fog.color }, { fog.color = $0 }),
+                                    supportsOpacity: false)
+                            .font(.caption).padding(.bottom, 8)
 
-                Toggle(isOn: $fog.isEnabled) {
-                    Text("Enabled")
-                        .font(.caption)
-                        .foregroundColor(fog.isEnabled ? .green : .primary)
-                }
-                .toggleStyle(.switch)
-                .tint(.green)
-                .padding(.bottom, 10)
-
-                ColorPicker("Color", selection: fogColorBinding, supportsOpacity: false)
-                    .font(.caption)
-                    .padding(.bottom, 10)
-
-                FogSliderRow(label: "Density",  value: $fog.density,  range: 0.0...1.0, format: "%.2f")
-                Divider().padding(.vertical, 8)
-                FogSliderRow(label: "Variance", value: $fog.variance, range: 0.0...1.0, format: "%.2f")
-
-                Divider().padding(.vertical, 8)
-                Text("Position").font(.caption2).foregroundColor(.secondary)
-                FogSliderRow(label: "X", value: $fog.position.x, range: -20...20, format: "%.1f")
-                FogSliderRow(label: "Y", value: $fog.position.y, range: -20...20, format: "%.1f")
-                FogSliderRow(label: "Z", value: $fog.position.z, range: -20...20, format: "%.1f")
-
-                Divider().padding(.vertical, 8)
-                Text("Size").font(.caption2).foregroundColor(.secondary)
-                FogSliderRow(label: "W", value: $fog.size.x, range: 0.5...40, format: "%.1f")
-                FogSliderRow(label: "H", value: $fog.size.y, range: 0.5...40, format: "%.1f")
-                FogSliderRow(label: "D", value: $fog.size.z, range: 0.5...40, format: "%.1f")
-
-                Divider().padding(.vertical, 8)
-                KeyframeRow(count: fogKeyCount, onAdd: onStampFog, onClear: onClearFog)
-
-                Text(fog.isEnabled
-                     ? "Fog volume applies in Color and Greyscale (Black + White matte stays solid white)."
-                     : "Fog is off.")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                    .padding(.top, 10)
-
-                Divider().padding(.vertical, 14)
-
-                // ── Weather particles ─────────────────────────────────────────
-                Text("Weather")
-                    .font(.subheadline.bold())
-                    .padding(.bottom, 6)
-
-                Toggle(isOn: $particle.isEnabled) {
-                    Text("Enabled")
-                        .font(.caption)
-                        .foregroundColor(particle.isEnabled ? .green : .primary)
-                }
-                .toggleStyle(.switch)
-                .tint(.green)
-                .padding(.bottom, 10)
-
-                Picker("Type", selection: $particle.type) {
-                    ForEach(ParticleType.allCases, id: \.self) { t in
-                        Text(t.displayName).tag(t)
+                        FogSliderRow(label: "Density", value: $fog.density, range: 0.0...1.0, format: "%.2f")
+                        KeyframeRow(count: fogKeyCount, onAdd: onStampFog, onClear: onClearFog)
+                            .padding(.top, 6)
                     }
+                    .padding(.top, 6)
+                } label: {
+                    Text("Fog").font(.subheadline.bold())
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .padding(.bottom, 10)
-
-                ColorPicker("Color", selection: particleColorBinding, supportsOpacity: false)
-                    .font(.caption)
-                    .padding(.bottom, 10)
-
-                FogSliderRow(label: "Density",  value: $particle.density,  range: 0.0...1.0, format: "%.2f")
-                Divider().padding(.vertical, 8)
-                FogSliderRow(label: "Variance", value: $particle.variance, range: 0.0...1.0, format: "%.2f")
 
                 Divider().padding(.vertical, 8)
-                Text("Position").font(.caption2).foregroundColor(.secondary)
-                FogSliderRow(label: "X", value: $particle.position.x, range: -20...20, format: "%.1f")
-                FogSliderRow(label: "Y", value: $particle.position.y, range: -20...20, format: "%.1f")
-                FogSliderRow(label: "Z", value: $particle.position.z, range: -20...20, format: "%.1f")
+
+                // ── Weather ─────────────────────────────────────────────────────
+                DisclosureGroup(isExpanded: $weatherExpanded) {
+                    VStack(alignment: .leading, spacing: 0) {
+
+                        // Emitter list
+                        ForEach(Array(particleManager.emitters.enumerated()), id: \.offset) { idx, fx in
+                            EmitterRow(emitter: fx,
+                                       isSelected: idx == particleManager.selectedIndex,
+                                       onSelect: { particleManager.selectedIndex = idx })
+                        }
+
+                        // Add / remove
+                        HStack(spacing: 8) {
+                            Button { particleManager.addEmitter() } label: { Image(systemName: "plus") }
+                                .disabled(particleManager.emitters.count >= ParticleManager.maxEmitters)
+                            Button { particleManager.removeEmitter(at: particleManager.selectedIndex) } label: { Image(systemName: "minus") }
+                                .disabled(particleManager.emitters.count <= 1)
+                            Spacer()
+                            Text("\(particleManager.emitters.count) / \(ParticleManager.maxEmitters)")
+                                .font(.caption2.monospacedDigit()).foregroundColor(.secondary)
+                        }
+                        .padding(.vertical, 6)
+
+                        Divider().padding(.bottom, 6)
+
+                        // Selected emitter's main controls
+                        if let fx = particleManager.selected {
+                            EmitterMainControls(emitter: fx, onStamp: onStampParticles, onClear: onClearParticles)
+                        }
+                    }
+                    .padding(.top, 6)
+                } label: {
+                    Text("Weather").font(.subheadline.bold())
+                }
 
                 Divider().padding(.vertical, 8)
-                Text("Size").font(.caption2).foregroundColor(.secondary)
-                FogSliderRow(label: "W", value: $particle.size.x, range: 0.5...40, format: "%.1f")
-                FogSliderRow(label: "H", value: $particle.size.y, range: 0.5...40, format: "%.1f")
-                FogSliderRow(label: "D", value: $particle.size.z, range: 0.5...40, format: "%.1f")
 
-                Divider().padding(.vertical, 8)
-                KeyframeRow(count: particleKeyCount, onAdd: onStampParticles, onClear: onClearParticles)
+                // ── Advanced (spatial detail) ────────────────────────────────────
+                DisclosureGroup(isExpanded: $advancedExpanded) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("Fog Volume").font(.caption2).foregroundColor(.secondary).padding(.top, 6)
+                        AtmoDetailControls(variance: $fog.variance, position: $fog.position, size: $fog.size)
 
-                Text("Particles are depth-occluded by the scene and render white in Black + White matte.")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                    .padding(.top, 10)
+                        Divider().padding(.vertical, 8)
+
+                        Text("Weather Emitter").font(.caption2).foregroundColor(.secondary)
+                        if let fx = particleManager.selected {
+                            AtmoDetailControls(variance: bind(fx, \.variance),
+                                               position: bind(fx, \.position),
+                                               size:     bind(fx, \.size))
+                        }
+                    }
+                    .padding(.top, 6)
+                } label: {
+                    Text("Advanced").font(.subheadline.bold())
+                }
             }
             .padding(14)
         }
         .frame(width: 280)
         .background(Color(NSColor.windowBackgroundColor))
     }
+}
 
-    private var particleColorBinding: Binding<Color> {
-        Binding<Color>(
-            get: {
-                Color(red:   Double(particle.color.x),
-                      green: Double(particle.color.y),
-                      blue:  Double(particle.color.z))
-            },
-            set: { newColor in
-                let ns = NSColor(newColor).usingColorSpace(.sRGB) ?? NSColor(newColor)
-                particle.color = SIMD3<Float>(Float(ns.redComponent),
-                                              Float(ns.greenComponent),
-                                              Float(ns.blueComponent))
-            }
-        )
-    }
+// MARK: - Emitter list row
 
-    // Bridges the shader-side SIMD3 fog colour to SwiftUI's Color (sRGB).
-    private var fogColorBinding: Binding<Color> {
-        Binding<Color>(
-            get: {
-                Color(red:   Double(fog.color.x),
-                      green: Double(fog.color.y),
-                      blue:  Double(fog.color.z))
-            },
-            set: { newColor in
-                let ns = NSColor(newColor).usingColorSpace(.sRGB) ?? NSColor(newColor)
-                fog.color = SIMD3<Float>(Float(ns.redComponent),
-                                         Float(ns.greenComponent),
-                                         Float(ns.blueComponent))
-            }
-        )
+private struct EmitterRow: View {
+    @ObservedObject var emitter: ParticleEffect
+    let isSelected: Bool
+    let onSelect:   () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: emitter.isEnabled ? "circle.fill" : "circle")
+                .font(.system(size: 8))
+                .foregroundColor(emitter.isEnabled ? .green : .secondary)
+            Text(emitter.type.displayName).font(.caption)
+            Spacer()
+        }
+        .padding(.vertical, 4).padding(.horizontal, 6)
+        .background(isSelected ? Color.accentColor.opacity(0.25) : Color.clear)
+        .cornerRadius(4)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onSelect)
     }
+}
+
+// MARK: - Selected emitter — main controls
+
+private struct EmitterMainControls: View {
+    @ObservedObject var emitter: ParticleEffect
+    let onStamp: () -> Void
+    let onClear: () -> Void
+
+    private var keyCount: Int { emitter.keyframeTrack?.keyframes.count ?? 0 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Toggle(isOn: $emitter.isEnabled) {
+                Text("Enabled").font(.caption)
+                    .foregroundColor(emitter.isEnabled ? .green : .primary)
+            }
+            .toggleStyle(.switch).tint(.green).padding(.bottom, 8)
+
+            Picker("Type", selection: $emitter.type) {
+                ForEach(ParticleType.allCases, id: \.self) { t in Text(t.displayName).tag(t) }
+            }
+            .pickerStyle(.segmented).labelsHidden().padding(.bottom, 8)
+
+            ColorPicker("Color", selection: atmoColorBinding({ emitter.color }, { emitter.color = $0 }),
+                        supportsOpacity: false)
+                .font(.caption).padding(.bottom, 8)
+
+            FogSliderRow(label: "Density", value: $emitter.density, range: 0.0...1.0, format: "%.2f")
+            KeyframeRow(count: keyCount, onAdd: onStamp, onClear: onClear).padding(.top, 6)
+        }
+    }
+}
+
+// MARK: - Shared detail controls (Variance + Position + Size)
+
+private struct AtmoDetailControls: View {
+    @Binding var variance: Float
+    @Binding var position: SIMD3<Float>
+    @Binding var size:     SIMD3<Float>
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            FogSliderRow(label: "Variance", value: $variance, range: 0.0...1.0, format: "%.2f")
+
+            Divider().padding(.vertical, 8)
+            Text("Position").font(.caption2).foregroundColor(.secondary)
+            FogSliderRow(label: "X", value: $position.x, range: -20...20, format: "%.1f")
+            FogSliderRow(label: "Y", value: $position.y, range: -20...20, format: "%.1f")
+            FogSliderRow(label: "Z", value: $position.z, range: -20...20, format: "%.1f")
+
+            Divider().padding(.vertical, 8)
+            Text("Size").font(.caption2).foregroundColor(.secondary)
+            FogSliderRow(label: "W", value: $size.x, range: 0.5...40, format: "%.1f")
+            FogSliderRow(label: "H", value: $size.y, range: 0.5...40, format: "%.1f")
+            FogSliderRow(label: "D", value: $size.z, range: 0.5...40, format: "%.1f")
+        }
+    }
+}
+
+// MARK: - Bindings
+
+/// Bridges a SIMD3 display-space colour to SwiftUI's Color (sRGB).
+private func atmoColorBinding(_ get: @escaping () -> SIMD3<Float>,
+                             _ set: @escaping (SIMD3<Float>) -> Void) -> Binding<Color> {
+    Binding<Color>(
+        get: { let c = get(); return Color(red: Double(c.x), green: Double(c.y), blue: Double(c.z)) },
+        set: { newColor in
+            let ns = NSColor(newColor).usingColorSpace(.sRGB) ?? NSColor(newColor)
+            set(SIMD3<Float>(Float(ns.redComponent), Float(ns.greenComponent), Float(ns.blueComponent)))
+        })
+}
+
+/// A two-way Binding to a property of an ObservableObject emitter, so the shared
+/// detail controls can drive the selected emitter directly.
+private func bind<Value>(_ emitter: ParticleEffect,
+                         _ keyPath: ReferenceWritableKeyPath<ParticleEffect, Value>) -> Binding<Value> {
+    Binding<Value>(get: { emitter[keyPath: keyPath] },
+                   set: { emitter[keyPath: keyPath] = $0 })
 }
 
 // MARK: - Slider row
@@ -181,9 +241,7 @@ private struct FogSliderRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(label)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                Text(label).font(.caption).foregroundColor(.secondary)
                 Spacer()
                 Text(String(format: format, value))
                     .font(.caption.monospacedDigit())
@@ -191,10 +249,7 @@ private struct FogSliderRow: View {
                     .frame(width: 46, alignment: .trailing)
             }
             Slider(
-                value: Binding<Double>(
-                    get: { Double(value) },
-                    set: { value = Float($0) }
-                ),
+                value: Binding<Double>(get: { Double(value) }, set: { value = Float($0) }),
                 in: Double(range.lowerBound)...Double(range.upperBound)
             )
         }
@@ -211,19 +266,13 @@ private struct KeyframeRow: View {
 
     var body: some View {
         HStack {
-            Button(action: onAdd) {
-                Label("Add Keyframe", systemImage: "diamond.fill")
-            }
-            .font(.caption)
+            Button(action: onAdd) { Label("Add Keyframe", systemImage: "diamond.fill") }
+                .font(.caption)
             Spacer()
             Text("\(count) key\(count == 1 ? "" : "s")")
-                .font(.caption2.monospacedDigit())
-                .foregroundColor(.secondary)
-            Button(action: onClear) {
-                Image(systemName: "trash")
-            }
-            .font(.caption)
-            .disabled(count == 0)
+                .font(.caption2.monospacedDigit()).foregroundColor(.secondary)
+            Button(action: onClear) { Image(systemName: "trash") }
+                .font(.caption).disabled(count == 0)
         }
     }
 }

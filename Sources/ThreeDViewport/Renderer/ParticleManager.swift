@@ -32,7 +32,9 @@ final class ParticleManager: ObservableObject {
             print("[DEBUG] ParticleManager: addEmitter — max emitters reached")
             return nil
         }
-        emitters.append(ParticleEffect())
+        let fx = ParticleEffect()
+        fx.isEnabled = true   // active on add so the new emitter is visible immediately
+        emitters.append(fx)
         selectedIndex = emitters.count - 1
         print("[DEBUG] ParticleManager: added emitter total=" + String(emitters.count))
         return selectedIndex
