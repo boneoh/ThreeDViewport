@@ -318,6 +318,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             layout.atmospherePanel = WindowFrameData(x: f.origin.x, y: f.origin.y,
                                                      w: f.size.width, h: f.size.height)
         }
+        // Atmosphere section expand/collapse (saved regardless of panel visibility).
+        if let vp = viewportView {
+            layout.atmosphereFogExpanded      = vp.atmospherePanelState.fogExpanded
+            layout.atmosphereWeatherExpanded  = vp.atmospherePanelState.weatherExpanded
+            layout.atmosphereAdvancedExpanded = vp.atmospherePanelState.advancedExpanded
+        }
         return layout
     }
 
@@ -379,6 +385,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             if modelInspectorPanel == nil { showModelInspector(self) }
             modelInspectorPanel?.setFrame(
                 NSRect(x: mf.x, y: mf.y, width: mf.w, height: mf.h), display: true)
+        }
+
+        // Atmosphere section state — restore BEFORE (re)opening the panel so it
+        // appears in the saved expand/collapse configuration.
+        if let vp = viewportView {
+            if let v = layout.atmosphereFogExpanded      { vp.atmospherePanelState.fogExpanded = v }
+            if let v = layout.atmosphereWeatherExpanded  { vp.atmospherePanelState.weatherExpanded = v }
+            if let v = layout.atmosphereAdvancedExpanded { vp.atmospherePanelState.advancedExpanded = v }
         }
 
         // Atmosphere panel — open and position if it was visible
@@ -1459,6 +1473,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             lightManager:     viewport.lightManager,
             backgroundConfig: viewport.backgroundConfig,
             renderSettings:   viewport.renderSettings,
+            clipboard:        viewport.coordinateClipboard,
             camera:           viewport.camera
         )
 
@@ -1587,6 +1602,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let atmoView = AtmospherePanel(
             fog: viewport.fogSettings,
             particleManager: viewport.particleManager,
+            clipboard: viewport.coordinateClipboard,
+            sections: viewport.atmospherePanelState,
             onStampFog:       { [weak viewport] in viewport?.addFogKeyframeAtCurrentTime() },
             onClearFog:       { [weak viewport] in viewport?.clearFogKeyframes() },
             onStampParticles: { [weak viewport] in
@@ -1824,7 +1841,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             camera:         viewport.camera,
             lightManager:   viewport.lightManager,
             fogSettings:     viewport.fogSettings,
-            particleManager: viewport.particleManager
+            particleManager: viewport.particleManager,
+            coordinateClipboard: viewport.coordinateClipboard
         )
         wc.editorView.onInsertObjectKeyframe = { [weak self, weak viewport] index in
             viewport?.addKeyframeAtCurrentTime(forObjectAt: index)
@@ -1860,6 +1878,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             self?.markDirty()
             viewport?.fogSettings.objectWillChange.send()
             viewport?.particleManager.emitters.forEach { $0.objectWillChange.send() }
+            // Re-evaluate so a paste (whole keyframe via ⌘V, or a single channel via
+            // right-click) shows in the viewport/panel immediately, not only on scrub.
+            viewport?.renderer?.invalidateAnimationCache()
         }
 
         // ── Enter edit mode ───────────────────────────────────────────────────

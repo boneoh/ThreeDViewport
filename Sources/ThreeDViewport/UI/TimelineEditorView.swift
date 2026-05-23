@@ -52,6 +52,30 @@ struct TrackRow {
     var groupID:       Int?  = nil
 }
 
+// MARK: - Coordinate channel paste (Part B2)
+
+/// A spatial channel that can be pasted into a keyframe from the coordinate clipboard.
+private enum CoordChannel {
+    case position, size, direction
+    var menuTitle: String {
+        switch self {
+        case .position:  return "Paste Position"
+        case .size:      return "Paste Size"
+        case .direction: return "Paste Direction"
+        }
+    }
+}
+
+/// Carried by a context-menu item so the action knows which keyframe + channel to write.
+private final class ChannelPasteRequest {
+    let ref: TrackRef
+    let kfIndex: Int
+    let channel: CoordChannel
+    init(ref: TrackRef, kfIndex: Int, channel: CoordChannel) {
+        self.ref = ref; self.kfIndex = kfIndex; self.channel = channel
+    }
+}
+
 // MARK: - Safe array subscript (file-private)
 
 private extension Array {
@@ -88,6 +112,9 @@ final class TimelineEditorView: NSView {
     weak var lightManager: LightManager?
     weak var fogSettings:     FogSettings?
     weak var particleManager: ParticleManager?
+    /// Coordinate clipboard (Part B1): copying a light/atmosphere keyframe also
+    /// captures its spatial channels so they can be pasted into panel fields.
+    weak var coordinateClipboard: CoordinateClipboard?
 
     // ── Insert callbacks (set by AppDelegate) ─────────────────────────────────
 
@@ -1016,6 +1043,99 @@ final class TimelineEditorView: NSView {
         mouseDownOnDiamond = false
     }
 
+    // MARK: - Right-click: paste a coordinate channel into a keyframe (Part B2)
+
+    /// AppKit calls this on right/Control-click.  If the click landed on a light
+    /// or fog/weather keyframe diamond, offer to paste the matching coordinate
+    /// channel(s) from the clipboard, replacing just that component of the keyframe.
+    /// (Object/group/camera keyframes are excluded — deltas / no xyz.)
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let tracks = buildTracks()
+        let pt     = convert(event.locationInWindow, from: nil)
+        guard let hit = hitTestDiamond(at: pt, tracks: tracks) else { return nil }
+        let ref = tracks[hit.trackIndex].ref
+
+        let channels: [CoordChannel]
+        switch ref {
+        case .light(let i):
+            // Match the Lights panel: Position for point/spot/laser, Direction for
+            // directional/spot/laser, nothing for ambient.
+            guard let type = lightManager?.lights[safe: i]?.type else { return nil }
+            var chs: [CoordChannel] = []
+            if type == .point || type == .spot || type == .laser       { chs.append(.position) }
+            if type == .directional || type == .spot || type == .laser { chs.append(.direction) }
+            guard !chs.isEmpty else { return nil }
+            channels = chs
+        case .fog, .particles:  channels = [.position, .size]
+        default:                return nil   // no channel paste for object/group/camera
+        }
+        guard let clip = coordinateClipboard else { return nil }
+
+        let menu = NSMenu()
+        menu.autoenablesItems = false   // honor our per-channel isEnabled below
+        for ch in channels {
+            let item = NSMenuItem(title: ch.menuTitle,
+                                  action: #selector(pasteChannelMenuAction(_:)),
+                                  keyEquivalent: "")
+            item.target           = self
+            item.representedObject = ChannelPasteRequest(ref: ref, kfIndex: hit.kfIndex, channel: ch)
+            item.isEnabled         = clipboardHasValue(clip, ch)   // grey when nothing copied
+            menu.addItem(item)
+        }
+        return menu
+    }
+
+    private func clipboardHasValue(_ clip: CoordinateClipboard, _ ch: CoordChannel) -> Bool {
+        switch ch {
+        case .position:  return clip.position  != nil
+        case .size:      return clip.size      != nil
+        case .direction: return clip.direction != nil
+        }
+    }
+
+    @objc private func pasteChannelMenuAction(_ sender: NSMenuItem) {
+        guard let req = sender.representedObject as? ChannelPasteRequest,
+              let clip = coordinateClipboard else { return }
+        applyChannelPaste(req, clipboard: clip)
+    }
+
+    /// Writes one clipboard channel into the target keyframe, leaving its other
+    /// components untouched.
+    private func applyChannelPaste(_ req: ChannelPasteRequest, clipboard clip: CoordinateClipboard) {
+        switch (req.ref, req.channel) {
+        case (.light(let i), .position):
+            guard let v = clip.position, let lm = lightManager, i < lm.keyframeTracks.count,
+                  let track = lm.keyframeTracks[i], req.kfIndex < track.keyframes.count else { return }
+            track.keyframes[req.kfIndex].position = v
+        case (.light(let i), .direction):
+            guard let v = clip.direction, simd_length(v) > 1e-5,
+                  let lm = lightManager, i < lm.keyframeTracks.count,
+                  let track = lm.keyframeTracks[i], req.kfIndex < track.keyframes.count else { return }
+            track.keyframes[req.kfIndex].direction = simd_normalize(v)
+        case (.fog, .position):
+            guard let v = clip.position, let track = fogSettings?.keyframeTrack,
+                  req.kfIndex < track.keyframes.count else { return }
+            track.keyframes[req.kfIndex].position = v
+        case (.fog, .size):
+            guard let v = clip.size, let track = fogSettings?.keyframeTrack,
+                  req.kfIndex < track.keyframes.count else { return }
+            track.keyframes[req.kfIndex].size = v
+        case (.particles(let i), .position):
+            guard let v = clip.position, let track = particleManager?.emitters[safe: i]?.keyframeTrack,
+                  req.kfIndex < track.keyframes.count else { return }
+            track.keyframes[req.kfIndex].position = v
+        case (.particles(let i), .size):
+            guard let v = clip.size, let track = particleManager?.emitters[safe: i]?.keyframeTrack,
+                  req.kfIndex < track.keyframes.count else { return }
+            track.keyframes[req.kfIndex].size = v
+        default:
+            return
+        }
+        needsDisplay = true
+        onKeyframePasted?()   // mark dirty (+ refresh atmosphere panel)
+        print("[DEBUG] TimelineEditorView: pasted \(req.channel) into keyframe kf=\(req.kfIndex)")
+    }
+
     // MARK: - Keyboard input
 
     override func keyDown(with event: NSEvent) {
@@ -1665,6 +1785,8 @@ final class TimelineEditorView: NSView {
                   i < lm.keyframeTracks.count,
                   let kf = lm.keyframeTracks[i]?.keyframes[safe: ki] else { return }
             clipboardKeyframe = .light(kf)
+            coordinateClipboard?.position  = kf.position
+            coordinateClipboard?.direction = kf.direction
         case .group(let gid):
             guard let kf = sceneManager?.groupKeyframeTracks[gid]?
                               .keyframes[safe: ki] else { return }
@@ -1672,9 +1794,13 @@ final class TimelineEditorView: NSView {
         case .fog:
             guard let kf = fogSettings?.keyframeTrack?.keyframes[safe: ki] else { return }
             clipboardKeyframe = .fog(kf)
+            coordinateClipboard?.position = kf.position
+            coordinateClipboard?.size     = kf.size
         case .particles(let i):
             guard let kf = particleManager?.emitters[safe: i]?.keyframeTrack?.keyframes[safe: ki] else { return }
             clipboardKeyframe = .particles(kf)
+            coordinateClipboard?.position = kf.position
+            coordinateClipboard?.size     = kf.size
         }
         print("[DEBUG] TimelineEditorView: Cmd+C — copied \(clipboardKeyframe!.typeName)"
             + " keyframe from lane=\(ti) kf=\(ki)")

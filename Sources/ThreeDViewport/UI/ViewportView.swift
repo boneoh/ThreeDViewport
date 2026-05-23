@@ -79,6 +79,8 @@ final class ViewportView: MTKView {
     let colorGradeSettings = ColorGradeSettings()
     let fogSettings        = FogSettings()
     let particleManager    = ParticleManager()
+    let coordinateClipboard = CoordinateClipboard()
+    let atmospherePanelState = AtmospherePanelState()
 
     // Camera panel — sticky follow-target picker shared with the floating
     // CameraPanel inspector.  Lives here so the choice survives panel

@@ -20,7 +20,8 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
 
     init(timeline: Timeline, sceneManager: SceneManager,
          camera: CameraController, lightManager: LightManager,
-         fogSettings: FogSettings, particleManager: ParticleManager) {
+         fogSettings: FogSettings, particleManager: ParticleManager,
+         coordinateClipboard: CoordinateClipboard) {
 
         let panelWidth: CGFloat = 1000
 
@@ -49,8 +50,9 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
         editor.sceneManager   = sceneManager
         editor.camera         = camera
         editor.lightManager   = lightManager
-        editor.fogSettings     = fogSettings
-        editor.particleManager = particleManager
+        editor.fogSettings         = fogSettings
+        editor.particleManager     = particleManager
+        editor.coordinateClipboard = coordinateClipboard
         // Width follows the scroll view when the panel is resized horizontally.
         editor.autoresizingMask = [.width]
         editorView = editor
@@ -75,7 +77,10 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
             defer:       false
         )
         panel.title                  = "Timeline Editor"
-        panel.isFloatingPanel        = true
+        // Normal window level (not floating) so other applications can come on top
+        // when they receive focus, instead of the editor always staying above them.
+        panel.isFloatingPanel        = false
+        panel.level                  = .normal
         panel.becomesKeyOnlyIfNeeded = false   // must become key so arrow/delete/insert work
         panel.hidesOnDeactivate      = false
         panel.minSize                = NSSize(width: 520, height: 80)

@@ -1,6 +1,14 @@
 import SwiftUI
 import simd
 
+/// Expand/collapse state of the Atmosphere panel's sections.  Lifted out of the
+/// view's @State so it can be saved/restored with the window layout.
+final class AtmospherePanelState: ObservableObject {
+    @Published var fogExpanded      = true
+    @Published var weatherExpanded  = true
+    @Published var advancedExpanded = false
+}
+
 // Floating panel for atmosphere effects.  Three collapsible sections:
 //   • Fog      — single fog volume (Enabled / Color / Density + keyframes).
 //   • Weather  — a list of particle emitters (+/− to add/remove, click to select)
@@ -11,6 +19,8 @@ struct AtmospherePanel: View {
 
     @ObservedObject var fog: FogSettings
     @ObservedObject var particleManager: ParticleManager
+    @ObservedObject var clipboard: CoordinateClipboard
+    @ObservedObject var sections: AtmospherePanelState
 
     // Stamp / clear actions wired by AppDelegate to ViewportView.  The particle
     // ones target the manager's currently-selected emitter.
@@ -18,11 +28,6 @@ struct AtmospherePanel: View {
     var onClearFog:       () -> Void = {}
     var onStampParticles: () -> Void = {}
     var onClearParticles: () -> Void = {}
-
-    // Section expansion — persists while the panel stays open this session.
-    @State private var fogExpanded      = true
-    @State private var weatherExpanded  = true
-    @State private var advancedExpanded = false
 
     private var fogKeyCount: Int { fog.keyframeTrack?.keyframes.count ?? 0 }
 
@@ -41,7 +46,7 @@ struct AtmospherePanel: View {
                 Divider().padding(.bottom, 6)
 
                 // ── Fog ─────────────────────────────────────────────────────────
-                DisclosureGroup(isExpanded: $fogExpanded) {
+                DisclosureGroup(isExpanded: $sections.fogExpanded) {
                     VStack(alignment: .leading, spacing: 0) {
                         Toggle(isOn: $fog.isEnabled) {
                             Text("Enabled").font(.caption)
@@ -65,7 +70,7 @@ struct AtmospherePanel: View {
                 Divider().padding(.vertical, 8)
 
                 // ── Weather ─────────────────────────────────────────────────────
-                DisclosureGroup(isExpanded: $weatherExpanded) {
+                DisclosureGroup(isExpanded: $sections.weatherExpanded) {
                     VStack(alignment: .leading, spacing: 0) {
 
                         // Emitter list
@@ -102,19 +107,19 @@ struct AtmospherePanel: View {
                 Divider().padding(.vertical, 8)
 
                 // ── Advanced (spatial detail) ────────────────────────────────────
-                DisclosureGroup(isExpanded: $advancedExpanded) {
+                DisclosureGroup(isExpanded: $sections.advancedExpanded) {
                     VStack(alignment: .leading, spacing: 0) {
                         Text("Fog Volume").font(.caption2).foregroundColor(.secondary).padding(.top, 6)
-                        AtmoDetailControls(variance: $fog.variance, position: $fog.position, size: $fog.size)
+                        AtmoDetailControls(source: fog, varianceKP: \.variance,
+                                           positionKP: \.position, sizeKP: \.size, clipboard: clipboard)
                         FogSliderRow(label: "Quality", value: $fog.raymarchSteps, range: 8...96, format: "%.0f")
 
                         Divider().padding(.vertical, 8)
 
                         Text("Weather Emitter").font(.caption2).foregroundColor(.secondary)
                         if let fx = particleManager.selected {
-                            AtmoDetailControls(variance: bind(fx, \.variance),
-                                               position: bind(fx, \.position),
-                                               size:     bind(fx, \.size))
+                            AtmoDetailControls(source: fx, varianceKP: \.variance,
+                                               positionKP: \.position, sizeKP: \.size, clipboard: clipboard)
                             EmitterAdvancedControls(emitter: fx)
                         }
                     }
@@ -187,26 +192,48 @@ private struct EmitterMainControls: View {
 
 // MARK: - Shared detail controls (Variance + Position + Size)
 
-private struct AtmoDetailControls: View {
-    @Binding var variance: Float
-    @Binding var position: SIMD3<Float>
-    @Binding var size:     SIMD3<Float>
+// Generic over the source ObservableObject (FogSettings or ParticleEffect) so it
+// re-renders whenever the source's values change — on paste, scrub-sync, etc.
+private struct AtmoDetailControls<Source: ObservableObject>: View {
+    @ObservedObject var source: Source
+    let varianceKP: ReferenceWritableKeyPath<Source, Float>
+    let positionKP: ReferenceWritableKeyPath<Source, SIMD3<Float>>
+    let sizeKP:     ReferenceWritableKeyPath<Source, SIMD3<Float>>
+    @ObservedObject var clipboard: CoordinateClipboard
+
+    private func fbind<V>(_ kp: ReferenceWritableKeyPath<Source, V>) -> Binding<V> {
+        Binding(get: { source[keyPath: kp] }, set: { source[keyPath: kp] = $0 })
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            FogSliderRow(label: "Variance", value: $variance, range: 0.0...1.0, format: "%.2f")
+            FogSliderRow(label: "Variance", value: fbind(varianceKP), range: 0.0...1.0, format: "%.2f")
 
             Divider().padding(.vertical, 8)
-            Text("Position").font(.caption2).foregroundColor(.secondary)
-            FogSliderRow(label: "X", value: $position.x, range: -20...20, format: "%.1f")
-            FogSliderRow(label: "Y", value: $position.y, range: -20...20, format: "%.1f")
-            FogSliderRow(label: "Z", value: $position.z, range: -20...20, format: "%.1f")
+            HStack {
+                Text("Position").font(.caption2).foregroundColor(.secondary)
+                Spacer()
+                CoordCopyPasteButtons(
+                    onCopy:   { clipboard.position = source[keyPath: positionKP] },
+                    onPaste:  { if let p = clipboard.position { source[keyPath: positionKP] = p } },
+                    canPaste: clipboard.position != nil)
+            }
+            FogSliderRow(label: "X", value: fbind(positionKP).x, range: -20...20, format: "%.1f")
+            FogSliderRow(label: "Y", value: fbind(positionKP).y, range: -20...20, format: "%.1f")
+            FogSliderRow(label: "Z", value: fbind(positionKP).z, range: -20...20, format: "%.1f")
 
             Divider().padding(.vertical, 8)
-            Text("Size").font(.caption2).foregroundColor(.secondary)
-            FogSliderRow(label: "W", value: $size.x, range: 0.5...40, format: "%.1f")
-            FogSliderRow(label: "H", value: $size.y, range: 0.5...40, format: "%.1f")
-            FogSliderRow(label: "D", value: $size.z, range: 0.5...40, format: "%.1f")
+            HStack {
+                Text("Size").font(.caption2).foregroundColor(.secondary)
+                Spacer()
+                CoordCopyPasteButtons(
+                    onCopy:   { clipboard.size = source[keyPath: sizeKP] },
+                    onPaste:  { if let s = clipboard.size { source[keyPath: sizeKP] = s } },
+                    canPaste: clipboard.size != nil)
+            }
+            FogSliderRow(label: "W", value: fbind(sizeKP).x, range: 0.5...40, format: "%.1f")
+            FogSliderRow(label: "H", value: fbind(sizeKP).y, range: 0.5...40, format: "%.1f")
+            FogSliderRow(label: "D", value: fbind(sizeKP).z, range: 0.5...40, format: "%.1f")
         }
     }
 }
@@ -244,14 +271,6 @@ private func atmoColorBinding(_ get: @escaping () -> SIMD3<Float>,
             let ns = NSColor(newColor).usingColorSpace(.sRGB) ?? NSColor(newColor)
             set(SIMD3<Float>(Float(ns.redComponent), Float(ns.greenComponent), Float(ns.blueComponent)))
         })
-}
-
-/// A two-way Binding to a property of an ObservableObject emitter, so the shared
-/// detail controls can drive the selected emitter directly.
-private func bind<Value>(_ emitter: ParticleEffect,
-                         _ keyPath: ReferenceWritableKeyPath<ParticleEffect, Value>) -> Binding<Value> {
-    Binding<Value>(get: { emitter[keyPath: keyPath] },
-                   set: { emitter[keyPath: keyPath] = $0 })
 }
 
 // MARK: - Slider row

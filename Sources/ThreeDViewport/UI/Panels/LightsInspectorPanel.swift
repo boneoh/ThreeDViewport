@@ -34,6 +34,7 @@ struct LightsInspectorPanel: View {
     @ObservedObject var lightManager:     LightManager
     @ObservedObject var backgroundConfig: BackgroundConfig
     @ObservedObject var renderSettings:   RenderSettings
+    @ObservedObject var clipboard:        CoordinateClipboard
     let camera: CameraController
 
     var body: some View {
@@ -258,7 +259,7 @@ struct LightsInspectorPanel: View {
 
             // Position — point / spot / laser
             if light.type == .point || light.type == .spot || light.type == .laser {
-                GroupBox("Position") {
+                GroupBox {
                     VStack(spacing: 4) {
                         SliderRow(label: "X",
                                   value: Binding<Float>(
@@ -276,12 +277,21 @@ struct LightsInspectorPanel: View {
                                       set: { lightManager.lights[i].position.z = $0 }),
                                   range: -10...10, format: "%.2f")
                     }
+                } label: {
+                    HStack {
+                        Text("Position")
+                        Spacer()
+                        CoordCopyPasteButtons(
+                            onCopy:   { clipboard.position = lightManager.lights[i].position },
+                            onPaste:  { if let p = clipboard.position { lightManager.lights[i].position = p } },
+                            canPaste: clipboard.position != nil)
+                    }
                 }
             }
 
             // Direction — directional / spot / laser
             if light.type == .directional || light.type == .spot || light.type == .laser {
-                GroupBox("Direction") {
+                GroupBox {
                     VStack(spacing: 4) {
                         SliderRow(label: "X",
                                   value: Binding<Float>(
@@ -298,6 +308,18 @@ struct LightsInspectorPanel: View {
                                       get: { lightManager.lights[i].direction.z },
                                       set: { lightManager.lights[i].direction.z = $0; normalizeDirection(at: i) }),
                                   range: -1...1, format: "%.3f")
+                    }
+                } label: {
+                    HStack {
+                        Text("Direction")
+                        Spacer()
+                        CoordCopyPasteButtons(
+                            onCopy:   { clipboard.direction = lightManager.lights[i].direction },
+                            onPaste:  { if let d = clipboard.direction {
+                                            lightManager.lights[i].direction = d
+                                            normalizeDirection(at: i)
+                                        } },
+                            canPaste: clipboard.direction != nil)
                     }
                 }
             }

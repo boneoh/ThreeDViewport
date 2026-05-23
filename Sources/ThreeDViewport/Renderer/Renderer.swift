@@ -1269,6 +1269,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// `lastAnimatedTime` already equals `currentTime` (both are 0).
     func invalidateAnimationCache() {
         lastAnimatedTime = -1.0
+        lastAtmoSyncTime = -1.0   // also re-sync the atmosphere panel/render to the playhead
         print("[DEBUG] Renderer: animation cache invalidated — will re-evaluate on next draw")
     }
 
