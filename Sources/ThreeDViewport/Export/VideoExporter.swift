@@ -660,6 +660,7 @@ final class VideoExporter {
         guard let enc = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
         var u = makeFogVolumeUniforms(fog,
             at:             time,
+            playing:        true,   // export always reads the keyframe track
             viewProjection: camera.viewProjectionMatrix,
             cameraPos:      camera.eyePosition,
             colorMode:      colorMode.rawValue)
@@ -1029,7 +1030,7 @@ final class VideoExporter {
               let pipe  = particleFXPipelineState,
               let seeds = particleSeedBuffer,
               let ds    = laserBeamDepthState else { return }
-        let density = fx.state(at: time).density
+        let density = fx.renderState(at: time, playing: true).density
         let count = Int((max(0, min(1, density)) * Float(ParticleEffect.maxCount)).rounded())
         guard count > 0 else { return }
 
@@ -1038,6 +1039,7 @@ final class VideoExporter {
             cameraRight:    camera.rightVector,
             cameraUp:       camera.upVector,
             time:           Float(time),
+            playing:        true,   // export always reads the keyframe track
             colorMode:      colorMode.rawValue)
 
         encoder.setRenderPipelineState(pipe)

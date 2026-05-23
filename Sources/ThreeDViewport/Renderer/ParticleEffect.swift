@@ -101,8 +101,9 @@ final class ParticleEffect: ObservableObject {
     /// Evaluated at render time (not written back) so playback never marks dirty.
     var keyframeTrack: AtmosphereKeyframeTrack?
 
-    /// True while a keyframe is being live-edited from the panel (see FogSettings).
-    var isEditingKeyframe: Bool = false
+    /// Set while `syncToPlayhead` writes the static fields so the dirty sink can
+    /// ignore it — scrubbing follows the animation without marking dirty.
+    var suppressDirty: Bool = false
 
     /// Snapshot of the current static values as a keyframe at `time` (stamp source).
     func snapshot(at time: Double) -> AtmosphereKeyframe {
@@ -110,11 +111,22 @@ final class ParticleEffect: ObservableObject {
                            density: density, variance: variance, color: color)
     }
 
-    /// Effective state at `time`: the static panel values while live-editing,
-    /// the animated keyframe value if a track exists, otherwise the static values.
-    func state(at time: Double) -> AtmosphereKeyframe {
-        if isEditingKeyframe { return snapshot(at: time) }
-        return keyframeTrack?.evaluate(at: time) ?? snapshot(at: time)
+    /// Value used to render at `time` (see FogSettings.renderState).  Playing →
+    /// keyframes drive it; paused → the static panel fields (kept in sync by
+    /// `syncToPlayhead`) so the panel and viewport agree.
+    func renderState(at time: Double, playing: Bool) -> AtmosphereKeyframe {
+        if playing, let kf = keyframeTrack?.evaluate(at: time) { return kf }
+        return snapshot(at: time)
+    }
+
+    /// While paused, copy the resolved keyframe value at `time` into the static
+    /// fields so the panel + paused render follow the playhead (see FogSettings).
+    func syncToPlayhead(at time: Double) {
+        guard let kf = keyframeTrack?.evaluate(at: time) else { return }
+        suppressDirty = true
+        position = kf.position; size = kf.size; density = kf.density
+        variance = kf.variance; color = kf.color
+        suppressDirty = false
     }
 
     /// Maximum particle pool — `density` selects a fraction of this to draw.
@@ -145,8 +157,9 @@ func makeParticleFXUniforms(_ fx: ParticleEffect,
                             cameraRight: SIMD3<Float>,
                             cameraUp: SIMD3<Float>,
                             time: Float,
+                            playing: Bool,
                             colorMode: Int) -> ParticleFXUniforms {
-    let s = fx.state(at: Double(time))
+    let s = fx.renderState(at: Double(time), playing: playing)
     return ParticleFXUniforms(
         viewProjection: viewProjection,
         cameraRight:    SIMD4<Float>(cameraRight, 0),

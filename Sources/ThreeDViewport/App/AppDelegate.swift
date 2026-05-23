@@ -48,11 +48,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         case light(index: Int, savedIntensity: Float, savedColor: SIMD3<Float>,
                    savedDirection: SIMD3<Float>, savedPosition: SIMD3<Float>, kfTime: Double)
         case group(gid: Int, savedTransform: matrix_float4x4, kfTime: Double)
-        // Atmosphere: saved values are the pre-edit static panel fields (for cancel).
-        case fog(position: SIMD3<Float>, size: SIMD3<Float>, density: Float,
-                 variance: Float, color: SIMD3<Float>, kfTime: Double)
-        case particles(position: SIMD3<Float>, size: SIMD3<Float>, density: Float,
-                       variance: Float, color: SIMD3<Float>, kfTime: Double)
+        // Atmosphere: only the time is needed — the panel follows the playhead, so
+        // commit re-stamps the edited panel value and cancel re-syncs from the track.
+        case fog(kfTime: Double)
+        case particles(kfTime: Double)
     }
     private var kfEditSnapshot: KFEditSnapshot? = nil
 
@@ -422,14 +421,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             .sink { [weak self] in self?.markDirty() }
             .store(in: &settingsCancellables)
 
-        // FogSettings (atmosphere).
+        // FogSettings (atmosphere).  Ignore writes made by the playhead-follow sync
+        // (scrubbing the panel to the animation must not mark the project dirty).
         viewport.fogSettings.objectWillChange
-            .sink { [weak self] in self?.markDirty() }
+            .sink { [weak self, weak viewport] in
+                guard viewport?.fogSettings.suppressDirty != true else { return }
+                self?.markDirty()
+            }
             .store(in: &settingsCancellables)
 
         // ParticleEffect (weather).
         viewport.particleEffect.objectWillChange
-            .sink { [weak self] in self?.markDirty() }
+            .sink { [weak self, weak viewport] in
+                guard viewport?.particleEffect.suppressDirty != true else { return }
+                self?.markDirty()
+            }
             .store(in: &settingsCancellables)
 
         print("[DEBUG] AppDelegate: subscribed to settings changes for dirty tracking")
@@ -1945,40 +1951,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     + " t=" + String(format: "%.3f", kfTime))
 
             case .fog:
-                // No viewport control mode — fog is edited via the Atmosphere panel.
-                // Save pre-edit static fields (for cancel), load the keyframe's values
-                // into them so the panel shows them, and flag live-edit so the renderer
-                // draws from those static fields at the paused playhead.
+                // No viewport control mode — fog is edited via the Atmosphere panel,
+                // which follows the playhead (the seek above synced its sliders to this
+                // keyframe).  Just record the time and make sure the panel is visible.
                 if self.atmospherePanel == nil || self.atmospherePanel?.isVisible != true {
-                    self.showAtmospherePanel(self)   // ensure the edit surface is visible
+                    self.showAtmospherePanel(self)
                 }
-                let f = viewport.fogSettings
-                self.kfEditSnapshot = .fog(
-                    position: f.position, size: f.size, density: f.density,
-                    variance: f.variance, color: f.color, kfTime: kfTime)
-                if let kf = f.keyframeTrack?.evaluate(at: kfTime) {
-                    f.position = kf.position; f.size = kf.size; f.density = kf.density
-                    f.variance = kf.variance; f.color = kf.color
-                }
-                f.isEditingKeyframe = true
-                f.objectWillChange.send()
+                self.kfEditSnapshot = .fog(kfTime: kfTime)
                 print("[DEBUG] AppDelegate: entered fog keyframe edit t="
                     + String(format: "%.3f", kfTime))
 
             case .particles:
                 if self.atmospherePanel == nil || self.atmospherePanel?.isVisible != true {
-                    self.showAtmospherePanel(self)   // ensure the edit surface is visible
+                    self.showAtmospherePanel(self)
                 }
-                let p = viewport.particleEffect
-                self.kfEditSnapshot = .particles(
-                    position: p.position, size: p.size, density: p.density,
-                    variance: p.variance, color: p.color, kfTime: kfTime)
-                if let kf = p.keyframeTrack?.evaluate(at: kfTime) {
-                    p.position = kf.position; p.size = kf.size; p.density = kf.density
-                    p.variance = kf.variance; p.color = kf.color
-                }
-                p.isEditingKeyframe = true
-                p.objectWillChange.send()
+                self.kfEditSnapshot = .particles(kfTime: kfTime)
                 print("[DEBUG] AppDelegate: entered particle keyframe edit t="
                     + String(format: "%.3f", kfTime))
             }
@@ -2030,16 +2017,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 print("[DEBUG] AppDelegate: committed group keyframe edit gid=\(gid)"
                     + " t=" + String(format: "%.3f", kfTime))
 
-            case .fog(_, _, _, _, _, let kfTime):
+            case .fog(let kfTime):
                 viewport.timeline.seek(to: kfTime)
-                viewport.fogSettings.isEditingKeyframe = false
-                viewport.addFogKeyframeAtCurrentTime()   // re-stamp from edited static fields
+                viewport.addFogKeyframeAtCurrentTime()   // re-stamp from edited panel fields
                 print("[DEBUG] AppDelegate: committed fog keyframe edit t="
                     + String(format: "%.3f", kfTime))
 
-            case .particles(_, _, _, _, _, let kfTime):
+            case .particles(let kfTime):
                 viewport.timeline.seek(to: kfTime)
-                viewport.particleEffect.isEditingKeyframe = false
                 viewport.addParticleKeyframeAtCurrentTime()
                 print("[DEBUG] AppDelegate: committed particle keyframe edit t="
                     + String(format: "%.3f", kfTime))
@@ -2092,21 +2077,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 print("[DEBUG] AppDelegate: cancelled group keyframe edit gid=\(gid)"
                     + " t=" + String(format: "%.3f", kfTime))
 
-            case .fog(let position, let size, let density, let variance, let color, let kfTime):
-                let f = viewport.fogSettings
-                f.position = position; f.size = size; f.density = density
-                f.variance = variance; f.color = color
-                f.isEditingKeyframe = false
-                f.objectWillChange.send()
+            case .fog(let kfTime):
+                // Discard unstamped slider edits by reloading the keyframe value.
+                viewport.fogSettings.syncToPlayhead(at: kfTime)
                 print("[DEBUG] AppDelegate: cancelled fog keyframe edit t="
                     + String(format: "%.3f", kfTime))
 
-            case .particles(let position, let size, let density, let variance, let color, let kfTime):
-                let p = viewport.particleEffect
-                p.position = position; p.size = size; p.density = density
-                p.variance = variance; p.color = color
-                p.isEditingKeyframe = false
-                p.objectWillChange.send()
+            case .particles(let kfTime):
+                viewport.particleEffect.syncToPlayhead(at: kfTime)
                 print("[DEBUG] AppDelegate: cancelled particle keyframe edit t="
                     + String(format: "%.3f", kfTime))
             }

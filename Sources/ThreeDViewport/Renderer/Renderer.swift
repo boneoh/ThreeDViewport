@@ -120,6 +120,10 @@ final class Renderer: NSObject, MTKViewDelegate {
     private var lastDrawWallTime: CFAbsoluteTime    = 0
 
     private var lastAnimatedTime: Double = -1.0
+    /// Last playhead time the atmosphere panels were synced to while paused, so
+    /// scrubbing makes the Fog/Weather panel + paused render follow the playhead
+    /// without re-syncing every frame (which would clobber live slider edits).
+    private var lastAtmoSyncTime: Double = -1.0
     /// currentTime at end of previous frame — detects manual scrub while paused.
     private var lastRenderedTime: Double = -1.0
     /// isPlaying state at end of previous frame — lets us distinguish "just stopped"
@@ -514,6 +518,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         guard let enc = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
         var u = makeFogVolumeUniforms(fog,
             at:             timeline.currentTime,
+            playing:        timeline.isPlaying,
             viewProjection: viewCamera.viewProjectionMatrix,
             cameraPos:      viewCamera.eyePosition,
             colorMode:      colorMode.rawValue)
@@ -522,6 +527,20 @@ final class Renderer: NSObject, MTKViewDelegate {
         enc.setFragmentTexture(depthTex, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         enc.endEncoding()
+    }
+
+    /// While the timeline is paused, makes the Fog/Weather panel + paused render
+    /// follow the playhead: on each scrub (time change) the static panel fields are
+    /// set to the resolved keyframe value at the current frame.  Skipped while
+    /// playing (the render reads the track directly) and when the time is unchanged
+    /// (so live slider edits at a held frame aren't clobbered).
+    private func syncAtmosphereToPlayhead() {
+        guard !timeline.isPlaying else { return }
+        let t = timeline.currentTime
+        guard t != lastAtmoSyncTime else { return }
+        lastAtmoSyncTime = t
+        fogSettings?.syncToPlayhead(at: t)
+        particleEffect?.syncToPlayhead(at: t)
     }
 
     /// The "kept" object set for Scene-mode solo: the selected object's group
@@ -544,7 +563,8 @@ final class Renderer: NSObject, MTKViewDelegate {
               let pipe  = particleFXPipelineState,
               let seeds = particleSeedBuffer,
               let ds    = laserBeamDepthState else { return }
-        let density = fx.state(at: time).density
+        let playing = timeline.isPlaying
+        let density = fx.renderState(at: time, playing: playing).density
         let count = Int((max(0, min(1, density)) * Float(ParticleEffect.maxCount)).rounded())
         guard count > 0 else { return }
 
@@ -553,6 +573,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             cameraRight:    viewCamera.rightVector,
             cameraUp:       viewCamera.upVector,
             time:           Float(time),
+            playing:        playing,
             colorMode:      colorMode.rawValue)
 
         encoder.setRenderPipelineState(pipe)
@@ -598,6 +619,9 @@ final class Renderer: NSObject, MTKViewDelegate {
         // reads them.  Also runs every frame — not just when time changes — so the
         // camera stays locked to a moving target while playback is active.
         applyCameraFollow()
+
+        // Make the Fog/Weather panel + paused render follow the playhead on scrub.
+        syncAtmosphereToPlayhead()
 
         view.clearColor = backgroundConfig.clearColor
 

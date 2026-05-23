@@ -34,10 +34,9 @@ final class FogSettings: ObservableObject {
     /// playback never marks the project dirty — matches object/camera animation.
     var keyframeTrack: AtmosphereKeyframeTrack?
 
-    /// True while a keyframe is being live-edited from the panel.  The renderer
-    /// then draws from the static fields (which the panel is editing) instead of
-    /// the track, so slider changes show immediately at the paused playhead.
-    var isEditingKeyframe: Bool = false
+    /// Set while `syncToPlayhead` writes the static fields so the AppDelegate dirty
+    /// sink can ignore it — scrubbing follows the animation without marking dirty.
+    var suppressDirty: Bool = false
 
     /// Snapshot of the current static values as a keyframe at `time` (stamp source).
     func snapshot(at time: Double) -> AtmosphereKeyframe {
@@ -45,11 +44,25 @@ final class FogSettings: ObservableObject {
                            density: density, variance: variance, color: color)
     }
 
-    /// Effective state at `time`: the static panel values while live-editing,
-    /// the animated keyframe value if a track exists, otherwise the static values.
-    func state(at time: Double) -> AtmosphereKeyframe {
-        if isEditingKeyframe { return snapshot(at: time) }
-        return keyframeTrack?.evaluate(at: time) ?? snapshot(at: time)
+    /// Value used to render at `time`.  While the timeline plays, the keyframes
+    /// drive the render (and the export).  While paused, the static panel fields
+    /// drive it — and `syncToPlayhead` keeps those fields equal to the keyframe
+    /// value at the current frame, so the panel + viewport always agree and a
+    /// stamp captures exactly what's on screen.
+    func renderState(at time: Double, playing: Bool) -> AtmosphereKeyframe {
+        if playing, let kf = keyframeTrack?.evaluate(at: time) { return kf }
+        return snapshot(at: time)
+    }
+
+    /// While paused, copy the resolved keyframe value at `time` into the static
+    /// fields so the panel and the paused render follow the playhead.  No-op when
+    /// there's no track.  Suppresses the dirty flag so scrubbing stays clean.
+    func syncToPlayhead(at time: Double) {
+        guard let kf = keyframeTrack?.evaluate(at: time) else { return }
+        suppressDirty = true
+        position = kf.position; size = kf.size; density = kf.density
+        variance = kf.variance; color = kf.color
+        suppressDirty = false
     }
 }
 
@@ -58,10 +71,11 @@ final class FogSettings: ObservableObject {
 /// export composite identically.
 func makeFogVolumeUniforms(_ fog: FogSettings,
                            at time: Double,
+                           playing: Bool,
                            viewProjection: matrix_float4x4,
                            cameraPos: SIMD3<Float>,
                            colorMode: Int) -> FogVolumeUniforms {
-    let s    = fog.state(at: time)
+    let s    = fog.renderState(at: time, playing: playing)
     let half = s.size * 0.5
     return FogVolumeUniforms(
         inverseViewProjection: viewProjection.inverse,
