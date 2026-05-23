@@ -85,7 +85,9 @@ enum ParticleType: Int, CaseIterable {
 // Observable model — owned by ViewportView, read live by Renderer and VideoExporter.
 final class ParticleEffect: ObservableObject {
     @Published var isEnabled: Bool          = false
-    @Published var type:      ParticleType  = .rain
+    @Published var type:      ParticleType  = .rain {
+        didSet { if type != oldValue { applyTypeDefaults() } }   // Type acts as a preset.
+    }
     /// Emitter volume centre (world space).
     @Published var position:  SIMD3<Float>  = SIMD3<Float>(0, 2, 0)
     /// Emitter volume size (world units, full extents).
@@ -96,6 +98,26 @@ final class ParticleEffect: ObservableObject {
     @Published var variance:  Float         = 0.5
     /// Particle colour (display-space RGB).
     @Published var color:     SIMD3<Float>  = SIMD3<Float>(1, 1, 1)
+
+    // ── Advanced controls (Phase 4) ─────────────────────────────────────────
+    // Defaulted from `type`; reset to the new type's defaults when the type
+    // changes (applyTypeDefaults).  Static config — not keyframed.
+    @Published var particleSize: Float = ParticleType.rain.particleSize
+    @Published var fallSpeed:    Float = ParticleType.rain.fallSpeed   // falling types
+    @Published var streak:       Float = ParticleType.rain.streak      // falling types
+    @Published var lifetime:     Float = ParticleType.rain.lifetime    // smoke
+    @Published var growth:       Float = ParticleType.rain.growth      // smoke
+    @Published var baseAlpha:    Float = ParticleType.rain.baseAlpha   // smoke opacity
+
+    /// Resets the advanced controls to the current type's preset defaults.
+    func applyTypeDefaults() {
+        particleSize = type.particleSize
+        fallSpeed    = type.fallSpeed
+        streak       = type.streak
+        lifetime     = type.lifetime
+        growth       = type.growth
+        baseAlpha    = type.baseAlpha
+    }
 
     /// Optional timeline animation.  nil / empty = use the static values above.
     /// Evaluated at render time (not written back) so playback never marks dirty.
@@ -168,15 +190,15 @@ func makeParticleFXUniforms(_ fx: ParticleEffect,
         emitterSize:    SIMD4<Float>(s.size, 0),
         color:          SIMD4<Float>(s.color, 1),
         time:           time,
-        fallSpeed:      fx.type.fallSpeed,
-        particleSize:   fx.type.particleSize,
-        streak:         fx.type.streak,
+        fallSpeed:      fx.fallSpeed,
+        particleSize:   fx.particleSize,
+        streak:         fx.streak,
         sway:           fx.type.swayBase * s.variance,
         swayFreq:       1.5,
         colorMode:      UInt32(colorMode),
         mode:           fx.type.isSmoke ? 1 : 0,
-        growth:         fx.type.growth,
-        lifetime:       fx.type.lifetime,
-        baseAlpha:      fx.type.baseAlpha)
+        growth:         fx.growth,
+        lifetime:       fx.lifetime,
+        baseAlpha:      fx.baseAlpha)
 }
 

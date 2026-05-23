@@ -84,6 +84,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var settingsCancellables = Set<AnyCancellable>()
     /// Per-emitter dirty subscriptions, rebuilt whenever the emitter list changes.
     private var particleEmitterCancellables = Set<AnyCancellable>()
+    /// Panel emitter-selection → timeline lane highlight (lives with the editor).
+    private var particleSelectionCancellable: AnyCancellable?
 
     private let timelinePanelHeight: CGFloat = 80
 
@@ -2174,6 +2176,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         viewport.onControlModeChanged = { [weak wc] ref in
             wc?.editorView.selectTrack(ref)
         }
+
+        // ── Atmosphere panel emitter selection → timeline lane highlight ──────
+        // Selecting an emitter in the panel (a Weather row, or adding one) highlights
+        // its Weather lane.  dropFirst() avoids force-selecting a particle lane just
+        // because the editor opened.  (The reverse — lane → panel — is onLaneSelected.)
+        particleSelectionCancellable = viewport.particleManager.$selectedIndex
+            .dropFirst()
+            .sink { [weak wc] idx in wc?.editorView.selectTrack(.particles(idx)) }
 
         // ── Bidirectional key forwarding ───────────────────────────────────────
         // Timeline editor → viewport: unhandled keys reach the viewport.

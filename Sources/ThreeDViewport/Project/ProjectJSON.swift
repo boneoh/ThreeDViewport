@@ -207,6 +207,7 @@ struct FogData: Codable {
     var px: Float = 0;  var py: Float = 1; var pz: Float = 0
     var sx: Float = 12; var sy: Float = 4; var sz: Float = 12
     var variance: Float = 0.5
+    var steps:    Float = 48          // v25; raymarch quality (steps per ray)
 
     init(from decoder: Decoder) throws {
         let c     = try decoder.container(keyedBy: CodingKeys.self)
@@ -222,19 +223,21 @@ struct FogData: Codable {
         sy        = (try? c.decode(Float.self, forKey: .sy))        ?? 4
         sz        = (try? c.decode(Float.self, forKey: .sz))        ?? 12
         variance  = (try? c.decode(Float.self, forKey: .variance))  ?? 0.5
+        steps     = (try? c.decode(Float.self, forKey: .steps))     ?? 48
     }
 
     init(isEnabled: Bool = false, r: Float = 0.5, g: Float = 0.5, b: Float = 0.5,
          density: Float = 0.15,
          px: Float = 0, py: Float = 1, pz: Float = 0,
          sx: Float = 12, sy: Float = 4, sz: Float = 12,
-         variance: Float = 0.5) {
+         variance: Float = 0.5, steps: Float = 48) {
         self.isEnabled = isEnabled
         self.r = r; self.g = g; self.b = b
         self.density = density
         self.px = px; self.py = py; self.pz = pz
         self.sx = sx; self.sy = sy; self.sz = sz
         self.variance = variance
+        self.steps = steps
     }
 }
 
@@ -248,6 +251,13 @@ struct ParticleEffectData: Codable {
     var density:  Float = 0.5
     var variance: Float = 0.5
     var r: Float = 1; var g: Float = 1; var b: Float = 1
+    // v25; advanced controls.  Optional: nil (older files) → use the type defaults.
+    var particleSize: Float? = nil
+    var fallSpeed:    Float? = nil
+    var streak:       Float? = nil
+    var lifetime:     Float? = nil
+    var growth:       Float? = nil
+    var baseAlpha:    Float? = nil
 
     init(from decoder: Decoder) throws {
         let c     = try decoder.container(keyedBy: CodingKeys.self)
@@ -264,18 +274,28 @@ struct ParticleEffectData: Codable {
         r = (try? c.decode(Float.self, forKey: .r)) ?? 1
         g = (try? c.decode(Float.self, forKey: .g)) ?? 1
         b = (try? c.decode(Float.self, forKey: .b)) ?? 1
+        particleSize = try? c.decode(Float.self, forKey: .particleSize)
+        fallSpeed    = try? c.decode(Float.self, forKey: .fallSpeed)
+        streak       = try? c.decode(Float.self, forKey: .streak)
+        lifetime     = try? c.decode(Float.self, forKey: .lifetime)
+        growth       = try? c.decode(Float.self, forKey: .growth)
+        baseAlpha    = try? c.decode(Float.self, forKey: .baseAlpha)
     }
 
     init(isEnabled: Bool = false, type: Int = 0,
          px: Float = 0, py: Float = 2, pz: Float = 0,
          sx: Float = 8, sy: Float = 5, sz: Float = 8,
          density: Float = 0.5, variance: Float = 0.5,
-         r: Float = 1, g: Float = 1, b: Float = 1) {
+         r: Float = 1, g: Float = 1, b: Float = 1,
+         particleSize: Float? = nil, fallSpeed: Float? = nil, streak: Float? = nil,
+         lifetime: Float? = nil, growth: Float? = nil, baseAlpha: Float? = nil) {
         self.isEnabled = isEnabled; self.type = type
         self.px = px; self.py = py; self.pz = pz
         self.sx = sx; self.sy = sy; self.sz = sz
         self.density = density; self.variance = variance
         self.r = r; self.g = g; self.b = b
+        self.particleSize = particleSize; self.fallSpeed = fallSpeed; self.streak = streak
+        self.lifetime = lifetime; self.growth = growth; self.baseAlpha = baseAlpha
     }
 }
 

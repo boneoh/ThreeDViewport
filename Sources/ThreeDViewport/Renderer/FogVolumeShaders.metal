@@ -21,7 +21,7 @@ struct FogVolumeUniforms {
     float    density;     // overall opacity / extinction
     float    variance;    // 0 = hard box, 1 = density fades fully toward the faces
     uint     colorMode;   // 0 = greyscale, 1 = color, 2 = black+white matte
-    float    _pad;
+    uint     steps;       // raymarch step count (quality)
 };
 
 struct FogVOut {
@@ -81,14 +81,14 @@ fragment float4 fogvolume_fragment(FogVOut in [[stage_in]],
 
     // March from entry to the clamped exit, accumulating optical depth weighted
     // by a soft edge falloff (density fades toward the box faces as variance →1).
-    constexpr int STEPS = 48;
+    int    steps   = int(max(4u, u.steps));                 // quality (clamped)
     float3 center  = (u.boxMin.xyz + u.boxMax.xyz) * 0.5;
     float3 halfExt = max((u.boxMax.xyz - u.boxMin.xyz) * 0.5, float3(1e-4));
-    float  stepLen = (tFar - tNear) / float(STEPS);
+    float  stepLen = (tFar - tNear) / float(steps);
     float  edge0   = clamp(1.0 - u.variance, 0.0, 0.999);   // falloff onset (normalised)
 
     float od = 0.0;
-    for (int i = 0; i < STEPS; ++i) {
+    for (int i = 0; i < steps; ++i) {
         float  t = tNear + (float(i) + 0.5) * stepLen;
         float3 q = abs(ro + dir * t - center) / halfExt;    // 0 centre → 1 face
         float  fall = (1.0 - smoothstep(edge0, 1.0, q.x))

@@ -106,6 +106,7 @@ struct AtmospherePanel: View {
                     VStack(alignment: .leading, spacing: 0) {
                         Text("Fog Volume").font(.caption2).foregroundColor(.secondary).padding(.top, 6)
                         AtmoDetailControls(variance: $fog.variance, position: $fog.position, size: $fog.size)
+                        FogSliderRow(label: "Quality", value: $fog.raymarchSteps, range: 8...96, format: "%.0f")
 
                         Divider().padding(.vertical, 8)
 
@@ -114,6 +115,7 @@ struct AtmospherePanel: View {
                             AtmoDetailControls(variance: bind(fx, \.variance),
                                                position: bind(fx, \.position),
                                                size:     bind(fx, \.size))
+                            EmitterAdvancedControls(emitter: fx)
                         }
                     }
                     .padding(.top, 6)
@@ -205,6 +207,28 @@ private struct AtmoDetailControls: View {
             FogSliderRow(label: "W", value: $size.x, range: 0.5...40, format: "%.1f")
             FogSliderRow(label: "H", value: $size.y, range: 0.5...40, format: "%.1f")
             FogSliderRow(label: "D", value: $size.z, range: 0.5...40, format: "%.1f")
+        }
+    }
+}
+
+// MARK: - Selected emitter — advanced (type-specific) controls
+
+private struct EmitterAdvancedControls: View {
+    @ObservedObject var emitter: ParticleEffect
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Divider().padding(.vertical, 8)
+            FogSliderRow(label: "Particle Size", value: $emitter.particleSize,
+                         range: 0.005...0.5, format: "%.3f")
+            if emitter.type.isSmoke {
+                FogSliderRow(label: "Lifetime", value: $emitter.lifetime, range: 0.5...12,  format: "%.1f")
+                FogSliderRow(label: "Growth",   value: $emitter.growth,   range: 0.0...12,  format: "%.1f")
+                FogSliderRow(label: "Opacity",  value: $emitter.baseAlpha, range: 0.02...1.0, format: "%.2f")
+            } else {
+                FogSliderRow(label: "Fall Speed", value: $emitter.fallSpeed, range: 0.0...20, format: "%.1f")
+                FogSliderRow(label: "Streak",     value: $emitter.streak,    range: 1.0...16, format: "%.1f")
+            }
         }
     }
 }

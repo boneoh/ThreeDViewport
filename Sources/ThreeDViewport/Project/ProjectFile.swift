@@ -284,7 +284,7 @@ final class ProjectFile {
         }
 
         return ProjectData(
-            version:             24,
+            version:             25,
             modelPath:           nil,           // v3+ uses modelPaths instead
             modelPaths:          modelPaths,
             timeline:            timelineData,
@@ -315,7 +315,8 @@ final class ProjectFile {
                                          sx: vp.fogSettings.size.x,
                                          sy: vp.fogSettings.size.y,
                                          sz: vp.fogSettings.size.z,
-                                         variance: vp.fogSettings.variance),
+                                         variance: vp.fogSettings.variance,
+                                         steps:    vp.fogSettings.raymarchSteps),
             fogKeyframes:             captureAtmosphereKeyframes(vp.fogSettings.keyframeTrack),
             particleEmitters:         vp.particleManager.emitters.map { captureParticleEmitter($0) },
             particleEmitterKeyframes: vp.particleManager.emitters.map { captureAtmosphereKeyframes($0.keyframeTrack) }
@@ -329,7 +330,9 @@ final class ProjectFile {
             px: fx.position.x, py: fx.position.y, pz: fx.position.z,
             sx: fx.size.x,     sy: fx.size.y,     sz: fx.size.z,
             density: fx.density, variance: fx.variance,
-            r: fx.color.x, g: fx.color.y, b: fx.color.z)
+            r: fx.color.x, g: fx.color.y, b: fx.color.z,
+            particleSize: fx.particleSize, fallSpeed: fx.fallSpeed, streak: fx.streak,
+            lifetime: fx.lifetime, growth: fx.growth, baseAlpha: fx.baseAlpha)
     }
 
     /// Serialises an atmosphere keyframe track (fog or particles) to Codable data.
@@ -372,6 +375,15 @@ final class ProjectFile {
         fx.density   = pd.density
         fx.variance  = pd.variance
         fx.color     = SIMD3<Float>(pd.r, pd.g, pd.b)
+        // Advanced (v25): start from the type's defaults (covers in-place reuse and
+        // older files), then override with any saved values.
+        fx.applyTypeDefaults()
+        if let v = pd.particleSize { fx.particleSize = v }
+        if let v = pd.fallSpeed    { fx.fallSpeed = v }
+        if let v = pd.streak       { fx.streak = v }
+        if let v = pd.lifetime     { fx.lifetime = v }
+        if let v = pd.growth       { fx.growth = v }
+        if let v = pd.baseAlpha    { fx.baseAlpha = v }
         fx.keyframeTrack = applyAtmosphereKeyframes(keyframes)
     }
 
@@ -582,6 +594,7 @@ final class ProjectFile {
         vp.fogSettings.position  = SIMD3<Float>(data.fog.px, data.fog.py, data.fog.pz)
         vp.fogSettings.size      = SIMD3<Float>(data.fog.sx, data.fog.sy, data.fog.sz)
         vp.fogSettings.variance  = data.fog.variance
+        vp.fogSettings.raymarchSteps = data.fog.steps
         print("[DEBUG] ProjectFile: fog enabled=\(data.fog.isEnabled) density=\(data.fog.density)")
 
         // ── Fog keyframe track (v23) ──────────────────────────────────────────

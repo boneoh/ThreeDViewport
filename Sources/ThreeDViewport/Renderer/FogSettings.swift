@@ -29,6 +29,10 @@ final class FogSettings: ObservableObject {
     /// 0–1 edge softness.  0 = hard box; 1 = density fades fully toward the faces.
     @Published var variance: Float = 0.5
 
+    /// Raymarch quality — steps per ray (Phase 4).  Higher = smoother but slower.
+    /// Static config (not keyframed).
+    @Published var raymarchSteps: Float = 48
+
     /// Optional timeline animation.  nil / empty = use the static values above.
     /// Evaluated at render time (not written back to the @Published fields) so
     /// playback never marks the project dirty — matches object/camera animation.
@@ -85,5 +89,6 @@ func makeFogVolumeUniforms(_ fog: FogSettings,
         color:     SIMD4<Float>(s.color, 1),
         density:   s.density,
         variance:  s.variance,
-        colorMode: UInt32(colorMode))
+        colorMode: UInt32(colorMode),
+        steps:     UInt32(max(4, min(128, fog.raymarchSteps.rounded()))))
 }

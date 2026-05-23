@@ -241,7 +241,7 @@ struct WidgetUniforms {
 //   density                float       4
 //   variance               float       4
 //   colorMode              uint        4   (0 greyscale, 1 color, 2 b+w matte)
-//   _pad                   float       4
+//   steps                  uint        4   raymarch step count (quality)
 //   ─────────────────────────────────────
 //   Total                            144
 struct FogVolumeUniforms {
@@ -253,5 +253,5 @@ struct FogVolumeUniforms {
     var density:   Float
     var variance:  Float
     var colorMode: UInt32
-    var _pad:      Float = 0
+    var steps:     UInt32
 }
