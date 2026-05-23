@@ -20,7 +20,7 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
 
     init(timeline: Timeline, sceneManager: SceneManager,
          camera: CameraController, lightManager: LightManager,
-         fogSettings: FogSettings, particleEffect: ParticleEffect) {
+         fogSettings: FogSettings, particleManager: ParticleManager) {
 
         let panelWidth: CGFloat = 1000
 
@@ -35,8 +35,8 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
                 visibleObjectRows += 1
             }
         }
-        // Camera + Fog + Weather are always-shown lanes (the +3).
-        let numTracks     = 3 + visibleObjectRows + lightManager.lights.count
+        // Camera + Fog are always shown (+2); plus one lane per particle emitter.
+        let numTracks     = 2 + particleManager.emitters.count + visibleObjectRows + lightManager.lights.count
         let contentH      = Self.contentHeight(for: numTracks)
         let panelContentH = min(contentH, Self.maxPanelContentH)
 
@@ -49,8 +49,8 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
         editor.sceneManager   = sceneManager
         editor.camera         = camera
         editor.lightManager   = lightManager
-        editor.fogSettings    = fogSettings
-        editor.particleEffect = particleEffect
+        editor.fogSettings     = fogSettings
+        editor.particleManager = particleManager
         // Width follows the scroll view when the panel is resized horizontally.
         editor.autoresizingMask = [.width]
         editorView = editor

@@ -284,7 +284,7 @@ final class ProjectFile {
         }
 
         return ProjectData(
-            version:             23,
+            version:             24,
             modelPath:           nil,           // v3+ uses modelPaths instead
             modelPaths:          modelPaths,
             timeline:            timelineData,
@@ -316,23 +316,20 @@ final class ProjectFile {
                                          sy: vp.fogSettings.size.y,
                                          sz: vp.fogSettings.size.z,
                                          variance: vp.fogSettings.variance),
-            particles:           ParticleEffectData(
-                                     isEnabled: vp.particleEffect.isEnabled,
-                                     type:      vp.particleEffect.type.rawValue,
-                                     px: vp.particleEffect.position.x,
-                                     py: vp.particleEffect.position.y,
-                                     pz: vp.particleEffect.position.z,
-                                     sx: vp.particleEffect.size.x,
-                                     sy: vp.particleEffect.size.y,
-                                     sz: vp.particleEffect.size.z,
-                                     density:  vp.particleEffect.density,
-                                     variance: vp.particleEffect.variance,
-                                     r: vp.particleEffect.color.x,
-                                     g: vp.particleEffect.color.y,
-                                     b: vp.particleEffect.color.z),
-            fogKeyframes:        captureAtmosphereKeyframes(vp.fogSettings.keyframeTrack),
-            particleKeyframes:   captureAtmosphereKeyframes(vp.particleEffect.keyframeTrack)
+            fogKeyframes:             captureAtmosphereKeyframes(vp.fogSettings.keyframeTrack),
+            particleEmitters:         vp.particleManager.emitters.map { captureParticleEmitter($0) },
+            particleEmitterKeyframes: vp.particleManager.emitters.map { captureAtmosphereKeyframes($0.keyframeTrack) }
         )
+    }
+
+    /// Serialises one particle emitter's static config to Codable data.
+    private static func captureParticleEmitter(_ fx: ParticleEffect) -> ParticleEffectData {
+        ParticleEffectData(
+            isEnabled: fx.isEnabled, type: fx.type.rawValue,
+            px: fx.position.x, py: fx.position.y, pz: fx.position.z,
+            sx: fx.size.x,     sy: fx.size.y,     sz: fx.size.z,
+            density: fx.density, variance: fx.variance,
+            r: fx.color.x, g: fx.color.y, b: fx.color.z)
     }
 
     /// Serialises an atmosphere keyframe track (fog or particles) to Codable data.
@@ -361,6 +358,21 @@ final class ProjectFile {
                 color:    SIMD3<Float>(kf.r, kf.g, kf.b)))
         }
         return track
+    }
+
+    /// Restores one particle emitter's static config + keyframe track into `fx`
+    /// (mutated in place so existing references — e.g. an open panel — stay valid).
+    private static func applyParticleEmitter(_ pd: ParticleEffectData,
+                                             keyframes: [AtmosphereKeyframeData],
+                                             into fx: ParticleEffect) {
+        fx.isEnabled = pd.isEnabled
+        fx.type      = ParticleType(rawValue: pd.type) ?? .rain
+        fx.position  = SIMD3<Float>(pd.px, pd.py, pd.pz)
+        fx.size      = SIMD3<Float>(pd.sx, pd.sy, pd.sz)
+        fx.density   = pd.density
+        fx.variance  = pd.variance
+        fx.color     = SIMD3<Float>(pd.r, pd.g, pd.b)
+        fx.keyframeTrack = applyAtmosphereKeyframes(keyframes)
     }
 
     // MARK: - Apply ProjectData → live state
@@ -572,22 +584,33 @@ final class ProjectFile {
         vp.fogSettings.variance  = data.fog.variance
         print("[DEBUG] ProjectFile: fog enabled=\(data.fog.isEnabled) density=\(data.fog.density)")
 
-        // ── Weather particles (v21) ───────────────────────────────────────────
-        let pe = data.particles
-        vp.particleEffect.isEnabled = pe.isEnabled
-        vp.particleEffect.type      = ParticleType(rawValue: pe.type) ?? .rain
-        vp.particleEffect.position  = SIMD3<Float>(pe.px, pe.py, pe.pz)
-        vp.particleEffect.size      = SIMD3<Float>(pe.sx, pe.sy, pe.sz)
-        vp.particleEffect.density   = pe.density
-        vp.particleEffect.variance  = pe.variance
-        vp.particleEffect.color     = SIMD3<Float>(pe.r, pe.g, pe.b)
-        print("[DEBUG] ProjectFile: particles enabled=\(pe.isEnabled) type=\(pe.type)")
+        // ── Fog keyframe track (v23) ──────────────────────────────────────────
+        vp.fogSettings.keyframeTrack = applyAtmosphereKeyframes(data.fogKeyframes)
 
-        // ── Atmosphere keyframe tracks (v23) ──────────────────────────────────
-        vp.fogSettings.keyframeTrack      = applyAtmosphereKeyframes(data.fogKeyframes)
-        vp.particleEffect.keyframeTrack   = applyAtmosphereKeyframes(data.particleKeyframes)
-        print("[DEBUG] ProjectFile: fogKeyframes=\(data.fogKeyframes.count)"
-            + " particleKeyframes=\(data.particleKeyframes.count)")
+        // ── Weather particle emitters (v21 single → v24 multiple) ─────────────
+        let emitterData: [ParticleEffectData]
+        let emitterKfs:  [[AtmosphereKeyframeData]]
+        if !data.particleEmitters.isEmpty {
+            emitterData = data.particleEmitters
+            emitterKfs  = data.particleEmitterKeyframes
+        } else {
+            emitterData = [data.particles]               // migrate legacy single emitter
+            emitterKfs  = [data.particleKeyframes]
+        }
+        // Reuse existing emitter instances (mutate in place) so an open Atmosphere
+        // panel keeps a valid reference; resize the list to match the saved count.
+        let mgr = vp.particleManager
+        let targetCount = max(1, emitterData.count)
+        while mgr.emitters.count < targetCount { mgr.emitters.append(ParticleEffect()) }
+        while mgr.emitters.count > targetCount { mgr.emitters.removeLast() }
+        for i in 0..<targetCount {
+            let pd  = i < emitterData.count ? emitterData[i] : ParticleEffectData()
+            let kfs = i < emitterKfs.count  ? emitterKfs[i]  : []
+            applyParticleEmitter(pd, keyframes: kfs, into: mgr.emitters[i])
+        }
+        mgr.selectedIndex = 0
+        print("[DEBUG] ProjectFile: particle emitters=\(mgr.emitters.count)"
+            + " fogKeyframes=\(data.fogKeyframes.count)")
 
         // Force the Renderer to re-evaluate keyframes on the next draw.
         // Without this, lastAnimatedTime == currentTime (both 0) so applyAnimation()

@@ -78,7 +78,7 @@ final class ViewportView: MTKView {
     let feedbackProcessor:   FeedbackProcessor   // created after Metal device is ready
     let colorGradeSettings = ColorGradeSettings()
     let fogSettings        = FogSettings()
-    let particleEffect     = ParticleEffect()
+    let particleManager    = ParticleManager()
 
     // Camera panel — sticky follow-target picker shared with the floating
     // CameraPanel inspector.  Lives here so the choice survives panel
@@ -209,7 +209,7 @@ final class ViewportView: MTKView {
         renderer?.feedbackSettings    = feedbackSettings
         renderer?.colorGradeSettings  = colorGradeSettings
         renderer?.fogSettings         = fogSettings
-        renderer?.particleEffect      = particleEffect
+        renderer?.particleManager     = particleManager
 
         // Sync renderSettings → renderer whenever toggles change
         colorModeCancellable = renderSettings.$colorMode.sink { [weak self] value in
@@ -1237,21 +1237,24 @@ final class ViewportView: MTKView {
         print("[DEBUG] ViewportView: fog keyframes cleared")
     }
 
-    func addParticleKeyframeAtCurrentTime() {
-        if particleEffect.keyframeTrack == nil { particleEffect.keyframeTrack = AtmosphereKeyframeTrack() }
-        particleEffect.keyframeTrack?.addKeyframe(
-            particleEffect.snapshot(at: timeline.currentTime),
+    func addParticleKeyframeAtCurrentTime(forEmitterAt index: Int) {
+        guard particleManager.emitters.indices.contains(index) else { return }
+        let fx = particleManager.emitters[index]
+        if fx.keyframeTrack == nil { fx.keyframeTrack = AtmosphereKeyframeTrack() }
+        fx.keyframeTrack?.addKeyframe(
+            fx.snapshot(at: timeline.currentTime),
             mergeTolerance: stampMergeTolerance)
-        particleEffect.objectWillChange.send()
+        fx.objectWillChange.send()
         print("[DEBUG] ViewportView: particle keyframe added at t="
-            + String(format: "%.3f", timeline.currentTime))
-        onKeyframeStamped?(.particles)
+            + String(format: "%.3f", timeline.currentTime) + " emitter=\(index)")
+        onKeyframeStamped?(.particles(index))
     }
 
-    func clearParticleKeyframes() {
-        particleEffect.keyframeTrack = nil
-        particleEffect.objectWillChange.send()
-        print("[DEBUG] ViewportView: particle keyframes cleared")
+    func clearParticleKeyframes(at index: Int) {
+        guard particleManager.emitters.indices.contains(index) else { return }
+        particleManager.emitters[index].keyframeTrack = nil
+        particleManager.emitters[index].objectWillChange.send()
+        print("[DEBUG] ViewportView: particle keyframes cleared emitter=\(index)")
     }
 
     /// World-space forward direction for the camera's current yaw / pitch.
@@ -1435,7 +1438,7 @@ final class ViewportView: MTKView {
         exporter.feedbackSettings   = feedbackSettings
         exporter.colorGradeSettings = colorGradeSettings
         exporter.fogSettings        = fogSettings
-        exporter.particleEffect     = particleEffect
+        exporter.particleManager    = particleManager
         exporter.ibl                = renderer?.ibl   // share IBL so exports match preview
         feedbackProcessor.reset()   // clear live queue; exporter has its own processor
         timeline.pause()

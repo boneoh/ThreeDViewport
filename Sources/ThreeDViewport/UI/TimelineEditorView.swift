@@ -35,8 +35,8 @@ enum TrackRef: Equatable {
     case object(Int)   // index into sceneManager.objects
     case light(Int)    // index into LightManager.lights
     case group(Int)    // groupID — multi-part model header row
-    case fog           // the fog volume (single instance)
-    case particles     // the weather/particle emitter (single instance)
+    case fog            // the fog volume (single instance)
+    case particles(Int) // index into ParticleManager.emitters
 }
 
 // One row in the timeline label/track area.
@@ -86,8 +86,8 @@ final class TimelineEditorView: NSView {
     weak var sceneManager: SceneManager?
     weak var camera:       CameraController?
     weak var lightManager: LightManager?
-    weak var fogSettings:    FogSettings?
-    weak var particleEffect: ParticleEffect?
+    weak var fogSettings:     FogSettings?
+    weak var particleManager: ParticleManager?
 
     // ── Insert callbacks (set by AppDelegate) ─────────────────────────────────
 
@@ -106,9 +106,9 @@ final class TimelineEditorView: NSView {
     /// The argument is the groupID that should receive a group-level keyframe.
     var onInsertGroupKeyframe: ((Int) -> Void)?
 
-    /// Called when the user presses Insert with the Fog / Weather lane selected.
+    /// Called when the user presses Insert with the Fog / a Weather lane selected.
     var onInsertFogKeyframe: (() -> Void)?
-    var onInsertParticleKeyframe: (() -> Void)?
+    var onInsertParticleKeyframe: ((Int) -> Void)?
 
     // ── Edit-mode callbacks (set by AppDelegate) ──────────────────────────────
 
@@ -308,6 +308,7 @@ final class TimelineEditorView: NSView {
     private func buildTracks() -> TrackList {
         let objects    = sceneManager?.objects ?? []
         let lightCount = lightManager?.lights.count ?? 0
+        let emitters   = particleManager?.emitters ?? []
 
         // Index group parts by groupID (preserving each part's global index).
         var groupOrder: [Int: [(idx: Int, obj: SceneObject)]] = [:]
@@ -325,7 +326,7 @@ final class TimelineEditorView: NSView {
             case group(gid: Int)
             case light(idx: Int)
             case fog
-            case particles
+            case particles(idx: Int, name: String)
         }
         var entries: [(sortName: String, order: Int, entry: RowEntry)] = []
         var order = 0
@@ -335,7 +336,17 @@ final class TimelineEditorView: NSView {
 
         add("Camera", .camera)
         add("Fog", .fog)
-        add("Weather", .particles)
+        // One lane per emitter, named by type ("Rain", "Smoke", …).  Disambiguate
+        // duplicate types with a trailing number ("Rain 1", "Rain 2").
+        var typeTotals: [ParticleType: Int] = [:]
+        for e in emitters { typeTotals[e.type, default: 0] += 1 }
+        var typeSeen: [ParticleType: Int] = [:]
+        for (i, e) in emitters.enumerated() {
+            typeSeen[e.type, default: 0] += 1
+            let base = e.type.displayName
+            let name = (typeTotals[e.type] ?? 0) > 1 ? "\(base) \(typeSeen[e.type]!)" : base
+            add(name, .particles(idx: i, name: name))
+        }
         var seenGroups = Set<Int>()
         for (i, obj) in objects.enumerated() {
             if let gid = obj.groupID {
@@ -361,8 +372,8 @@ final class TimelineEditorView: NSView {
                 result.append(TrackRow(name: "Camera", ref: .camera))
             case .fog:
                 result.append(TrackRow(name: "Fog", ref: .fog))
-            case .particles:
-                result.append(TrackRow(name: "Weather", ref: .particles))
+            case .particles(let idx, let name):
+                result.append(TrackRow(name: name, ref: .particles(idx)))
             case .standalone(let idx, let obj):
                 result.append(TrackRow(name: obj.name, ref: .object(idx)))
             case .light(let idx):
@@ -401,8 +412,8 @@ final class TimelineEditorView: NSView {
             return sceneManager?.groupKeyframeTracks[gid]?.keyframes.map { $0.time } ?? []
         case .fog:
             return fogSettings?.keyframeTrack?.keyframes.map { $0.time } ?? []
-        case .particles:
-            return particleEffect?.keyframeTrack?.keyframes.map { $0.time } ?? []
+        case .particles(let i):
+            return particleManager?.emitters[safe: i]?.keyframeTrack?.keyframes.map { $0.time } ?? []
         }
     }
 
@@ -1284,8 +1295,8 @@ final class TimelineEditorView: NSView {
             else { return }
             track.retimeKeyframe(at: idx, to: toTime)
 
-        case .particles:
-            guard let track = particleEffect?.keyframeTrack,
+        case .particles(let i):
+            guard let track = particleManager?.emitters[safe: i]?.keyframeTrack,
                   let idx   = track.keyframes.firstIndex(where: { abs($0.time - fromTime) < 0.0005 })
             else { return }
             track.retimeKeyframe(at: idx, to: toTime)
@@ -1317,8 +1328,8 @@ final class TimelineEditorView: NSView {
                 sceneManager?.groupKeyframeTracks[gid]?.moveKeyframes(from: from, to: to)
             case .fog:
                 fogSettings?.keyframeTrack?.moveKeyframes(from: from, to: to)
-            case .particles:
-                particleEffect?.keyframeTrack?.moveKeyframes(from: from, to: to)
+            case .particles(let i):
+                particleManager?.emitters[safe: i]?.keyframeTrack?.moveKeyframes(from: from, to: to)
             }
         }
     }
@@ -1361,8 +1372,8 @@ final class TimelineEditorView: NSView {
             track.removeKeyframe(at: ki)
         case .fog:
             fogSettings?.keyframeTrack?.removeKeyframe(at: ki)
-        case .particles:
-            particleEffect?.keyframeTrack?.removeKeyframe(at: ki)
+        case .particles(let i):
+            particleManager?.emitters[safe: i]?.keyframeTrack?.removeKeyframe(at: ki)
         }
         selectedKFIndex = nil
         needsDisplay    = true
@@ -1403,8 +1414,8 @@ final class TimelineEditorView: NSView {
                   let idx   = track.keyframes.firstIndex(where: { abs($0.time - time) < eps })
             else { return }
             track.removeKeyframe(at: idx)
-        case .particles:
-            guard let track = particleEffect?.keyframeTrack,
+        case .particles(let i):
+            guard let track = particleManager?.emitters[safe: i]?.keyframeTrack,
                   let idx   = track.keyframes.firstIndex(where: { abs($0.time - time) < eps })
             else { return }
             track.removeKeyframe(at: idx)
@@ -1420,7 +1431,7 @@ final class TimelineEditorView: NSView {
         case .light(let i):   onInsertLightKeyframe?(i)
         case .group(let gid): onInsertGroupKeyframe?(gid)
         case .fog:            onInsertFogKeyframe?()
-        case .particles:      onInsertParticleKeyframe?()
+        case .particles(let i): onInsertParticleKeyframe?(i)
         }
         // The stamp call above triggers ViewportView.onKeyframeStamped, which
         // AppDelegate routes back to `selectKeyframe(ref:atTime:)` — so the new
@@ -1611,8 +1622,8 @@ final class TimelineEditorView: NSView {
                 case .fog:
                     guard let kf = fogSettings?.keyframeTrack?.keyframes[safe: d.kfIndex] else { continue }
                     entries.append((.fog(kf), t, ref))
-                case .particles:
-                    guard let kf = particleEffect?.keyframeTrack?.keyframes[safe: d.kfIndex] else { continue }
+                case .particles(let i):
+                    guard let kf = particleManager?.emitters[safe: i]?.keyframeTrack?.keyframes[safe: d.kfIndex] else { continue }
                     entries.append((.particles(kf), t, ref))
                 }
             }
@@ -1654,8 +1665,8 @@ final class TimelineEditorView: NSView {
         case .fog:
             guard let kf = fogSettings?.keyframeTrack?.keyframes[safe: ki] else { return }
             clipboardKeyframe = .fog(kf)
-        case .particles:
-            guard let kf = particleEffect?.keyframeTrack?.keyframes[safe: ki] else { return }
+        case .particles(let i):
+            guard let kf = particleManager?.emitters[safe: i]?.keyframeTrack?.keyframes[safe: ki] else { return }
             clipboardKeyframe = .particles(kf)
         }
         print("[DEBUG] TimelineEditorView: Cmd+C — copied \(clipboardKeyframe!.typeName)"
@@ -1756,9 +1767,10 @@ final class TimelineEditorView: NSView {
                 time: t, position: src.position, size: src.size,
                 density: src.density, variance: src.variance, color: src.color))
 
-        case (.particles(let src), .particles):
-            if particleEffect?.keyframeTrack == nil { particleEffect?.keyframeTrack = AtmosphereKeyframeTrack() }
-            particleEffect?.keyframeTrack?.addKeyframe(AtmosphereKeyframe(
+        case (.particles(let src), .particles(let i)):
+            guard let fx = particleManager?.emitters[safe: i] else { return }
+            if fx.keyframeTrack == nil { fx.keyframeTrack = AtmosphereKeyframeTrack() }
+            fx.keyframeTrack?.addKeyframe(AtmosphereKeyframe(
                 time: t, position: src.position, size: src.size,
                 density: src.density, variance: src.variance, color: src.color))
 
@@ -1829,9 +1841,10 @@ final class TimelineEditorView: NSView {
             fogSettings?.keyframeTrack?.addKeyframe(AtmosphereKeyframe(
                 time: t, position: src.position, size: src.size,
                 density: src.density, variance: src.variance, color: src.color))
-        case (.particles(let src), .particles):
-            if particleEffect?.keyframeTrack == nil { particleEffect?.keyframeTrack = AtmosphereKeyframeTrack() }
-            particleEffect?.keyframeTrack?.addKeyframe(AtmosphereKeyframe(
+        case (.particles(let src), .particles(let i)):
+            guard let fx = particleManager?.emitters[safe: i] else { return }
+            if fx.keyframeTrack == nil { fx.keyframeTrack = AtmosphereKeyframeTrack() }
+            fx.keyframeTrack?.addKeyframe(AtmosphereKeyframe(
                 time: t, position: src.position, size: src.size,
                 density: src.density, variance: src.variance, color: src.color))
         default:

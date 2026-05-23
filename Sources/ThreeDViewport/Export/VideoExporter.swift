@@ -146,8 +146,8 @@ final class VideoExporter {
     var fogSettings: FogSettings?
     private var fogVolumePipelineState: MTLRenderPipelineState?
 
-    // Weather particles — nil/disabled = none during export
-    var particleEffect: ParticleEffect?
+    // Weather particles — nil/empty = none during export
+    var particleManager: ParticleManager?
     private var particleFXPipelineState: MTLRenderPipelineState?
     private var particleSeedBuffer:      MTLBuffer?
 
@@ -779,7 +779,7 @@ final class VideoExporter {
                     dummyTangent:      dummyTangentBuffer))
 
             // ── Weather particles (hitEffectTime carries the frame time t) ─────
-            drawParticleEffect(encoder: encoder, time: Double(hitEffectTime))
+            drawParticleEffects(encoder: encoder, time: Double(hitEffectTime))
 
             // ── Laser beam visuals + hit effects ──────────────────────────────
             let exportSize = SIMD2<Float>(Float(width), Float(height))
@@ -1024,32 +1024,36 @@ final class VideoExporter {
                                vertexCount: 4, instanceCount: sparkGPUData.count)
     }
 
-    /// Weather particles — mirrors Renderer.drawParticleEffect so export matches.
-    private func drawParticleEffect(encoder: MTLRenderCommandEncoder, time: Double) {
-        guard let fx = particleEffect, fx.isEnabled,
+    /// Weather particles — mirrors Renderer.drawParticleEffects so export matches.
+    private func drawParticleEffects(encoder: MTLRenderCommandEncoder, time: Double) {
+        guard let mgr   = particleManager,
               let pipe  = particleFXPipelineState,
               let seeds = particleSeedBuffer,
               let ds    = laserBeamDepthState else { return }
-        let density = fx.renderState(at: time, playing: true).density
-        let count = Int((max(0, min(1, density)) * Float(ParticleEffect.maxCount)).rounded())
-        guard count > 0 else { return }
-
-        var u = makeParticleFXUniforms(fx,
-            viewProjection: camera.viewProjectionMatrix,
-            cameraRight:    camera.rightVector,
-            cameraUp:       camera.upVector,
-            time:           Float(time),
-            playing:        true,   // export always reads the keyframe track
-            colorMode:      colorMode.rawValue)
 
         encoder.setRenderPipelineState(pipe)
         encoder.setDepthStencilState(ds)
         encoder.setCullMode(.none)
         encoder.setVertexBuffer(seeds, offset: 0, index: 0)
-        encoder.setVertexBytes(&u, length: MemoryLayout<ParticleFXUniforms>.stride, index: 1)
-        encoder.setFragmentBytes(&u, length: MemoryLayout<ParticleFXUniforms>.stride, index: 1)
-        encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4,
-                               instanceCount: count)
+
+        for fx in mgr.emitters where fx.isEnabled {
+            let density = fx.renderState(at: time, playing: true).density
+            let count = Int((max(0, min(1, density)) * Float(ParticleEffect.maxCount)).rounded())
+            guard count > 0 else { continue }
+
+            var u = makeParticleFXUniforms(fx,
+                viewProjection: camera.viewProjectionMatrix,
+                cameraRight:    camera.rightVector,
+                cameraUp:       camera.upVector,
+                time:           Float(time),
+                playing:        true,   // export always reads the keyframe track
+                colorMode:      colorMode.rawValue)
+
+            encoder.setVertexBytes(&u, length: MemoryLayout<ParticleFXUniforms>.stride, index: 1)
+            encoder.setFragmentBytes(&u, length: MemoryLayout<ParticleFXUniforms>.stride, index: 1)
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4,
+                                   instanceCount: count)
+        }
     }
 
     // MARK: - Axes gizmo (mirrors Renderer.drawGizmoPass exactly)

@@ -51,7 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // Atmosphere: only the time is needed — the panel follows the playhead, so
         // commit re-stamps the edited panel value and cancel re-syncs from the track.
         case fog(kfTime: Double)
-        case particles(kfTime: Double)
+        case particles(index: Int, kfTime: Double)
     }
     private var kfEditSnapshot: KFEditSnapshot? = nil
 
@@ -82,6 +82,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     // Combine subscriptions that set isDirty when any Observable setting changes.
     private var settingsCancellables = Set<AnyCancellable>()
+    /// Per-emitter dirty subscriptions, rebuilt whenever the emitter list changes.
+    private var particleEmitterCancellables = Set<AnyCancellable>()
 
     private let timelinePanelHeight: CGFloat = 80
 
@@ -430,15 +432,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             }
             .store(in: &settingsCancellables)
 
-        // ParticleEffect (weather).
-        viewport.particleEffect.objectWillChange
-            .sink { [weak self, weak viewport] in
-                guard viewport?.particleEffect.suppressDirty != true else { return }
+        // ParticleManager (weather): add/remove/select.  Also resize the timeline
+        // when the emitter count changes (one lane per emitter).
+        viewport.particleManager.objectWillChange
+            .sink { [weak self] in
                 self?.markDirty()
+                DispatchQueue.main.async { [weak self] in self?.timelineEditorWC?.updateWindowHeight() }
             }
             .store(in: &settingsCancellables)
+        // Re-wire the per-emitter property-edit subscriptions whenever the list
+        // changes (async so the committed array is read, not the pre-mutation one).
+        viewport.particleManager.$emitters
+            .sink { [weak self, weak viewport] _ in
+                DispatchQueue.main.async {
+                    guard let self = self, let viewport = viewport else { return }
+                    self.resubscribeParticleEmitters(viewport)
+                }
+            }
+            .store(in: &settingsCancellables)
+        resubscribeParticleEmitters(viewport)   // initial subscription
 
         print("[DEBUG] AppDelegate: subscribed to settings changes for dirty tracking")
+    }
+
+    /// (Re)subscribes a dirty sink to each particle emitter's property edits.
+    /// Called initially and whenever the emitter list changes.  Per-emitter
+    /// `suppressDirty` skips the playhead-follow sync writes.
+    private func resubscribeParticleEmitters(_ viewport: ViewportView) {
+        particleEmitterCancellables.removeAll()
+        for emitter in viewport.particleManager.emitters {
+            emitter.objectWillChange
+                .sink { [weak self] in
+                    guard emitter.suppressDirty != true else { return }
+                    self?.markDirty()
+                }
+                .store(in: &particleEmitterCancellables)
+        }
     }
 
     // MARK: - Menu
@@ -1536,13 +1565,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.becomesKeyOnlyIfNeeded = true
         panel.hidesOnDeactivate  = false
 
+        // 3a: the panel edits the selected emitter; the list UI arrives in 3b.
+        let mgr = viewport.particleManager
         let atmoView = AtmospherePanel(
             fog: viewport.fogSettings,
-            particle: viewport.particleEffect,
+            particle: mgr.emitters[mgr.selectedIndex],
             onStampFog:       { [weak viewport] in viewport?.addFogKeyframeAtCurrentTime() },
             onClearFog:       { [weak viewport] in viewport?.clearFogKeyframes() },
-            onStampParticles: { [weak viewport] in viewport?.addParticleKeyframeAtCurrentTime() },
-            onClearParticles: { [weak viewport] in viewport?.clearParticleKeyframes() })
+            onStampParticles: { [weak viewport] in
+                guard let vp = viewport else { return }
+                vp.addParticleKeyframeAtCurrentTime(forEmitterAt: vp.particleManager.selectedIndex)
+            },
+            onClearParticles: { [weak viewport] in
+                guard let vp = viewport else { return }
+                vp.clearParticleKeyframes(at: vp.particleManager.selectedIndex)
+            })
         panel.contentView = NSHostingView(rootView: atmoView)
 
         if let win = window {
@@ -1769,8 +1806,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             sceneManager:   viewport.sceneManager,
             camera:         viewport.camera,
             lightManager:   viewport.lightManager,
-            fogSettings:    viewport.fogSettings,
-            particleEffect: viewport.particleEffect
+            fogSettings:     viewport.fogSettings,
+            particleManager: viewport.particleManager
         )
         wc.editorView.onInsertObjectKeyframe = { [weak self, weak viewport] index in
             viewport?.addKeyframeAtCurrentTime(forObjectAt: index)
@@ -1792,20 +1829,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             viewport?.addFogKeyframeAtCurrentTime()
             self?.markDirty()
         }
-        wc.editorView.onInsertParticleKeyframe = { [weak self, weak viewport] in
-            viewport?.addParticleKeyframeAtCurrentTime()
+        wc.editorView.onInsertParticleKeyframe = { [weak self, weak viewport] index in
+            viewport?.addParticleKeyframeAtCurrentTime(forEmitterAt: index)
             self?.markDirty()
         }
         wc.editorView.onKeyframeDeleted = { [weak self, weak viewport] in
             self?.markDirty()
             // Refresh the Atmosphere panel's keyframe counts (harmless for other lanes).
             viewport?.fogSettings.objectWillChange.send()
-            viewport?.particleEffect.objectWillChange.send()
+            viewport?.particleManager.emitters.forEach { $0.objectWillChange.send() }
         }
         wc.editorView.onKeyframePasted = { [weak self, weak viewport] in
             self?.markDirty()
             viewport?.fogSettings.objectWillChange.send()
-            viewport?.particleEffect.objectWillChange.send()
+            viewport?.particleManager.emitters.forEach { $0.objectWillChange.send() }
         }
 
         // ── Enter edit mode ───────────────────────────────────────────────────
@@ -1961,12 +1998,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 print("[DEBUG] AppDelegate: entered fog keyframe edit t="
                     + String(format: "%.3f", kfTime))
 
-            case .particles:
+            case .particles(let i):
                 if self.atmospherePanel == nil || self.atmospherePanel?.isVisible != true {
                     self.showAtmospherePanel(self)
                 }
-                self.kfEditSnapshot = .particles(kfTime: kfTime)
-                print("[DEBUG] AppDelegate: entered particle keyframe edit t="
+                viewport.particleManager.selectedIndex = i   // show this emitter in the panel
+                self.kfEditSnapshot = .particles(index: i, kfTime: kfTime)
+                print("[DEBUG] AppDelegate: entered particle keyframe edit emitter=\(i) t="
                     + String(format: "%.3f", kfTime))
             }
         }
@@ -2023,10 +2061,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 print("[DEBUG] AppDelegate: committed fog keyframe edit t="
                     + String(format: "%.3f", kfTime))
 
-            case .particles(let kfTime):
+            case .particles(let index, let kfTime):
                 viewport.timeline.seek(to: kfTime)
-                viewport.addParticleKeyframeAtCurrentTime()
-                print("[DEBUG] AppDelegate: committed particle keyframe edit t="
+                viewport.addParticleKeyframeAtCurrentTime(forEmitterAt: index)
+                print("[DEBUG] AppDelegate: committed particle keyframe edit emitter=\(index) t="
                     + String(format: "%.3f", kfTime))
             }
 
@@ -2083,9 +2121,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 print("[DEBUG] AppDelegate: cancelled fog keyframe edit t="
                     + String(format: "%.3f", kfTime))
 
-            case .particles(let kfTime):
-                viewport.particleEffect.syncToPlayhead(at: kfTime)
-                print("[DEBUG] AppDelegate: cancelled particle keyframe edit t="
+            case .particles(let index, let kfTime):
+                if viewport.particleManager.emitters.indices.contains(index) {
+                    viewport.particleManager.emitters[index].syncToPlayhead(at: kfTime)
+                }
+                print("[DEBUG] AppDelegate: cancelled particle keyframe edit emitter=\(index) t="
                     + String(format: "%.3f", kfTime))
             }
 
@@ -2120,10 +2160,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 }
                 viewport.setControlMode(.model)
                 viewport.syncOverlayState()
-            case .fog, .particles:
-                // Atmosphere effects have no viewport control mode; selecting the
-                // lane just highlights it in the editor (edit values via the panel).
+            case .fog:
+                // Fog has no viewport control mode; the lane just highlights in the
+                // editor (edit values via the panel).
                 break
+            case .particles(let i):
+                // Make the panel show the clicked emitter (no viewport control mode).
+                viewport.particleManager.selectedIndex = i
             }
         }
 

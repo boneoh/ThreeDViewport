@@ -108,7 +108,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     private var fogSceneDepth: MTLTexture?
 
     // MARK: - Weather particles (optional — set by ViewportView after init)
-    var particleEffect: ParticleEffect?
+    var particleManager: ParticleManager?
     private var particleFXPipelineState: MTLRenderPipelineState?
     private var particleSeedBuffer:      MTLBuffer?
     private var gradeTexture:  MTLTexture?   // intermediate; rebuilt on size change
@@ -540,7 +540,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         guard t != lastAtmoSyncTime else { return }
         lastAtmoSyncTime = t
         fogSettings?.syncToPlayhead(at: t)
-        particleEffect?.syncToPlayhead(at: t)
+        particleManager?.emitters.forEach { $0.syncToPlayhead(at: t) }
     }
 
     /// The "kept" object set for Scene-mode solo: the selected object's group
@@ -555,35 +555,39 @@ final class Renderer: NSObject, MTKViewDelegate {
         return [sel]
     }
 
-    /// Draws the procedural weather particles into the open scene encoder, at the
+    /// Draws every enabled weather emitter into the open scene encoder, at the
     /// given timeline time (so live/scrub/export all agree).  Depth-tested against
     /// scene geometry, alpha-blended, no depth write.
-    private func drawParticleEffect(encoder: MTLRenderCommandEncoder, time: Double) {
-        guard let fx = particleEffect, fx.isEnabled,
+    private func drawParticleEffects(encoder: MTLRenderCommandEncoder, time: Double) {
+        guard let mgr   = particleManager,
               let pipe  = particleFXPipelineState,
               let seeds = particleSeedBuffer,
               let ds    = laserBeamDepthState else { return }
         let playing = timeline.isPlaying
-        let density = fx.renderState(at: time, playing: playing).density
-        let count = Int((max(0, min(1, density)) * Float(ParticleEffect.maxCount)).rounded())
-        guard count > 0 else { return }
-
-        var u = makeParticleFXUniforms(fx,
-            viewProjection: viewCamera.viewProjectionMatrix,
-            cameraRight:    viewCamera.rightVector,
-            cameraUp:       viewCamera.upVector,
-            time:           Float(time),
-            playing:        playing,
-            colorMode:      colorMode.rawValue)
 
         encoder.setRenderPipelineState(pipe)
         encoder.setDepthStencilState(ds)
         encoder.setCullMode(.none)
         encoder.setVertexBuffer(seeds, offset: 0, index: 0)
-        encoder.setVertexBytes(&u, length: MemoryLayout<ParticleFXUniforms>.stride, index: 1)
-        encoder.setFragmentBytes(&u, length: MemoryLayout<ParticleFXUniforms>.stride, index: 1)
-        encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4,
-                               instanceCount: count)
+
+        for fx in mgr.emitters where fx.isEnabled {
+            let density = fx.renderState(at: time, playing: playing).density
+            let count = Int((max(0, min(1, density)) * Float(ParticleEffect.maxCount)).rounded())
+            guard count > 0 else { continue }
+
+            var u = makeParticleFXUniforms(fx,
+                viewProjection: viewCamera.viewProjectionMatrix,
+                cameraRight:    viewCamera.rightVector,
+                cameraUp:       viewCamera.upVector,
+                time:           Float(time),
+                playing:        playing,
+                colorMode:      colorMode.rawValue)
+
+            encoder.setVertexBytes(&u, length: MemoryLayout<ParticleFXUniforms>.stride, index: 1)
+            encoder.setFragmentBytes(&u, length: MemoryLayout<ParticleFXUniforms>.stride, index: 1)
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4,
+                                   instanceCount: count)
+        }
     }
 
     func draw(in view: MTKView) {
@@ -780,7 +784,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
 
         // ── Weather particles (depth-tested against geometry, alpha-blended) ───
-        drawParticleEffect(encoder: encoder, time: timeline.currentTime)
+        drawParticleEffects(encoder: encoder, time: timeline.currentTime)
 
         // ── Laser hit detection + particle update ─────────────────────────────
         let screenSize = SIMD2<Float>(Float(view.drawableSize.width),
