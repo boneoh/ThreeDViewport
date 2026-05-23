@@ -300,6 +300,13 @@ final class TimelineEditorView: NSView {
 
     private typealias TrackList = [TrackRow]
 
+    /// Timeline label for a light lane: "Light N - <Type>" (mirrors the weather
+    /// lanes showing their type); falls back to "Light N" if the type is unavailable.
+    private func lightLaneName(_ i: Int) -> String {
+        guard let type = lightManager?.lights[safe: i]?.type.displayName else { return "Light \(i + 1)" }
+        return "Light \(i + 1) - \(type)"
+    }
+
     /// Track list sorted alphabetically (natural order) by display name across
     /// every row type — Camera, standalone objects, multi-part model groups, and
     /// lights are all folded into one A→Z list.  Multi-part models appear as a
@@ -357,7 +364,7 @@ final class TimelineEditorView: NSView {
             }
         }
         for i in 0..<lightCount {
-            add("Light \(i + 1)", .light(idx: i))
+            add(lightLaneName(i), .light(idx: i))
         }
 
         entries.sort {
@@ -377,7 +384,7 @@ final class TimelineEditorView: NSView {
             case .standalone(let idx, let obj):
                 result.append(TrackRow(name: obj.name, ref: .object(idx)))
             case .light(let idx):
-                result.append(TrackRow(name: "Light \(idx + 1)", ref: .light(idx)))
+                result.append(TrackRow(name: lightLaneName(idx), ref: .light(idx)))
             case .group(let gid):
                 let gName = sceneManager?.groupName(for: gid) ?? "Group"
                 let parts = groupOrder[gid] ?? []

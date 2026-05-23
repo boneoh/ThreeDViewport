@@ -313,6 +313,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             layout.modelInspectorPanel = WindowFrameData(x: f.origin.x, y: f.origin.y,
                                                          w: f.size.width, h: f.size.height)
         }
+        if let panel = atmospherePanel, panel.isVisible {
+            let f = panel.frame
+            layout.atmospherePanel = WindowFrameData(x: f.origin.x, y: f.origin.y,
+                                                     w: f.size.width, h: f.size.height)
+        }
         return layout
     }
 
@@ -374,6 +379,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             if modelInspectorPanel == nil { showModelInspector(self) }
             modelInspectorPanel?.setFrame(
                 NSRect(x: mf.x, y: mf.y, width: mf.w, height: mf.h), display: true)
+        }
+
+        // Atmosphere panel — open and position if it was visible
+        if let af = layout.atmospherePanel {
+            if atmospherePanel == nil { showAtmospherePanel(self) }
+            atmospherePanel?.setFrame(
+                NSRect(x: af.x, y: af.y, width: af.w, height: af.h), display: true)
         }
     }
 
@@ -691,6 +703,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         windowMenu.addItem(.separator())
 
         // Floating inspector panels — alphabetical order
+        let atmosphereItem = NSMenuItem(
+            title: "Atmosphere…",
+            action: #selector(showAtmospherePanel(_:)),
+            keyEquivalent: "A"   // ⌘⇧A
+        )
+        atmosphereItem.target = self
+        windowMenu.addItem(atmosphereItem)
+
         let cameraPanelItem = NSMenuItem(
             title: "Camera…",
             action: #selector(showCameraPanel(_:)),
@@ -706,14 +726,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         )
         colorGradeItem.target = self
         windowMenu.addItem(colorGradeItem)
-
-        let atmosphereItem = NSMenuItem(
-            title: "Atmosphere…",
-            action: #selector(showAtmospherePanel(_:)),
-            keyEquivalent: "A"   // ⌘⇧A
-        )
-        atmosphereItem.target = self
-        windowMenu.addItem(atmosphereItem)
 
         let feedbackItem = NSMenuItem(
             title: "Feedback…",
@@ -1219,6 +1231,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             p.orderOut(nil)
             panelsHiddenByMiniaturize.insert("modelInspector")
         }
+        if let p = atmospherePanel, p.isVisible {
+            p.orderOut(nil)
+            panelsHiddenByMiniaturize.insert("atmosphere")
+        }
         if let wc = timelineEditorWC, wc.window?.isVisible == true {
             wc.window?.orderOut(nil)
             panelsHiddenByMiniaturize.insert("timeline")
@@ -1269,6 +1285,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if panelsHiddenByMiniaturize.contains("colorGrade") { colorGradePanel?.makeKeyAndOrderFront(nil) }
         if panelsHiddenByMiniaturize.contains("camera")         { cameraPanel?.makeKeyAndOrderFront(nil) }
         if panelsHiddenByMiniaturize.contains("modelInspector") { modelInspectorPanel?.makeKeyAndOrderFront(nil) }
+        if panelsHiddenByMiniaturize.contains("atmosphere")     { atmospherePanel?.makeKeyAndOrderFront(nil) }
         if panelsHiddenByMiniaturize.contains("timeline")       { timelineEditorWC?.showWindow(nil) }
         if !panelsHiddenByMiniaturize.isEmpty {
             print("[DEBUG] AppDelegate: restored panels: "
