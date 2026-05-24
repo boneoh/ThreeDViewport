@@ -20,20 +20,17 @@ struct CoordCopyPasteButtons: View {
     let onPaste:  () -> Void
     let canPaste: Bool
 
-    /// Light blue used to signal an active copy/paste action.
-    private let activeBlue = Color(red: 0.42, green: 0.71, blue: 1.0)
-
     var body: some View {
         HStack(spacing: 10) {
             Button(action: onCopy) {
-                Image(systemName: "doc.on.doc").foregroundColor(activeBlue)
+                Image(systemName: "doc.on.doc").foregroundColor(.editableBlue)
             }
             .buttonStyle(.borderless)
             .help("Copy these coordinates")
 
             Button(action: onPaste) {
                 Image(systemName: "doc.on.clipboard")
-                    .foregroundColor(canPaste ? activeBlue : .gray)
+                    .foregroundColor(canPaste ? .editableBlue : .gray)
             }
             .buttonStyle(.borderless)
             .disabled(!canPaste)

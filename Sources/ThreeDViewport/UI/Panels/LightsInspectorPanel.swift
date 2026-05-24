@@ -71,7 +71,12 @@ struct LightsInspectorPanel: View {
             // Phase C: image-based-lighting intensity.
             HStack {
                 Text("IBL")
-                Slider(value: $renderSettings.iblIntensity, in: 0.0...2.0)
+                TunableSlider(
+                    value: Binding<Double>(
+                        get: { Double(renderSettings.iblIntensity) },
+                        set: { renderSettings.iblIntensity = Float($0) }),
+                    range: 0.0...2.0,
+                    step: 0.01)
                 Text(String(format: "%.2f", renderSettings.iblIntensity))
                     .font(.system(.caption, design: .monospaced))
                     .frame(width: 36, alignment: .trailing)
@@ -454,7 +459,12 @@ struct SliderRow: View {
                 .frame(width: 46, alignment: .leading)
                 .foregroundColor(.secondary)
                 .font(.caption)
-            Slider(value: value, in: range)
+            TunableSlider(
+                value: Binding<Double>(
+                    get: { Double(value.wrappedValue) },
+                    set: { value.wrappedValue = Float($0) }),
+                range: Double(range.lowerBound)...Double(range.upperBound),
+                step: arrowStep(forFormat: format))
             Text(String(format: format, value.wrappedValue))
                 .frame(width: 46, alignment: .trailing)
                 .font(.caption.monospacedDigit())

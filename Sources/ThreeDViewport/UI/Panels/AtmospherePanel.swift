@@ -291,9 +291,10 @@ private struct FogSliderRow: View {
                     .foregroundColor(.primary)
                     .frame(width: 46, alignment: .trailing)
             }
-            Slider(
+            TunableSlider(
                 value: Binding<Double>(get: { Double(value) }, set: { value = Float($0) }),
-                in: Double(range.lowerBound)...Double(range.upperBound)
+                range: Double(range.lowerBound)...Double(range.upperBound),
+                step: arrowStep(forFormat: format)
             )
         }
     }

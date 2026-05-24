@@ -19,6 +19,10 @@ final class ModelInspectorState: ObservableObject {
     @Published var roughnessFactor: Float           = 0.5
     @Published var baseColor:       Color           = .white
     @Published var hasSelection:    Bool            = false
+    /// World-space position of the selection's first object.
+    @Published var position:        SIMD3<Float>    = .zero
+    /// Editing is allowed only for a single root object; copy works for any selection.
+    @Published var canEditPosition: Bool            = false
 
     // ── Callbacks wired by AppDelegate ───────────────────────────────────────
     var onRebuildNormals: ((NormalMode, [SceneObject]) -> Void)?
@@ -52,6 +56,23 @@ final class ModelInspectorState: ObservableObject {
         roughnessFactor = first.material.roughnessFactor
         let c = first.material.baseColorFactor
         baseColor = Color(red: Double(c.x), green: Double(c.y), blue: Double(c.z))
+
+        let t = first.transform.columns.3
+        position        = SIMD3<Float>(t.x, t.y, t.z)
+        canEditPosition = (newTargets.count == 1 && first.parentIndex == nil)
+    }
+
+    /// Re-reads the selected object's live world position so the field tracks
+    /// viewport moves.  Suppresses the write-back sink and skips no-op updates.
+    func refreshPosition() {
+        guard hasSelection, let obj = targets.first else { return }
+        let t = obj.transform.columns.3
+        let p = SIMD3<Float>(t.x, t.y, t.z)
+        if p != position {
+            isUpdating = true
+            position   = p
+            isUpdating = false
+        }
     }
 
     // MARK: - Combine sinks
@@ -107,6 +128,15 @@ final class ModelInspectorState: ObservableObject {
                 let v  = SIMD4<Float>(Float(ns.redComponent), Float(ns.greenComponent),
                                       Float(ns.blueComponent), 1)
                 targets.forEach { $0.material.baseColorFactor = v }
+                onRedraw?(); onDirty?()
+            }.store(in: &cancellables)
+
+        // Position — write back only for a single root object (canEditPosition).
+        // Matches viewport object moves (set the transform's translation column).
+        $position.dropFirst()
+            .sink { [weak self] v in
+                guard let self, !isUpdating, canEditPosition, let obj = targets.first else { return }
+                obj.transform.columns.3 = SIMD4<Float>(v.x, v.y, v.z, 1)
                 onRedraw?(); onDirty?()
             }.store(in: &cancellables)
     }

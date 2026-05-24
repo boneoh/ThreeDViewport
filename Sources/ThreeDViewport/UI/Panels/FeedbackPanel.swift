@@ -217,12 +217,12 @@ private struct IntSliderRow: View {
                 .frame(width: 52, alignment: .leading)
                 .foregroundColor(.secondary)
                 .font(.caption)
-            Slider(
+            TunableSlider(
                 value: Binding<Double>(
                     get: { Double(value) },
                     set: { value = Int($0.rounded()) }
                 ),
-                in: Double(range.lowerBound)...Double(range.upperBound),
+                range: Double(range.lowerBound)...Double(range.upperBound),
                 step: 1.0
             )
             Text("\(value) \(suffix)")
@@ -246,12 +246,13 @@ private struct FloatSliderRow: View {
                 .frame(width: 52, alignment: .leading)
                 .foregroundColor(.secondary)
                 .font(.caption)
-            Slider(
+            TunableSlider(
                 value: Binding<Double>(
                     get: { Double(value) },
                     set: { value = Float($0) }
                 ),
-                in: Double(range.lowerBound)...Double(range.upperBound)
+                range: Double(range.lowerBound)...Double(range.upperBound),
+                step: arrowStep(forFormat: format)
             )
             Text(String(format: format, value))
                 .frame(width: 46, alignment: .trailing)

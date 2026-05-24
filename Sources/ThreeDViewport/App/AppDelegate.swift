@@ -1749,7 +1749,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.becomesKeyOnlyIfNeeded = true
         panel.hidesOnDeactivate  = false
 
-        panel.contentView = NSHostingView(rootView: ModelInspectorPanel(state: state))
+        panel.contentView = NSHostingView(rootView: ModelInspectorPanel(
+            state: state, clipboard: viewport.coordinateClipboard))
 
         if let win = window {
             let winFrame  = win.frame

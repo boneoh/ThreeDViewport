@@ -4,6 +4,7 @@ import AppKit
 struct ModelInspectorPanel: View {
 
     @ObservedObject var state: ModelInspectorState
+    @ObservedObject var clipboard: CoordinateClipboard
 
     var body: some View {
         Group {
@@ -11,6 +12,8 @@ struct ModelInspectorPanel: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         identitySection
+                        Divider().padding(.vertical, 8)
+                        positionSection
                         Divider().padding(.vertical, 8)
                         displaySection
                         Divider().padding(.vertical, 8)
@@ -30,6 +33,35 @@ struct ModelInspectorPanel: View {
         }
         .frame(width: 280)
         .background(Color(NSColor.windowBackgroundColor))
+        // Keep the Position field tracking viewport moves of the selected object.
+        .onReceive(Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()) { _ in
+            state.refreshPosition()
+        }
+    }
+
+    // MARK: - Position
+
+    private var positionSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Position").font(.headline)
+                Spacer()
+                CoordCopyPasteButtons(
+                    onCopy:   { clipboard.position = state.position },
+                    onPaste:  { if let p = clipboard.position { state.position = p } },
+                    canPaste: state.canEditPosition && clipboard.position != nil)
+            }
+            SliderRow(label: "X", value: $state.position.x, range: -100...100, format: "%.2f")
+                .disabled(!state.canEditPosition)
+            SliderRow(label: "Y", value: $state.position.y, range: -100...100, format: "%.2f")
+                .disabled(!state.canEditPosition)
+            SliderRow(label: "Z", value: $state.position.z, range: -100...100, format: "%.2f")
+                .disabled(!state.canEditPosition)
+            if !state.canEditPosition {
+                Text("Copy works for any selection; editing is for a single root object.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+        }
     }
 
     // MARK: - Identity
