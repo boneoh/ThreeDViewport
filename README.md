@@ -1,7 +1,6 @@
 # ThreeDViewport
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0.en.html)
-[![CI](https://github.com/lzxindustries/videomancer-sdk/workflows/CI/badge.svg)](https://github.com/lzxindustries/videomancer-sdk/actions/workflows/ci.yml)
 
 A native macOS 3D animation tool built on Metal. Load `.glb` / `.gltf` models, animate them with a keyframe timeline (objects, model groups, camera, and lights), arrange the shot from a Director's POV in Scene mode, apply a video-feedback echo and color grade pass, and export to ProRes `.mov` for compositing.
 
