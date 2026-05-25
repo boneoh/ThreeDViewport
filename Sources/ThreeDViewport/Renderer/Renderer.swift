@@ -137,6 +137,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// (natural end of playback) from "scrubbed while paused".
     private var lastWasPlaying:   Bool   = false
 
+    // Editor-only bake probe (drawn as an axis gizmo in the live view; never exported).
+    var probeConfig: ProbeConfig?
+
     // Phase C: image-based lighting resources (BRDF LUT, env cubemaps).
     // nil until precompute finishes; the scene shader gates IBL sampling on
     // texture presence so a nil here just disables the IBL contribution.
@@ -781,6 +784,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                 inverseViewProjection: simd_inverse(viewCamera.viewProjectionMatrix),
                 cameraPos:             SIMD4<Float>(viewCamera.eyePosition, 1),
                 intensity:             backgroundConfig.environmentIntensity,
+                horizon:               backgroundConfig.environmentHorizon,
                 useEquirect:           bgEquirect != nil ? 1 : 0,
                 colorMode:             UInt32(colorMode.rawValue))
             encoder.setFragmentBytes(&sky,
@@ -891,6 +895,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         if sceneModeActive {
             drawSceneWidgets(encoder: encoder)
         }
+        drawProbeGizmo(encoder: encoder)   // editor-only; not gated by scene mode, never exported
 
         encoder.endEncoding()
 
@@ -1317,6 +1322,48 @@ final class Renderer: NSObject, MTKViewDelegate {
                                 color: color)
             }
         }
+
+        // ── Ground scale ruler (world X through the origin) ───────────────────
+        // Fixed 1-unit ticks, taller every 10, like a map scale bar.  Span is
+        // capped so the vertex list stays within setVertexBytes' ~4 KB limit.
+        let rulerHalf = min(max(camera.distance * 1.2, 5.0), 50.0)
+        var ruler = SceneWidgets.scaleRuler(center: SIMD3<Float>(0, 0, 0),
+                                            halfLength:  rulerHalf,
+                                            unit:        1.0,
+                                            minorHeight: scale * 0.15,
+                                            majorHeight: scale * 0.5,
+                                            majorEvery:  10)
+        drawWidgetLines(encoder: encoder, vertices: &ruler, viewProjection: vp,
+                        color: SIMD4<Float>(0.55, 0.6, 0.7, 1.0))
+    }
+
+    /// Draws the bake probe as an RGB axis-cross gizmo at its world position.
+    /// Live viewport only (the exporter never calls this), so it stays out of renders.
+    private func drawProbeGizmo(encoder: MTLRenderCommandEncoder) {
+        guard let probe = probeConfig, probe.isVisible,
+              let pipeline = widgetPipelineState else { return }
+
+        encoder.setRenderPipelineState(pipeline)
+        if let ds = laserBeamDepthState { encoder.setDepthStencilState(ds) }
+        encoder.setCullMode(.none)
+
+        let vp  = viewCamera.viewProjectionMatrix
+        let p   = probe.position
+        let len = max(0.4, min(camera.distance * 0.25, 1.5))   // readable axis length
+
+        var xAxis = [p - SIMD3<Float>(len, 0, 0), p + SIMD3<Float>(len, 0, 0)]
+        drawWidgetLines(encoder: encoder, vertices: &xAxis, viewProjection: vp,
+                        color: SIMD4<Float>(1.0, 0.25, 0.25, 1.0))
+        var yAxis = [p - SIMD3<Float>(0, len, 0), p + SIMD3<Float>(0, len, 0)]
+        drawWidgetLines(encoder: encoder, vertices: &yAxis, viewProjection: vp,
+                        color: SIMD4<Float>(0.30, 1.0, 0.30, 1.0))
+        var zAxis = [p - SIMD3<Float>(0, 0, len), p + SIMD3<Float>(0, 0, len)]
+        drawWidgetLines(encoder: encoder, vertices: &zAxis, viewProjection: vp,
+                        color: SIMD4<Float>(0.35, 0.55, 1.0, 1.0))
+
+        var sphere = SceneWidgets.sphereWireframe(center: p, radius: len * 0.18)
+        drawWidgetLines(encoder: encoder, vertices: &sphere, viewProjection: vp,
+                        color: SIMD4<Float>(1.0, 1.0, 1.0, 1.0))
     }
 
     /// Helper: uploads a line-segment vertex list (every pair = one segment)

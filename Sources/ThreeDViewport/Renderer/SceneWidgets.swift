@@ -138,6 +138,32 @@ enum SceneWidgets {
 
     // MARK: - Internals
 
+    /// A horizontal scale bar along world X at `center`, with vertical (+Y) tick
+    /// marks every `unit` (taller every `majorEvery`).  Returns line-segment pairs
+    /// for the widget pass.  Keep the span modest — the caller uploads this via
+    /// setVertexBytes (≤ 4 KB ≈ 256 vertices).
+    static func scaleRuler(center: SIMD3<Float>,
+                           halfLength: Float,
+                           unit: Float,
+                           minorHeight: Float,
+                           majorHeight: Float,
+                           majorEvery: Int) -> [SIMD3<Float>] {
+        var v: [SIMD3<Float>] = []
+        let y = center.y, z = center.z
+        v.append(SIMD3<Float>(center.x - halfLength, y, z))   // main bar
+        v.append(SIMD3<Float>(center.x + halfLength, y, z))
+        let n = unit > 0 ? Int(halfLength / unit) : 0
+        if n > 0 {
+            for i in -n...n {
+                let x = center.x + Float(i) * unit
+                let h = (i % majorEvery == 0) ? majorHeight : minorHeight
+                v.append(SIMD3<Float>(x, y, z))
+                v.append(SIMD3<Float>(x, y + h, z))
+            }
+        }
+        return v
+    }
+
     /// Returns two unit-length vectors mutually perpendicular to `dir` and to
     /// each other, chosen to be numerically stable even when `dir` is parallel
     /// to world-up.

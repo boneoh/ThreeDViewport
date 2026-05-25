@@ -389,9 +389,9 @@ struct SkyboxUniforms {
     float4x4 inverseViewProjection;
     float4   cameraPos;     // xyz = world eye position
     float    intensity;     // brightness multiplier
+    float    horizon;       // vertical shift of the sampled direction (backdrop only)
     uint     useEquirect;   // 1 = sample equirect, 0 = cube fallback
     uint     colorMode;     // 0 grey, 1 color, 2 B+W matte
-    uint     _pad;
 };
 
 struct SkyVertOut {
@@ -422,6 +422,8 @@ fragment float4 skybox_fragment(
     // World-space ray for this pixel (same reconstruction as the fog pass).
     float4 farClip = u.inverseViewProjection * float4(in.ndc, 1.0, 1.0);
     float3 dir     = normalize(farClip.xyz / farClip.w - u.cameraPos.xyz);
+    dir.y         -= u.horizon;          // raise/lower the backdrop (positive = up)
+    dir            = normalize(dir);
 
     float3 col;
     if (u.useEquirect != 0u) {

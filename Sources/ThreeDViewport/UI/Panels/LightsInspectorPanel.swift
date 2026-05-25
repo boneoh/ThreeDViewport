@@ -131,7 +131,11 @@ struct LightsInspectorPanel: View {
                 SliderRow(label: "Intensity",
                           value: $backgroundConfig.environmentIntensity,
                           range: 0...4, format: "%.2f")
-                Text("Uses the IBL environment as a backdrop.")
+                SliderRow(label: "Horizon",
+                          value: $backgroundConfig.environmentHorizon,
+                          range: -1...1, format: "%.2f")
+                Text("Uses the IBL environment as a backdrop. Horizon shifts it "
+                    + "vertically (backdrop only, not the lighting).")
                     .font(.caption2).foregroundStyle(.secondary)
             }
         }

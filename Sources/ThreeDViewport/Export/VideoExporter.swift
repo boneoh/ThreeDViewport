@@ -768,6 +768,7 @@ final class VideoExporter {
                     inverseViewProjection: simd_inverse(camera.viewProjectionMatrix),
                     cameraPos:             SIMD4<Float>(camera.eyePosition, 1),
                     intensity:             backgroundConfig.environmentIntensity,
+                    horizon:               backgroundConfig.environmentHorizon,
                     useEquirect:           bgEquirect != nil ? 1 : 0,
                     colorMode:             UInt32(colorMode.rawValue))
                 encoder.setFragmentBytes(&sky,

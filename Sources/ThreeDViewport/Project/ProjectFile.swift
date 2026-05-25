@@ -245,7 +245,8 @@ final class ProjectFile {
             gradBottomG: bg.gradientBottom.y,
             gradBottomB: bg.gradientBottom.z,
             environmentIntensity: bg.environmentIntensity,
-            backgroundHDRPath:    bg.backgroundHDRPath
+            backgroundHDRPath:    bg.backgroundHDRPath,
+            environmentHorizon:   bg.environmentHorizon
         )
 
         // ── Color grade (v12; exposure v16) ───────────────────────────────────
@@ -286,7 +287,7 @@ final class ProjectFile {
         }
 
         return ProjectData(
-            version:             28,   // v28: per-project Lighting + Background HDR paths
+            version:             30,   // v30: environment horizon (backdrop vertical shift)
             modelPath:           nil,           // v3+ uses modelPaths instead
             modelPaths:          modelPaths,
             timeline:            timelineData,
@@ -322,7 +323,10 @@ final class ProjectFile {
                                          steps:    vp.fogSettings.raymarchSteps),
             fogKeyframes:             captureAtmosphereKeyframes(vp.fogSettings.keyframeTrack),
             particleEmitters:         vp.particleManager.emitters.map { captureParticleEmitter($0) },
-            particleEmitterKeyframes: vp.particleManager.emitters.map { captureAtmosphereKeyframes($0.keyframeTrack) }
+            particleEmitterKeyframes: vp.particleManager.emitters.map { captureAtmosphereKeyframes($0.keyframeTrack) },
+            probe:               ProbeData(px: vp.probeConfig.position.x,
+                                           py: vp.probeConfig.position.y,
+                                           pz: vp.probeConfig.position.z)
         )
     }
 
@@ -517,6 +521,7 @@ final class ProjectFile {
         vp.backgroundConfig.gradientTop  = SIMD3<Float>(bd.gradTopR,    bd.gradTopG,    bd.gradTopB)
         vp.backgroundConfig.gradientBottom = SIMD3<Float>(bd.gradBottomR, bd.gradBottomG, bd.gradBottomB)
         vp.backgroundConfig.environmentIntensity = bd.environmentIntensity
+        vp.backgroundConfig.environmentHorizon   = bd.environmentHorizon
         // v28: dedicated Background HDR (empty = mirror lighting; missing → fall back).
         vp.backgroundConfig.backgroundHDRPath = bd.backgroundHDRPath
         let bgURL = bd.backgroundHDRPath.isEmpty ? nil : AppSettings.expand(bd.backgroundHDRPath)
@@ -595,6 +600,8 @@ final class ProjectFile {
         // ── IBL intensity (v16) ───────────────────────────────────────────────
         vp.renderSettings.iblIntensity = data.iblIntensity
         print("[DEBUG] ProjectFile: iblIntensity=\(data.iblIntensity)")
+        // v29: bake probe position (gizmo visibility is editor-only, not restored).
+        vp.probeConfig.position = SIMD3<Float>(data.probe.px, data.probe.py, data.probe.pz)
         // v28: hot-reload the Lighting HDR from the saved path (bundled if missing).
         vp.renderSettings.lightingHDRPath = data.lightingHDRPath
         let lightURL = data.lightingHDRPath.isEmpty ? nil : AppSettings.expand(data.lightingHDRPath)

@@ -121,6 +121,14 @@ struct BackgroundUniforms {
     var colorBottom: SIMD4<Float>
 }
 
+// ── Bake face basis (buffer index 0 in cube_to_equirect_kernel) ───────────────
+// Must match `struct FaceBasis` in IBLShaders.metal — 3 × float4 = 48 bytes.
+struct FaceBasis {
+    var forward: SIMD4<Float>   // xyz = look direction
+    var right:   SIMD4<Float>   // xyz = camera right (image +x)
+    var up:      SIMD4<Float>   // xyz = camera up    (image +y)
+}
+
 // ── Skybox / environment background uniforms (buffer index 0 in skybox pass) ──
 // Must match `struct SkyboxUniforms` in Shaders.metal exactly.
 // Layout: float4x4 (64) + float4 (16) + 4×4 = 96 bytes.
@@ -128,9 +136,9 @@ struct SkyboxUniforms {
     var inverseViewProjection: matrix_float4x4
     var cameraPos:             SIMD4<Float>   // xyz = world eye position
     var intensity:             Float          // brightness multiplier
+    var horizon:               Float          // vertical shift of the sampled direction
     var useEquirect:           UInt32         // 1 = sample equirect, 0 = cube fallback
     var colorMode:             UInt32         // 0 grey, 1 color, 2 B+W matte
-    var _pad:                  UInt32 = 0
 }
 
 // ── Laser beam billboard uniforms (buffer index 0 in laser beam pass) ────────

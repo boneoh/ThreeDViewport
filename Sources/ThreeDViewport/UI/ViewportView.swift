@@ -81,6 +81,7 @@ final class ViewportView: MTKView {
     let particleManager    = ParticleManager()
     let coordinateClipboard = CoordinateClipboard()
     let atmospherePanelState = AtmospherePanelState()
+    let probeConfig          = ProbeConfig()
 
     // Camera panel — sticky follow-target picker shared with the floating
     // CameraPanel inspector.  Lives here so the choice survives panel
@@ -216,6 +217,7 @@ final class ViewportView: MTKView {
         renderer?.colorGradeSettings  = colorGradeSettings
         renderer?.fogSettings         = fogSettings
         renderer?.particleManager     = particleManager
+        renderer?.probeConfig         = probeConfig
 
         // Camera panel — Position / Target edits write back to the real rendering
         // camera (never the Director), so the inspector stays meaningful in Scene mode.

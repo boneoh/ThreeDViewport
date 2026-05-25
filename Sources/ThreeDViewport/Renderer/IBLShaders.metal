@@ -181,6 +181,51 @@ kernel void equirect_to_cube_kernel(
     outCube.write(float4(col, 1.0), tid.xy, tid.z);
 }
 
+// ── Bake: gnomonic faces → equirect ──────────────────────────────────────────
+// Converts the 6 face captures (a 2D array, one slice per face) into an equirect
+// image, using the SAME basis vectors the baker rendered with so orientation can
+// never drift.  Mapping (v=0 at top, dir.y=+1) matches equirect_to_cube exactly.
+struct FaceBasis {
+    float4 forward;   // xyz = look direction
+    float4 right;     // xyz = camera right (image +x)
+    float4 up;        // xyz = camera up    (image +y)
+};
+
+kernel void cube_to_equirect_kernel(
+    texture2d_array<float, access::sample>  faces [[texture(0)]],
+    texture2d<float, access::write>         outEq [[texture(1)]],
+    constant FaceBasis*                     bases [[buffer(0)]],
+    uint2 tid                                     [[thread_position_in_grid]]
+) {
+    uint W = outEq.get_width();
+    uint H = outEq.get_height();
+    if (tid.x >= W || tid.y >= H) return;
+
+    float u = (float(tid.x) + 0.5) / float(W);
+    float v = (float(tid.y) + 0.5) / float(H);
+
+    // Inverse of equirect_to_cube's direction mapping.
+    float phi   = (u - 0.5) * 2.0 * M_PI_F;   // azimuth
+    float theta = v * M_PI_F;                  // polar, 0 = up
+    float3 d    = float3(sin(theta) * cos(phi), cos(theta), sin(theta) * sin(phi));
+
+    // Pick the face whose forward is closest to d, then gnomonic-project onto it.
+    int best = 0; float bestDot = -2.0;
+    for (int f = 0; f < 6; ++f) {
+        float dt = dot(d, bases[f].forward.xyz);
+        if (dt > bestDot) { bestDot = dt; best = f; }
+    }
+    FaceBasis b = bases[best];
+    float denom = max(dot(d, b.forward.xyz), 1e-5);
+    float nx    = dot(d, b.right.xyz) / denom;     // [-1,1] across the 90° face
+    float ny    = dot(d, b.up.xyz)    / denom;
+    float2 fuv  = float2(nx * 0.5 + 0.5, 0.5 - ny * 0.5);
+
+    constexpr sampler s(filter::linear, address::clamp_to_edge);
+    float3 col  = faces.sample(s, fuv, best).rgb;
+    outEq.write(float4(col, 1.0), tid);
+}
+
 // ── Phase 3: Diffuse irradiance cubemap ──────────────────────────────────────
 // Convolves the env cubemap with a cosine-weighted hemisphere kernel.
 // Writes the diffuse contribution directly (already absorbs the 1/π factor),

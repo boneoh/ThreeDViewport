@@ -27,6 +27,9 @@ final class BackgroundConfig: ObservableObject {
     @Published var gradientBottom: SIMD3<Float>    = SIMD3<Float>(0, 0, 0)
     /// Brightness multiplier applied to the environment skybox backdrop.
     @Published var environmentIntensity: Float     = 1.0
+    /// Vertical shift of the skybox backdrop (positive = up).  Cosmetic alignment
+    /// of the horizon; does NOT move the IBL lighting.
+    @Published var environmentHorizon:   Float     = 0.0
     /// Per-project Background HDR file path (drives the visible skybox, separate
     /// from lighting).  Empty = mirror the lighting environment.
     @Published var backgroundHDRPath:    String    = ""

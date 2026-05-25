@@ -18,6 +18,7 @@ final class AppSettings: ObservableObject {
     @Published var moviesPath:          String
     @Published var modelsPathPrimary:   String     // tried first (e.g. Favorites)
     @Published var modelsPathSecondary: String     // fallback if primary missing
+    @Published var hdrFolderPath:       String     // default folder for the HDR pickers
     @Published var exportWidth:         Int
     @Published var exportHeight:        Int
     @Published var exportCodecID:       String     // ExportCodec.id
@@ -27,6 +28,7 @@ final class AppSettings: ObservableObject {
         static let movies    = "~/Documents/ThreeDViewport/Movies"
         static let modelsFav = "~/Documents/ThreeDViewport/Models/Favorites"
         static let models    = "~/Documents/ThreeDViewport/Models"
+        static let hdrs      = "~/Documents/ThreeDViewport/HDRs"
         static let width     = 1920
         static let height    = 1080
         static let codecID   = "proRes4444"
@@ -36,6 +38,7 @@ final class AppSettings: ObservableObject {
          moviesPath:          String = Defaults.movies,
          modelsPathPrimary:   String = Defaults.modelsFav,
          modelsPathSecondary: String = Defaults.models,
+         hdrFolderPath:       String = Defaults.hdrs,
          exportWidth:         Int    = Defaults.width,
          exportHeight:        Int    = Defaults.height,
          exportCodecID:       String = Defaults.codecID) {
@@ -43,6 +46,7 @@ final class AppSettings: ObservableObject {
         self.moviesPath          = moviesPath
         self.modelsPathPrimary   = modelsPathPrimary
         self.modelsPathSecondary = modelsPathSecondary
+        self.hdrFolderPath       = hdrFolderPath
         self.exportWidth         = exportWidth
         self.exportHeight        = exportHeight
         self.exportCodecID       = exportCodecID
@@ -56,6 +60,7 @@ final class AppSettings: ObservableObject {
         var moviesPath:          String
         var modelsPathPrimary:   String
         var modelsPathSecondary: String
+        var hdrFolderPath:       String?   // optional: older settings.json predate it
         var exportWidth:         Int
         var exportHeight:        Int
         var exportCodecID:       String
@@ -81,6 +86,7 @@ final class AppSettings: ObservableObject {
                            moviesPath:          s.moviesPath,
                            modelsPathPrimary:   s.modelsPathPrimary,
                            modelsPathSecondary: s.modelsPathSecondary,
+                           hdrFolderPath:       s.hdrFolderPath ?? Defaults.hdrs,
                            exportWidth:         s.exportWidth,
                            exportHeight:        s.exportHeight,
                            exportCodecID:       s.exportCodecID)
@@ -91,6 +97,7 @@ final class AppSettings: ObservableObject {
                        moviesPath:          moviesPath,
                        modelsPathPrimary:   modelsPathPrimary,
                        modelsPathSecondary: modelsPathSecondary,
+                       hdrFolderPath:       hdrFolderPath,
                        exportWidth:         exportWidth,
                        exportHeight:        exportHeight,
                        exportCodecID:       exportCodecID)

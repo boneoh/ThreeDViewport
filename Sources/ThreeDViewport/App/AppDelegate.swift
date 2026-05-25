@@ -27,6 +27,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var modelInspectorPanel: NSPanel?
     private var modelInspectorState: ModelInspectorState?
 
+    // Bake probe inspector panel.
+    private var probeInspectorPanel: NSPanel?
+
     // Global settings panel.
     private var settingsPanel: NSPanel?
 
@@ -447,6 +450,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             .sink { [weak self] in self?.markDirty() }
             .store(in: &settingsCancellables)
 
+        // Probe position (the gizmo-visibility toggle is editor-only, so key on
+        // position rather than objectWillChange to avoid spurious dirtying).
+        viewport.probeConfig.$position
+            .dropFirst()
+            .sink { [weak self] _ in self?.markDirty() }
+            .store(in: &settingsCancellables)
+
         // ColorGradeSettings covers brightness and contrast.
         viewport.colorGradeSettings.objectWillChange
             .sink { [weak self] in self?.markDirty() }
@@ -593,6 +603,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         )
         openBackgroundHDRItem.target = self
         fileMenu.addItem(openBackgroundHDRItem)
+
+        let bakeHDRItem = NSMenuItem(
+            title: "Export Scene to HDR File...",
+            action: #selector(bakeSceneToHDR(_:)),
+            keyEquivalent: ""
+        )
+        bakeHDRItem.target = self
+        fileMenu.addItem(bakeHDRItem)
 
         fileMenu.addItem(NSMenuItem.separator())
 
@@ -786,6 +804,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         modelInspectorItem.target = self
         windowMenu.addItem(modelInspectorItem)
 
+        let probeInspectorItem = NSMenuItem(
+            title: "Probe Inspector…",
+            action: #selector(showProbeInspector(_:)),
+            keyEquivalent: ""
+        )
+        probeInspectorItem.target = self
+        windowMenu.addItem(probeInspectorItem)
+
         let timelineEditorItem = NSMenuItem(
             title: "Timeline Editor",
             action: #selector(showTimelineEditor(_:)),
@@ -829,6 +855,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         case "Projects": path = s.projectsPath
         case "Movies":   path = s.moviesPath
         case "Models":   path = s.modelsPathSecondary
+        case "HDRs":     path = s.hdrFolderPath
         default:
             // Unknown category — preserve the original Documents-based behavior.
             let base = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -921,6 +948,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             if let n = Int(middle), n > highest { highest = n }
         }
         return String(format: "%@.%02d.mov", projectName, highest + 1)
+    }
+
+    /// Returns the next available `<base>.NN.<ext>` filename in `dir` (NN ≥ 01,
+    /// zero-padded).  Generic version of `nextMovieFilename` used for HDR exports.
+    private func nextNumberedFilename(base: String, ext: String, in dir: URL) -> String {
+        let names  = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        let prefix = base + "."
+        let suffix = "." + ext
+        var highest = 0
+        for name in names {
+            guard name.hasPrefix(prefix), name.hasSuffix(suffix) else { continue }
+            let middle = name.dropFirst(prefix.count).dropLast(suffix.count)
+            if let n = Int(middle), n > highest { highest = n }
+        }
+        return String(format: "%@.%02d.%@", base, highest + 1, ext)
     }
 
     // MARK: - Template projects
@@ -1207,6 +1249,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
     }
 
+    @objc private func bakeSceneToHDR(_ sender: Any) {
+        guard let viewport = viewportView, let device = viewport.device else { return }
+
+        let options = BakeOptions()
+        let hdrDir  = defaultDirectory(for: "HDRs")
+
+        // Default name from the project, with an incrementing .NN suffix (like exports).
+        let baseName: String
+        if let url = currentProjectURL {
+            baseName = url.deletingPathExtension().lastPathComponent
+        } else if let s = suggestedProjectName, !s.isEmpty {
+            baseName = s
+        } else {
+            baseName = "environment"
+        }
+
+        let panel = NSSavePanel()
+        panel.title                = "Export Scene to HDR"
+        panel.nameFieldStringValue = nextNumberedFilename(base: baseName, ext: "hdr", in: hdrDir)
+        panel.canCreateDirectories = true
+        panel.directoryURL         = hdrDir
+        if let hdr = UTType(filenameExtension: "hdr") { panel.allowedContentTypes = [hdr] }
+        panel.accessoryView = NSHostingView(rootView: BakeOptionsView(options: options))
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let ok = EnvironmentBaker.bake(
+            to:                  url,
+            width:               options.width,
+            height:              options.height,
+            probePosition:       viewport.probeConfig.position,
+            includeBackground:   options.includeBackground,
+            backgroundIntensity: viewport.backgroundConfig.environmentIntensity,
+            device:              device,
+            sceneManager:        viewport.sceneManager,
+            lightManager:        viewport.lightManager,
+            ibl:                 viewport.renderer?.ibl,
+            backgroundEquirect:  viewport.renderer?.backgroundEquirect)
+
+        if ok {
+            print("[DEBUG] AppDelegate: exported environment → " + url.lastPathComponent)
+            let alert = NSAlert()
+            alert.messageText     = "HDR Export Completed"
+            alert.informativeText = "Saved \u{201C}\(url.lastPathComponent)\u{201D}."
+            alert.alertStyle      = .informational
+            alert.runModal()
+        } else {
+            showErrorAlert(message: "HDR Export failed",
+                           detail: "Could not render or write the environment HDR.")
+        }
+    }
+
     /// Modal `.hdr` file picker; calls `completion` with the chosen URL.
     private func pickHDR(title: String, _ completion: (URL) -> Void) {
         let panel = NSOpenPanel()
@@ -1214,6 +1308,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories    = false
         panel.canChooseFiles          = true
+        panel.directoryURL            = defaultDirectory(for: "HDRs")
         if let hdr = UTType(filenameExtension: "hdr") { panel.allowedContentTypes = [hdr] }
         if panel.runModal() == .OK, let url = panel.url { completion(url) }
     }
@@ -1873,6 +1968,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         modelInspectorPanel  = panel
         panel.makeKeyAndOrderFront(nil)
         print("[DEBUG] AppDelegate: model inspector panel opened")
+    }
+
+    // MARK: - Probe Inspector
+
+    @objc private func showProbeInspector(_ sender: Any) {
+        if let panel = probeInspectorPanel {
+            if panel.isVisible {
+                panel.orderOut(nil)
+            } else {
+                viewportView?.probeConfig.isVisible = true   // re-show the gizmo
+                panel.makeKeyAndOrderFront(nil)
+            }
+            return
+        }
+
+        guard let viewport = viewportView else { return }
+        viewport.probeConfig.isVisible = true   // show the gizmo when the panel first opens
+
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 296, height: 300),
+            styleMask:   [.titled, .closable, .miniaturizable, .resizable, .utilityWindow, .nonactivatingPanel],
+            backing:     .buffered,
+            defer:       false
+        )
+        panel.title              = "Probe"
+        panel.isFloatingPanel    = true
+        panel.becomesKeyOnlyIfNeeded = false
+        panel.hidesOnDeactivate  = false
+
+        panel.contentView = NSHostingView(rootView: ProbeInspectorPanel(
+            probe: viewport.probeConfig, clipboard: viewport.coordinateClipboard))
+
+        if let win = window {
+            let winFrame  = win.frame
+            let panelSize = panel.frame.size
+            let originX   = winFrame.minX + 20
+            let originY   = winFrame.maxY - panelSize.height - 40
+            panel.setFrameOrigin(NSPoint(x: originX, y: originY))
+        } else {
+            panel.center()
+        }
+
+        probeInspectorPanel = panel
+        panel.makeKeyAndOrderFront(nil)
+        print("[DEBUG] AppDelegate: probe inspector panel opened")
     }
 
     // MARK: - Timeline Duration

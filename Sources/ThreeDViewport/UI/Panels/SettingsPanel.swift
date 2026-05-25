@@ -15,6 +15,7 @@ struct SettingsPanel: View {
     @State private var moviesPath          = ""
     @State private var modelsPathPrimary   = ""
     @State private var modelsPathSecondary = ""
+    @State private var hdrFolderPath       = ""
     @State private var exportWidth         = ""
     @State private var exportHeight        = ""
     @State private var codecIndex          = 0
@@ -31,6 +32,7 @@ struct SettingsPanel: View {
             pathRow("Movies",            $moviesPath,          directory: true)
             pathRow("Models (primary)",  $modelsPathPrimary,   directory: true)
             pathRow("Models (fallback)", $modelsPathSecondary, directory: true)
+            pathRow("HDRs",              $hdrFolderPath,       directory: true)
 
             Divider()
 
@@ -86,6 +88,7 @@ struct SettingsPanel: View {
         moviesPath          = settings.moviesPath
         modelsPathPrimary   = settings.modelsPathPrimary
         modelsPathSecondary = settings.modelsPathSecondary
+        hdrFolderPath       = settings.hdrFolderPath
         exportWidth         = String(settings.exportWidth)
         exportHeight        = String(settings.exportHeight)
         codecIndex          = settings.exportCodecID == "proRes422HQ" ? 1 : 0
@@ -96,6 +99,7 @@ struct SettingsPanel: View {
         settings.moviesPath          = moviesPath
         settings.modelsPathPrimary   = modelsPathPrimary
         settings.modelsPathSecondary = modelsPathSecondary
+        settings.hdrFolderPath       = hdrFolderPath
         settings.exportWidth         = Int(exportWidth)  ?? settings.exportWidth
         settings.exportHeight        = Int(exportHeight) ?? settings.exportHeight
         settings.exportCodecID       = codecIndex == 1 ? "proRes422HQ" : "proRes4444"

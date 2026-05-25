@@ -61,6 +61,7 @@ struct ProjectData: Codable {
     var particleKeyframes:   [AtmosphereKeyframeData] = []  // v23; legacy single emitter track (migration).
     var particleEmitters:        [ParticleEffectData] = []        // v24; multiple particle emitters.
     var particleEmitterKeyframes: [[AtmosphereKeyframeData]] = [] // v24; per-emitter animation.
+    var probe:                   ProbeData = ProbeData()          // v29; bake probe position.
 
     // MARK: - Memberwise init (required because we define init(from:) below)
 
@@ -90,7 +91,8 @@ struct ProjectData: Codable {
          fogKeyframes:        [AtmosphereKeyframeData] = [],
          particleKeyframes:   [AtmosphereKeyframeData] = [],
          particleEmitters:    [ParticleEffectData]    = [],
-         particleEmitterKeyframes: [[AtmosphereKeyframeData]] = []) {
+         particleEmitterKeyframes: [[AtmosphereKeyframeData]] = [],
+         probe:               ProbeData               = ProbeData()) {
         self.version             = version
         self.modelPath           = modelPath
         self.modelPaths          = modelPaths
@@ -118,6 +120,7 @@ struct ProjectData: Codable {
         self.particleKeyframes   = particleKeyframes
         self.particleEmitters    = particleEmitters
         self.particleEmitterKeyframes = particleEmitterKeyframes
+        self.probe               = probe
     }
 
     // MARK: - Custom decoder
@@ -159,7 +162,15 @@ struct ProjectData: Codable {
         particleKeyframes   = (try? c.decode([AtmosphereKeyframeData].self, forKey: .particleKeyframes)) ?? []
         particleEmitters         = (try? c.decode([ParticleEffectData].self,        forKey: .particleEmitters))         ?? []
         particleEmitterKeyframes = (try? c.decode([[AtmosphereKeyframeData]].self,  forKey: .particleEmitterKeyframes)) ?? []
+        probe               = (try? c.decode(ProbeData.self,             forKey: .probe))               ?? ProbeData()
     }
+}
+
+// v29: bake probe world position.
+struct ProbeData: Codable {
+    var px: Float = 0
+    var py: Float = 0
+    var pz: Float = 0
 }
 
 // v23: One atmosphere keyframe (fog volume or particle emitter).  Mirrors
@@ -323,6 +334,8 @@ struct BackgroundData: Codable {
     var environmentIntensity: Float = 1.0
     // v28: per-project Background HDR path (empty = mirror the lighting environment)
     var backgroundHDRPath:    String = ""
+    // v30: vertical shift of the skybox backdrop (positive = up)
+    var environmentHorizon:   Float = 0.0
 }
 
 // v5: Feedback delay-line settings.  Defaults match FeedbackSettings initial values
