@@ -18,6 +18,9 @@ final class IBL {
     private(set) var envCubemap:     MTLTexture?    // raw procedural sky
     private(set) var irradianceCube: MTLTexture?    // diffuse-convolved env
     private(set) var specularCube:   MTLTexture?    // prefiltered, mip = roughness
+    /// The source 2K equirect HDR, retained for a sharp environment backdrop.
+    /// Nil when the environment came from the procedural sky (no equirect source).
+    private(set) var envEquirect:    MTLTexture?
 
     // Global intensity multiplier (applied at sample time in the fragment shader).
     var intensity: Float = 1.0
@@ -69,14 +72,18 @@ final class IBL {
         print("[DEBUG] IBL: BRDF LUT ready (\(Self.brdfLUTSize)×\(Self.brdfLUTSize) RG16F)")
 
         // Prefer the bundled HDR studio environment; fall back to procedural sky.
-        let env = Self.loadHDREnvCubemap(device:       device,
-                                          library:      library,
-                                          commandQueue: commandQueue)
-               ?? Self.generateEnvCubemap(device:       device,
-                                          library:      library,
-                                          commandQueue: commandQueue,
-                                          params:       Self.defaultSkyParams)
-        guard let env else {
+        let env: MTLTexture
+        if let hdr = Self.loadHDREnvCubemap(device:       device,
+                                            library:      library,
+                                            commandQueue: commandQueue) {
+            env = hdr.cube
+            self.envEquirect = hdr.equirect      // retained for the sharp backdrop
+        } else if let proc = Self.generateEnvCubemap(device:       device,
+                                                     library:      library,
+                                                     commandQueue: commandQueue,
+                                                     params:       Self.defaultSkyParams) {
+            env = proc                            // procedural — no equirect source
+        } else {
             print("[DEBUG] IBL: env cubemap generation failed (HDR and procedural)")
             return nil
         }
@@ -181,7 +188,8 @@ final class IBL {
     // missing, unparseable, or any Metal step fails.
     private static func loadHDREnvCubemap(device:       MTLDevice,
                                           library:      MTLLibrary,
-                                          commandQueue: MTLCommandQueue) -> MTLTexture? {
+                                          commandQueue: MTLCommandQueue)
+        -> (cube: MTLTexture, equirect: MTLTexture)? {
         guard let url = resolveHDRURL() else {
             print("[DEBUG] IBL: no HDR available — procedural fallback")
             return nil
@@ -244,7 +252,7 @@ final class IBL {
         enc.endEncoding()
         cmd.commit()
         cmd.waitUntilCompleted()
-        return cube
+        return (cube, eqTex)
     }
 
     // MARK: - Environment cubemap precompute (procedural fallback)

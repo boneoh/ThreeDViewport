@@ -4,13 +4,15 @@ import simd
 
 // Background display mode.
 enum BackgroundMode: Int, CaseIterable {
-    case solid    = 0
-    case gradient = 1
+    case solid       = 0
+    case gradient    = 1
+    case environment = 2   // skybox sampled from the IBL environment
 
     var displayName: String {
         switch self {
-        case .solid:    return "Solid"
-        case .gradient: return "Gradient"
+        case .solid:       return "Solid"
+        case .gradient:    return "Gradient"
+        case .environment: return "Environment"
         }
     }
 }
@@ -23,6 +25,8 @@ final class BackgroundConfig: ObservableObject {
     @Published var solidColor:     SIMD3<Float>    = SIMD3<Float>(0, 0, 0)
     @Published var gradientTop:    SIMD3<Float>    = SIMD3<Float>(0.05, 0.06, 0.14)  // deep blue
     @Published var gradientBottom: SIMD3<Float>    = SIMD3<Float>(0, 0, 0)
+    /// Brightness multiplier applied to the environment skybox backdrop.
+    @Published var environmentIntensity: Float     = 1.0
 
     init() {
         print("[DEBUG] BackgroundConfig: initialized")
@@ -42,6 +46,9 @@ final class BackgroundConfig: ObservableObject {
                                  green: Double(gradientBottom.y),
                                  blue:  Double(gradientBottom.z),
                                  alpha: 1.0)
+        case .environment:
+            // The skybox pass fills the frame; clear to black underneath.
+            return MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1.0)
         }
     }
 

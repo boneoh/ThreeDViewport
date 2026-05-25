@@ -121,6 +121,18 @@ struct BackgroundUniforms {
     var colorBottom: SIMD4<Float>
 }
 
+// ── Skybox / environment background uniforms (buffer index 0 in skybox pass) ──
+// Must match `struct SkyboxUniforms` in Shaders.metal exactly.
+// Layout: float4x4 (64) + float4 (16) + 4×4 = 96 bytes.
+struct SkyboxUniforms {
+    var inverseViewProjection: matrix_float4x4
+    var cameraPos:             SIMD4<Float>   // xyz = world eye position
+    var intensity:             Float          // brightness multiplier
+    var useEquirect:           UInt32         // 1 = sample equirect, 0 = cube fallback
+    var colorMode:             UInt32         // 0 grey, 1 color, 2 B+W matte
+    var _pad:                  UInt32 = 0
+}
+
 // ── Laser beam billboard uniforms (buffer index 0 in laser beam pass) ────────
 // Must match `struct LaserBeamUniforms` in LaserBeamShaders.metal exactly.
 // Layout:

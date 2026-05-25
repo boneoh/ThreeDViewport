@@ -23,6 +23,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     // Background gradient pipeline
     var backgroundPipelineState: MTLRenderPipelineState?
     var backgroundDepthState: MTLDepthStencilState?
+    // Environment skybox pipeline — samples the IBL env by camera-ray direction.
+    var skyboxPipelineState: MTLRenderPipelineState?
+    private var dummyEquirect: MTLTexture?   // 1×1 placeholder for the equirect slot
 
     // Fallback buffers — bound when an object has no UVs or tangents so
     // buffer(4)/buffer(5) are always valid Metal bindings.
@@ -242,6 +245,24 @@ final class Renderer: NSObject, MTKViewDelegate {
         bgDepthDesc.isDepthWriteEnabled  = false
         backgroundDepthState = device.makeDepthStencilState(descriptor: bgDepthDesc)
 
+        // ── Environment skybox pipeline ───────────────────────────────────────
+        if let skyVertFn = library.makeFunction(name: "skybox_vertex"),
+           let skyFragFn = library.makeFunction(name: "skybox_fragment") {
+            let skyDesc = MTLRenderPipelineDescriptor()
+            skyDesc.vertexFunction   = skyVertFn
+            skyDesc.fragmentFunction = skyFragFn
+            skyDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
+            skyDesc.depthAttachmentPixelFormat      = .depth32Float
+            do {
+                skyboxPipelineState = try device.makeRenderPipelineState(descriptor: skyDesc)
+                print("[DEBUG] Renderer: skybox pipeline created")
+            } catch {
+                print("[DEBUG] Renderer: skybox pipeline failed — " + error.localizedDescription)
+            }
+        } else {
+            print("[DEBUG] Renderer: skybox shaders not found")
+        }
+
         // ── Axes gizmo pipeline ───────────────────────────────────────────────
         guard let gizmoVertFn = library.makeFunction(name: "gizmo_vertex"),
               let gizmoFragFn = library.makeFunction(name: "gizmo_fragment") else {
@@ -459,6 +480,13 @@ final class Renderer: NSObject, MTKViewDelegate {
         dummyTangentBuffer = device.makeBuffer(bytes: &dummyTan,
                                                 length: 4 * MemoryLayout<Float>.stride,
                                                 options: .storageModeShared)
+
+        // 1×1 placeholder bound to the skybox's equirect slot when the IBL has no
+        // equirect source (procedural sky), so texture(1) is always a valid binding.
+        let dDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba16Float, width: 1, height: 1, mipmapped: false)
+        dDesc.usage = [.shaderRead]
+        dummyEquirect = device.makeTexture(descriptor: dDesc)
 
         // Static, deterministic weather-particle seed pool (positions + phase).
         let seeds = ParticleEffect.makeSeeds()
@@ -713,6 +741,28 @@ final class Renderer: NSObject, MTKViewDelegate {
             encoder.setFragmentBytes(&bgUniforms,
                                      length: MemoryLayout<BackgroundUniforms>.stride,
                                      index: 0)
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        }
+        // ── Environment skybox ────────────────────────────────────────────────
+        else if backgroundConfig.mode == .environment,
+                let skyPipe = skyboxPipelineState,
+                let bgDepth = backgroundDepthState,
+                let ibl     = ibl,
+                let cube    = ibl.envCubemap {
+            encoder.setRenderPipelineState(skyPipe)
+            encoder.setDepthStencilState(bgDepth)
+            encoder.setCullMode(.none)
+            var sky = SkyboxUniforms(
+                inverseViewProjection: simd_inverse(viewCamera.viewProjectionMatrix),
+                cameraPos:             SIMD4<Float>(viewCamera.eyePosition, 1),
+                intensity:             backgroundConfig.environmentIntensity,
+                useEquirect:           ibl.envEquirect != nil ? 1 : 0,
+                colorMode:             UInt32(colorMode.rawValue))
+            encoder.setFragmentBytes(&sky,
+                                     length: MemoryLayout<SkyboxUniforms>.stride,
+                                     index: 0)
+            encoder.setFragmentTexture(cube, index: 0)
+            encoder.setFragmentTexture(ibl.envEquirect ?? dummyEquirect, index: 1)
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         }
 

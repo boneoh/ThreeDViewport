@@ -135,6 +135,9 @@ final class VideoExporter {
     // Background gradient pipeline (mirrors Renderer's background pipeline)
     private var backgroundPipelineState: MTLRenderPipelineState?
     private var backgroundDepthState:    MTLDepthStencilState?
+    // Environment skybox pipeline (mirrors Renderer's skybox pipeline)
+    private var skyboxPipelineState:     MTLRenderPipelineState?
+    private var dummyEquirect:           MTLTexture?
 
     // Feedback settings — nil means no feedback during export
     var feedbackSettings: FeedbackSettings?
@@ -238,6 +241,22 @@ final class VideoExporter {
             } else {
                 print("[DEBUG] VideoExporter: background pipeline makeRenderPipelineState failed")
             }
+
+            // Environment skybox pipeline — mirrors the live renderer so export matches.
+            if let skyV = library.makeFunction(name: "skybox_vertex"),
+               let skyF = library.makeFunction(name: "skybox_fragment") {
+                let skyDesc = MTLRenderPipelineDescriptor()
+                skyDesc.label            = "SkyboxExport"
+                skyDesc.vertexFunction   = skyV
+                skyDesc.fragmentFunction = skyF
+                skyDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
+                skyDesc.depthAttachmentPixelFormat      = .depth32Float
+                skyboxPipelineState = try? device.makeRenderPipelineState(descriptor: skyDesc)
+            }
+            let dDesc = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: .rgba16Float, width: 1, height: 1, mipmapped: false)
+            dDesc.usage = [.shaderRead]
+            dummyEquirect = device.makeTexture(descriptor: dDesc)
         } else {
             print("[DEBUG] VideoExporter: background shaders not found in bundle")
         }
@@ -732,6 +751,27 @@ final class VideoExporter {
                 encoder.setFragmentBytes(&bgUniforms,
                                          length: MemoryLayout<BackgroundUniforms>.stride,
                                          index: 0)
+                encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+            }
+            else if backgroundConfig.mode == .environment,
+                    let skyPipe = skyboxPipelineState,
+                    let bgDepth = backgroundDepthState,
+                    let ibl     = ibl,
+                    let cube    = ibl.envCubemap {
+                encoder.setRenderPipelineState(skyPipe)
+                encoder.setDepthStencilState(bgDepth)
+                encoder.setCullMode(.none)
+                var sky = SkyboxUniforms(
+                    inverseViewProjection: simd_inverse(camera.viewProjectionMatrix),
+                    cameraPos:             SIMD4<Float>(camera.eyePosition, 1),
+                    intensity:             backgroundConfig.environmentIntensity,
+                    useEquirect:           ibl.envEquirect != nil ? 1 : 0,
+                    colorMode:             UInt32(colorMode.rawValue))
+                encoder.setFragmentBytes(&sky,
+                                         length: MemoryLayout<SkyboxUniforms>.stride,
+                                         index: 0)
+                encoder.setFragmentTexture(cube, index: 0)
+                encoder.setFragmentTexture(ibl.envEquirect ?? dummyEquirect, index: 1)
                 encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             }
 

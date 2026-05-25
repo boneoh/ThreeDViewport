@@ -126,6 +126,13 @@ struct LightsInspectorPanel: View {
                         set: { self.backgroundConfig.gradientBottom = $0 }
                     )
                 )
+
+            case .environment:
+                SliderRow(label: "Intensity",
+                          value: $backgroundConfig.environmentIntensity,
+                          range: 0...4, format: "%.2f")
+                Text("Uses the IBL environment as a backdrop.")
+                    .font(.caption2).foregroundStyle(.secondary)
             }
         }
     }

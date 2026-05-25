@@ -302,7 +302,7 @@ struct ParticleEffectData: Codable {
 // v8: Background colour/gradient settings.  Defaults match BackgroundConfig initial values
 // (solid black) so v1–v7 project files load with the standard black background.
 struct BackgroundData: Codable {
-    var mode:            Int   = 0      // BackgroundMode raw value: 0=solid, 1=gradient
+    var mode:            Int   = 0      // BackgroundMode raw value: 0=solid, 1=gradient, 2=environment
     // Solid colour (RGB, linear 0–1)
     var solidR:          Float = 0
     var solidG:          Float = 0
@@ -315,6 +315,8 @@ struct BackgroundData: Codable {
     var gradBottomR:     Float = 0
     var gradBottomG:     Float = 0
     var gradBottomB:     Float = 0
+    // v27: environment skybox brightness multiplier
+    var environmentIntensity: Float = 1.0
 }
 
 // v5: Feedback delay-line settings.  Defaults match FeedbackSettings initial values

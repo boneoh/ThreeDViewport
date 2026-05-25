@@ -243,7 +243,8 @@ final class ProjectFile {
             gradTopB:    bg.gradientTop.z,
             gradBottomR: bg.gradientBottom.x,
             gradBottomG: bg.gradientBottom.y,
-            gradBottomB: bg.gradientBottom.z
+            gradBottomB: bg.gradientBottom.z,
+            environmentIntensity: bg.environmentIntensity
         )
 
         // ── Color grade (v12; exposure v16) ───────────────────────────────────
@@ -284,7 +285,7 @@ final class ProjectFile {
         }
 
         return ProjectData(
-            version:             26,   // v26: lights store position + target (was direction)
+            version:             27,   // v27: environment skybox background + intensity
             modelPath:           nil,           // v3+ uses modelPaths instead
             modelPaths:          modelPaths,
             timeline:            timelineData,
@@ -513,6 +514,7 @@ final class ProjectFile {
         vp.backgroundConfig.solidColor   = SIMD3<Float>(bd.solidR,      bd.solidG,      bd.solidB)
         vp.backgroundConfig.gradientTop  = SIMD3<Float>(bd.gradTopR,    bd.gradTopG,    bd.gradTopB)
         vp.backgroundConfig.gradientBottom = SIMD3<Float>(bd.gradBottomR, bd.gradBottomG, bd.gradBottomB)
+        vp.backgroundConfig.environmentIntensity = bd.environmentIntensity
         print("[DEBUG] ProjectFile: background mode=\(vp.backgroundConfig.mode.displayName)"
             + " solid=(\(bd.solidR),\(bd.solidG),\(bd.solidB))")
 

@@ -379,6 +379,73 @@ fragment float4 background_fragment(
     return float4(color, 0.0);
 }
 
+// ── Environment skybox background ───────────────────────────────────────────────
+// Fullscreen pass drawn before scene geometry (far depth, so geometry draws over
+// it).  Reconstructs the world-space camera ray per pixel (same inverse-VP trick
+// as the fog pass) and samples the IBL environment by direction — the retained 2K
+// equirect when available (sharp), otherwise the 256² env cube (procedural sky).
+
+struct SkyboxUniforms {
+    float4x4 inverseViewProjection;
+    float4   cameraPos;     // xyz = world eye position
+    float    intensity;     // brightness multiplier
+    uint     useEquirect;   // 1 = sample equirect, 0 = cube fallback
+    uint     colorMode;     // 0 grey, 1 color, 2 B+W matte
+    uint     _pad;
+};
+
+struct SkyVertOut {
+    float4 position [[position]];
+    float2 ndc;             // clip-space xy in [-1,1], y up
+};
+
+vertex SkyVertOut skybox_vertex(uint vid [[vertex_id]]) {
+    const float2 pos[4] = {
+        float2(-1.0, -1.0),
+        float2( 1.0, -1.0),
+        float2(-1.0,  1.0),
+        float2( 1.0,  1.0)
+    };
+    float2 p = pos[vid];
+    SkyVertOut out;
+    out.position = float4(p, 0.999, 1.0);   // far depth — scene geometry overwrites it
+    out.ndc      = p;
+    return out;
+}
+
+fragment float4 skybox_fragment(
+    SkyVertOut                in [[stage_in]],
+    constant SkyboxUniforms   &u          [[buffer(0)]],
+    texturecube<float>        envCube     [[texture(0)]],
+    texture2d<float>          envEquirect [[texture(1)]]
+) {
+    // World-space ray for this pixel (same reconstruction as the fog pass).
+    float4 farClip = u.inverseViewProjection * float4(in.ndc, 1.0, 1.0);
+    float3 dir     = normalize(farClip.xyz / farClip.w - u.cameraPos.xyz);
+
+    float3 col;
+    if (u.useEquirect != 0u) {
+        // Match equirect_to_cube_kernel exactly so the backdrop and IBL lighting
+        // share orientation.
+        float uu = atan2(dir.z, dir.x) / (2.0 * M_PI_F) + 0.5;   // azimuth, wraps
+        float vv = acos(clamp(dir.y, -1.0, 1.0)) / M_PI_F;        // polar, 0 = up
+        constexpr sampler s(s_address::repeat, t_address::clamp_to_edge, filter::linear);
+        col = envEquirect.sample(s, float2(uu, vv)).rgb;
+    } else {
+        constexpr sampler s(filter::linear);
+        col = envCube.sample(s, dir).rgb;
+    }
+    col *= u.intensity;
+
+    // Black + White matte: background stays black behind the white silhouette.
+    if (u.colorMode == 2u) return float4(0.0, 0.0, 0.0, 0.0);
+    if (u.colorMode == 0u)                      // greyscale: match the desaturated scene
+        col = float3(dot(col, float3(0.2126, 0.7152, 0.0722)));
+
+    // Alpha = 0 marks this as a background pixel for the feedback blend.
+    return float4(col, 0.0);
+}
+
 // ── Axes Gizmo ────────────────────────────────────────────────────────────────
 // Simple 2-D overlay pass.  Each vertex is a screen-space NDC position plus
 // an RGBA colour.  No depth buffer — gizmo always renders on top.
