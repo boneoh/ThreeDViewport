@@ -56,12 +56,12 @@ struct TrackRow {
 
 /// A spatial channel that can be pasted into a keyframe from the coordinate clipboard.
 private enum CoordChannel {
-    case position, size, direction
+    case position, size, target
     var menuTitle: String {
         switch self {
         case .position:  return "Paste Position"
         case .size:      return "Paste Size"
-        case .direction: return "Paste Direction"
+        case .target:    return "Paste Target"
         }
     }
 }
@@ -1058,12 +1058,12 @@ final class TimelineEditorView: NSView {
         let channels: [CoordChannel]
         switch ref {
         case .light(let i):
-            // Match the Lights panel: Position for point/spot/laser, Direction for
+            // Match the Lights panel: Position for point/spot/laser, Target for
             // directional/spot/laser, nothing for ambient.
             guard let type = lightManager?.lights[safe: i]?.type else { return nil }
             var chs: [CoordChannel] = []
             if type == .point || type == .spot || type == .laser       { chs.append(.position) }
-            if type == .directional || type == .spot || type == .laser { chs.append(.direction) }
+            if type == .directional || type == .spot || type == .laser { chs.append(.target) }
             guard !chs.isEmpty else { return nil }
             channels = chs
         case .fog, .particles:  channels = [.position, .size]
@@ -1089,7 +1089,7 @@ final class TimelineEditorView: NSView {
         switch ch {
         case .position:  return clip.position  != nil
         case .size:      return clip.size      != nil
-        case .direction: return clip.direction != nil
+        case .target:    return clip.position  != nil   // target is a world position
         }
     }
 
@@ -1107,11 +1107,10 @@ final class TimelineEditorView: NSView {
             guard let v = clip.position, let lm = lightManager, i < lm.keyframeTracks.count,
                   let track = lm.keyframeTracks[i], req.kfIndex < track.keyframes.count else { return }
             track.keyframes[req.kfIndex].position = v
-        case (.light(let i), .direction):
-            guard let v = clip.direction, simd_length(v) > 1e-5,
-                  let lm = lightManager, i < lm.keyframeTracks.count,
+        case (.light(let i), .target):
+            guard let v = clip.position, let lm = lightManager, i < lm.keyframeTracks.count,
                   let track = lm.keyframeTracks[i], req.kfIndex < track.keyframes.count else { return }
-            track.keyframes[req.kfIndex].direction = simd_normalize(v)
+            track.keyframes[req.kfIndex].target = v
         case (.fog, .position):
             guard let v = clip.position, let track = fogSettings?.keyframeTrack,
                   req.kfIndex < track.keyframes.count else { return }
@@ -1786,7 +1785,6 @@ final class TimelineEditorView: NSView {
                   let kf = lm.keyframeTracks[i]?.keyframes[safe: ki] else { return }
             clipboardKeyframe = .light(kf)
             coordinateClipboard?.position  = kf.position
-            coordinateClipboard?.direction = kf.direction
         case .group(let gid):
             guard let kf = sceneManager?.groupKeyframeTracks[gid]?
                               .keyframes[safe: ki] else { return }
@@ -1877,7 +1875,7 @@ final class TimelineEditorView: NSView {
                 time:          t,
                 intensity:     src.intensity,
                 color:         src.color,
-                direction:     src.direction,
+                target:        src.target,
                 position:      src.position,
                 range:         src.range,
                 beamThickness: src.beamThickness))
@@ -1956,7 +1954,7 @@ final class TimelineEditorView: NSView {
                 time:          t,
                 intensity:     src.intensity,
                 color:         src.color,
-                direction:     src.direction,
+                target:        src.target,
                 position:      src.position,
                 range:         src.range,
                 beamThickness: src.beamThickness))

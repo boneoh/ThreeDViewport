@@ -592,9 +592,9 @@ struct LightConfigData: Codable {
     var posX:                    Float = 0.0
     var posY:                    Float = 3.0
     var posZ:                    Float = 3.0
-    var dirX:                    Float = 0.5
-    var dirY:                    Float = -1.2
-    var dirZ:                    Float = -0.8
+    var targetX:                 Float = 0.0     // v26: world-space aim target (was dirX/Y/Z)
+    var targetY:                 Float = 0.0
+    var targetZ:                 Float = 0.0
     var innerConeAngle:          Float = 0.3927  // π/8
     var outerConeAngle:          Float = 0.5236  // π/6
     var range:                   Float = 15.0
@@ -602,16 +602,17 @@ struct LightConfigData: Codable {
     var excludeBeamFromFeedback: Bool  = false
 }
 
-// v6: One saved light keyframe — intensity, colour, direction, position.
+// v6: One saved light keyframe — intensity, colour, target, position.
 // v11: Added range and beamThickness.
+// v26: aim now stored as a world-space target (was direction dx/dy/dz).
 // Type, cone angles, and enabled state are not animated; restore them from LightConfig.
 struct LightKeyframeData: Codable {
     var time:          Double
     var intensity:     Float
     // Colour components
     var r: Float; var g: Float; var b: Float
-    // Direction (normalised)
-    var dx: Float; var dy: Float; var dz: Float
+    // v26: world-space aim target (older files' dx/dy/dz are ignored → defaults)
+    var tx: Float = 0; var ty: Float = 0; var tz: Float = 0
     // Position
     var px: Float; var py: Float; var pz: Float
     // v11: beam properties (default to LightConfig defaults for older project files)

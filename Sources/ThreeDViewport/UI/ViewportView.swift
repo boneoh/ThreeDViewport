@@ -156,6 +156,10 @@ final class ViewportView: MTKView {
     /// AppDelegate wires this to refresh the Timeline Editor and mark the document dirty.
     var onKeyframesCleared: (() -> Void)?
 
+    /// Fires when the user edits the camera from the Camera panel (e.g. Target).
+    /// AppDelegate wires this to mark the document dirty.
+    var onCameraEdited: (() -> Void)?
+
     // Overlay that highlights the viewport during a valid drag hover.
     private var dragHighlightView: DragHighlightView?
 
@@ -212,6 +216,15 @@ final class ViewportView: MTKView {
         renderer?.colorGradeSettings  = colorGradeSettings
         renderer?.fogSettings         = fogSettings
         renderer?.particleManager     = particleManager
+
+        // Camera panel — Target edits write back to the real rendering camera
+        // (never the Director), so the inspector stays meaningful in Scene mode.
+        cameraPanelState.onTargetEdited = { [weak self] v in
+            guard let self else { return }
+            self.camera.target = v
+            self.needsDisplay = true
+            self.onCameraEdited?()
+        }
 
         // Sync renderSettings → renderer whenever toggles change
         colorModeCancellable = renderSettings.$colorMode.sink { [weak self] value in
@@ -1177,7 +1190,7 @@ final class ViewportView: MTKView {
             time:          timeline.currentTime,
             intensity:     light.intensity,
             color:         light.color,
-            direction:     light.direction,
+            target:        light.target,
             position:      light.position,
             range:         light.range,
             beamThickness: light.beamThickness
@@ -1401,6 +1414,14 @@ final class ViewportView: MTKView {
         } else {
             addCameraKeyframeAtCurrentTime()
         }
+    }
+
+    /// Pulls the real rendering camera's live position/target into the Camera
+    /// panel state (never the Director, even in Scene mode).  Driven by a 0.1s
+    /// timer in CameraPanel while the panel is visible, so the read-only Position
+    /// and editable Target track viewport moves.
+    func refreshCameraPanelState() {
+        cameraPanelState.refresh(position: camera.eyePosition, target: camera.target)
     }
 
     // MARK: - Video Export

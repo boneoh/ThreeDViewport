@@ -1,4 +1,6 @@
 import SwiftUI
+import Combine
+import simd
 
 // Floating inspector panel for camera keyframe stamping.
 //
@@ -15,14 +17,48 @@ final class CameraPanelState: ObservableObject {
     /// Snapshot of available object names — refreshed by AppDelegate each time
     /// the panel is shown.  Reactively drives the picker contents.
     @Published var availableObjectNames: [String] = []
+
+    /// Live camera world position (read-only display; editing arrives in Phase 3).
+    @Published var position: SIMD3<Float> = .zero
+    /// Camera look-at target in world space (editable).
+    @Published var target:   SIMD3<Float> = .zero
+
+    /// Propagates a Target edit back to the active camera (wired by ViewportView).
+    var onTargetEdited: ((SIMD3<Float>) -> Void)?
+
+    private var isUpdating   = false
+    private var cancellables = Set<AnyCancellable>()
+
+    init() { setupSinks() }
+
+    /// Pulls live camera position/target in, suppressing the write-back sink and
+    /// skipping no-op updates so it can run on a timer without fighting edits.
+    func refresh(position newPosition: SIMD3<Float>, target newTarget: SIMD3<Float>) {
+        isUpdating = true
+        defer { isUpdating = false }
+        if newPosition != position { position = newPosition }
+        if newTarget   != target   { target   = newTarget }
+    }
+
+    private func setupSinks() {
+        $target.dropFirst()
+            .sink { [weak self] v in
+                guard let self, !isUpdating else { return }
+                onTargetEdited?(v)
+            }.store(in: &cancellables)
+    }
 }
 
 struct CameraPanel: View {
 
     @ObservedObject var state: CameraPanelState
+    @ObservedObject var clipboard: CoordinateClipboard
     /// Invoked when the user clicks the stamp button.  ViewportView dispatches
     /// to the free or follow path based on `state.followTargetName`.
     let onStampKeyframe: () -> Void
+    /// Pulls live camera position/target into `state` — driven by a timer while
+    /// the panel is visible so the fields track viewport orbit/pan/zoom.
+    let onRefresh: () -> Void
 
     var body: some View {
         ScrollView {
@@ -75,11 +111,61 @@ struct CameraPanel: View {
                     .font(.caption2)
                     .foregroundColor(.secondary)
                     .padding(.top, 8)
+
+                Divider().padding(.vertical, 14)
+
+                // ── Position (read-only; editing arrives in Phase 3) ──────────
+                HStack {
+                    Text("Position").font(.headline)
+                    Spacer()
+                    Button { clipboard.position = state.position } label: {
+                        Image(systemName: "doc.on.doc").foregroundColor(.editableBlue)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Copy the camera position")
+                }
+                .padding(.bottom, 4)
+                coordReadoutRow("X", state.position.x)
+                coordReadoutRow("Y", state.position.y)
+                coordReadoutRow("Z", state.position.z)
+
+                Divider().padding(.vertical, 14)
+
+                // ── Target (editable) ─────────────────────────────────────────
+                HStack {
+                    Text("Target").font(.headline)
+                    Spacer()
+                    CoordCopyPasteButtons(
+                        onCopy:   { clipboard.position = state.target },
+                        onPaste:  { if let p = clipboard.position { state.target = p } },
+                        canPaste: clipboard.position != nil)
+                }
+                .padding(.bottom, 4)
+                SliderRow(label: "X", value: $state.target.x, range: -100...100, format: "%.2f")
+                SliderRow(label: "Y", value: $state.target.y, range: -100...100, format: "%.2f")
+                SliderRow(label: "Z", value: $state.target.z, range: -100...100, format: "%.2f")
             }
             .padding(14)
         }
         .frame(width: 280)
         .background(Color(NSColor.windowBackgroundColor))
+        .onReceive(Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()) { _ in
+            onRefresh()
+        }
+    }
+
+    /// Fixed-width label + monospaced numeric value, for read-only coordinates.
+    private func coordReadoutRow(_ label: String, _ value: Float) -> some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .frame(width: 46, alignment: .leading)
+                .foregroundColor(.secondary)
+                .font(.caption)
+            Text(String(format: "%.2f", value))
+                .font(.caption.monospacedDigit())
+                .foregroundColor(.secondary)
+            Spacer()
+        }
     }
 
     private var stampButtonLabel: String {

@@ -262,8 +262,9 @@ struct LightsInspectorPanel: View {
                       range: 0...10,
                       format: "%.2f")
 
-            // Position — point / spot / laser
-            if light.type == .point || light.type == .spot || light.type == .laser {
+            // Position — every light except ambient (directional uses it as the
+            // aim anchor: direction is derived from Position → Target).
+            if light.type != .ambient {
                 GroupBox {
                     VStack(spacing: 4) {
                         SliderRow(label: "X",
@@ -294,37 +295,35 @@ struct LightsInspectorPanel: View {
                 }
             }
 
-            // Direction — directional / spot / laser
+            // Target — directional / spot / laser (light aims from Position toward
+            // Target; the world-space aim point uses the Position clipboard channel).
             if light.type == .directional || light.type == .spot || light.type == .laser {
                 GroupBox {
                     VStack(spacing: 4) {
                         SliderRow(label: "X",
                                   value: Binding<Float>(
-                                      get: { lightManager.lights[i].direction.x },
-                                      set: { lightManager.lights[i].direction.x = $0; normalizeDirection(at: i) }),
-                                  range: -1...1, format: "%.3f")
+                                      get: { lightManager.lights[i].target.x },
+                                      set: { lightManager.lights[i].target.x = $0 }),
+                                  range: -10...10, format: "%.2f")
                         SliderRow(label: "Y",
                                   value: Binding<Float>(
-                                      get: { lightManager.lights[i].direction.y },
-                                      set: { lightManager.lights[i].direction.y = $0; normalizeDirection(at: i) }),
-                                  range: -1...1, format: "%.3f")
+                                      get: { lightManager.lights[i].target.y },
+                                      set: { lightManager.lights[i].target.y = $0 }),
+                                  range: -10...10, format: "%.2f")
                         SliderRow(label: "Z",
                                   value: Binding<Float>(
-                                      get: { lightManager.lights[i].direction.z },
-                                      set: { lightManager.lights[i].direction.z = $0; normalizeDirection(at: i) }),
-                                  range: -1...1, format: "%.3f")
+                                      get: { lightManager.lights[i].target.z },
+                                      set: { lightManager.lights[i].target.z = $0 }),
+                                  range: -10...10, format: "%.2f")
                     }
                 } label: {
                     HStack {
-                        Text("Direction")
+                        Text("Target")
                         Spacer()
                         CoordCopyPasteButtons(
-                            onCopy:   { clipboard.direction = lightManager.lights[i].direction },
-                            onPaste:  { if let d = clipboard.direction {
-                                            lightManager.lights[i].direction = d
-                                            normalizeDirection(at: i)
-                                        } },
-                            canPaste: clipboard.direction != nil)
+                            onCopy:   { clipboard.position = lightManager.lights[i].target },
+                            onPaste:  { if let p = clipboard.position { lightManager.lights[i].target = p } },
+                            canPaste: clipboard.position != nil)
                     }
                 }
             }
@@ -394,10 +393,10 @@ struct LightsInspectorPanel: View {
 
     /// Positions a new light slightly above and to the right of the camera and
     /// aims it at the camera's current target (one-click scene-setup).
-    /// • Ambient — returned unchanged (no position or direction).
-    /// • Directional — only direction is set (it has no position).
-    /// • Point — only position is set (it has no direction).
-    /// • Spot / Laser — both position and direction are set.
+    /// • Ambient — returned unchanged (no position or target).
+    /// • Directional — position + target set (aim derived; position is just the anchor).
+    /// • Point — only position is set (no aim target).
+    /// • Spot / Laser — both position and target are set.
     private func placedForCamera(_ light: LightConfig) -> LightConfig {
         var l = light
         let offset = camera.distance * 0.2
@@ -408,22 +407,15 @@ struct LightsInspectorPanel: View {
         case .ambient:
             return l
         case .directional:
-            l.direction = simd_normalize(camera.target - pos)
+            l.position = pos
+            l.target   = camera.target
         case .point:
             l.position = pos
         case .spot, .laser:
-            l.position  = pos
-            l.direction = simd_normalize(camera.target - pos)
+            l.position = pos
+            l.target   = camera.target
         }
         return l
-    }
-
-    private func normalizeDirection(at i: Int) {
-        let d = lightManager.lights[i].direction
-        let len = sqrt(d.x * d.x + d.y * d.y + d.z * d.z)
-        if len > 0.0001 {
-            lightManager.lights[i].direction = d / len
-        }
     }
 }
 

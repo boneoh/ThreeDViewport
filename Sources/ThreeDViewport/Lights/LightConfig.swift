@@ -42,8 +42,11 @@ struct LightConfig {
     // ── Positional lights (point / spot / laser) ──────────────────────────────
     var position:  SIMD3<Float>  = SIMD3<Float>(0, 3, 3)
 
-    // ── Directional / spot / laser ────────────────────────────────────────────
-    var direction: SIMD3<Float>  = simd_normalize(SIMD3<Float>(0.5, -1.2, -0.8))
+    // ── Aim target (directional / spot / laser) ───────────────────────────────
+    // The light aims from `position` toward `target`; `direction` is derived.
+    // For directional lights, position/target are only aiming handles — lighting
+    // uses the derived (parallel-ray) direction, not the position itself.
+    var target:    SIMD3<Float>  = SIMD3<Float>(0, 0, 0)
 
     // ── Spot / laser — half-angles in radians ─────────────────────────────────
     var innerConeAngle: Float    = Float.pi / 8.0    // 22.5°
@@ -58,6 +61,27 @@ struct LightConfig {
     /// When true the beam is drawn after the feedback composite pass so it is
     /// never captured in the delay-line ring buffer (no trailing copies).
     var excludeBeamFromFeedback: Bool = false
+
+    // ── Derived aim direction ─────────────────────────────────────────────────
+    /// Unit vector from `position` toward `target`.  Setting it moves `target`
+    /// along the new direction, preserving the current position→target distance
+    /// (falling back to `range` when they coincide).  Read by shaders, gizmos,
+    /// and the laser beam; the setter lets keyboard aim (rotate/reset) stay as-is.
+    var direction: SIMD3<Float> {
+        get {
+            let d   = target - position
+            let len = simd_length(d)
+            return len > 1e-5 ? d / len : SIMD3<Float>(0, -1, 0)
+        }
+        set {
+            let len = simd_length(newValue)
+            guard len > 1e-5 else { return }
+            let unit    = newValue / len
+            let dist    = simd_length(target - position)
+            let useDist = dist > 1e-5 ? dist : (range > 1e-5 ? range : 1.0)
+            target = position + unit * useDist
+        }
+    }
 
     // MARK: - Shader accessors
 
@@ -96,7 +120,8 @@ struct LightConfig {
     static var defaultDirectional: LightConfig {
         var l = LightConfig()
         l.type      = .directional
-        l.direction = simd_normalize(SIMD3<Float>(0.5, -1.2, -0.8))
+        l.position  = SIMD3<Float>(0, 3, 3)
+        l.target    = l.position + simd_normalize(SIMD3<Float>(0.5, -1.2, -0.8)) * l.range
         l.color     = SIMD3<Float>(1.0, 0.98, 0.95)
         l.intensity = 1.2
         return l
@@ -126,10 +151,10 @@ struct LightConfig {
         l.color          = SIMD3<Float>(1.0, 0.95, 0.85)
         l.intensity      = 4.0
         l.position       = SIMD3<Float>(0, 4, 2)
-        l.direction      = simd_normalize(SIMD3<Float>(0, -1, -0.4))
         l.innerConeAngle = Float.pi / 8.0    // 22.5°
         l.outerConeAngle = Float.pi / 5.5    // ~33°
         l.range          = 15.0
+        l.target         = l.position + simd_normalize(SIMD3<Float>(0, -1, -0.4)) * l.range
         return l
     }
 
@@ -139,10 +164,10 @@ struct LightConfig {
         l.color                   = SIMD3<Float>(0.15, 0.8, 1.0)   // cyan-blue
         l.intensity               = 10.0
         l.position                = SIMD3<Float>(0, 3, 3)
-        l.direction               = simd_normalize(SIMD3<Float>(0, -0.4, -1))
         l.innerConeAngle          = 0.013               // ≈ 0.75° — hard pencil beam
         l.outerConeAngle          = 0.026               // ≈ 1.5°
         l.range                   = 30.0
+        l.target                  = l.position + simd_normalize(SIMD3<Float>(0, -0.4, -1)) * l.range
         l.beamThickness           = 3.0
         l.excludeBeamFromFeedback = false
         return l

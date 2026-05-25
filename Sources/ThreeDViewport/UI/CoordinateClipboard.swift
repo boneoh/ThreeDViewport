@@ -2,14 +2,14 @@ import SwiftUI
 import simd
 
 // A typed, session-only clipboard for copying xyz coordinate channels between
-// lights, weather emitters, and the fog volume.  Each channel is held separately
-// so a paste is always type-matched (Position↔Position, Size↔Size, Direction↔
-// Direction) — preventing, say, a size from being dropped into a position.
-// (Part A: panel value copy/paste.  Keyframe interop is a later phase.)
+// lights, weather emitters, the fog volume, the camera, and models.  Each channel
+// is held separately so a paste is always type-matched (Position↔Position,
+// Size↔Size) — preventing, say, a size from being dropped into a position.
+// World-space aim points (camera/light Target) use the Position channel, since a
+// target is itself a position.
 final class CoordinateClipboard: ObservableObject {
     @Published var position:  SIMD3<Float>? = nil
     @Published var size:      SIMD3<Float>? = nil
-    @Published var direction: SIMD3<Float>? = nil
 }
 
 /// Compact copy + paste icon pair shown in a value-group header (Position / Size /

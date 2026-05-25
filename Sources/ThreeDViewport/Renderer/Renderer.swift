@@ -1322,8 +1322,8 @@ final class Renderer: NSObject, MTKViewDelegate {
             if let state = track.evaluate(at: timeline.currentTime) {
                 lightManager.lights[i].intensity     = state.intensity
                 lightManager.lights[i].color         = state.color
-                lightManager.lights[i].direction     = state.direction
                 lightManager.lights[i].position      = state.position
+                lightManager.lights[i].target        = state.target
                 lightManager.lights[i].range         = state.range
                 lightManager.lights[i].beamThickness = state.beamThickness
             }

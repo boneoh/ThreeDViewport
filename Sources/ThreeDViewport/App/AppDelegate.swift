@@ -46,7 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     followTargetName: String?,   // nil = was a free keyframe
                     kfTime: Double)
         case light(index: Int, savedIntensity: Float, savedColor: SIMD3<Float>,
-                   savedDirection: SIMD3<Float>, savedPosition: SIMD3<Float>, kfTime: Double)
+                   savedTarget: SIMD3<Float>, savedPosition: SIMD3<Float>, kfTime: Double)
         case group(gid: Int, savedTransform: matrix_float4x4, kfTime: Double)
         // Atmosphere: only the time is needed — the panel follows the playhead, so
         // commit re-stamps the edited panel value and cancel re-syncs from the track.
@@ -156,6 +156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             self?.timelineEditorWC?.editorView.needsDisplay = true
             self?.markDirty()
         }
+        viewport.onCameraEdited = { [weak self] in self?.markDirty() }
         viewport.sceneManager.onSelectionChanged = { [weak self, weak viewport] in
             guard let self, let viewport else { return }
             let selected = viewport.sceneManager.selectedObject
@@ -1466,7 +1467,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         )
         panel.title         = "Lights & Background"
         panel.isFloatingPanel = true
-        panel.becomesKeyOnlyIfNeeded = true
+        panel.becomesKeyOnlyIfNeeded = false
         panel.hidesOnDeactivate = false
 
         let inspectorView = LightsInspectorPanel(
@@ -1514,7 +1515,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         )
         panel.title              = "Feedback"
         panel.isFloatingPanel    = true
-        panel.becomesKeyOnlyIfNeeded = true
+        panel.becomesKeyOnlyIfNeeded = false
         panel.hidesOnDeactivate  = false
 
         let feedbackView = FeedbackPanelWrapper(
@@ -1556,7 +1557,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         )
         panel.title              = "Color Grade"
         panel.isFloatingPanel    = true
-        panel.becomesKeyOnlyIfNeeded = true
+        panel.becomesKeyOnlyIfNeeded = false
         panel.hidesOnDeactivate  = false
 
         let gradeView = ColorGradePanel(settings: viewport.colorGradeSettings)
@@ -1596,7 +1597,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         )
         panel.title              = "Atmosphere"
         panel.isFloatingPanel    = true
-        panel.becomesKeyOnlyIfNeeded = true
+        panel.becomesKeyOnlyIfNeeded = false
         panel.hidesOnDeactivate  = false
 
         let atmoView = AtmospherePanel(
@@ -1675,17 +1676,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         )
         panel.title              = "Camera"
         panel.isFloatingPanel    = true
-        panel.becomesKeyOnlyIfNeeded = true
+        panel.becomesKeyOnlyIfNeeded = false
         panel.hidesOnDeactivate  = false
 
         let cameraView = CameraPanel(
             state: viewport.cameraPanelState,
+            clipboard: viewport.coordinateClipboard,
             onStampKeyframe: { [weak self, weak viewport] in
                 viewport?.addCameraKeyframeFromPanel()
                 self?.markDirty()
-            }
+            },
+            onRefresh: { [weak viewport] in viewport?.refreshCameraPanelState() }
         )
         panel.contentView = NSHostingView(rootView: cameraView)
+        viewport.refreshCameraPanelState()   // seed values so the panel shows them immediately
 
         if let win = window {
             let winFrame  = win.frame
@@ -1746,7 +1750,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         )
         panel.title              = "Model Inspector"
         panel.isFloatingPanel    = true
-        panel.becomesKeyOnlyIfNeeded = true
+        panel.becomesKeyOnlyIfNeeded = false
         panel.hidesOnDeactivate  = false
 
         panel.contentView = NSHostingView(rootView: ModelInspectorPanel(
@@ -1968,27 +1972,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 let lm = viewport.lightManager
                 let savedIntensity:  Float
                 let savedColor:      SIMD3<Float>
-                let savedDirection:  SIMD3<Float>
+                let savedTarget:     SIMD3<Float>
                 let savedPosition:   SIMD3<Float>
                 if i < lm.keyframeTracks.count,
                    let track = lm.keyframeTracks[i],
                    let state = track.evaluate(at: kfTime) {
                     savedIntensity  = state.intensity
                     savedColor      = state.color
-                    savedDirection  = state.direction
+                    savedTarget     = state.target
                     savedPosition   = state.position
                 } else {
                     let light       = lm.lights[i]
                     savedIntensity  = light.intensity
                     savedColor      = light.color
-                    savedDirection  = light.direction
+                    savedTarget     = light.target
                     savedPosition   = light.position
                 }
                 self.kfEditSnapshot = .light(
                     index:          i,
                     savedIntensity: savedIntensity,
                     savedColor:     savedColor,
-                    savedDirection: savedDirection,
+                    savedTarget:    savedTarget,
                     savedPosition:  savedPosition,
                     kfTime:         kfTime
                 )
@@ -2140,12 +2144,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     + " t=" + String(format: "%.3f", kfTime))
 
             case .light(let index, let savedIntensity, let savedColor,
-                        let savedDirection, let savedPosition, let kfTime):
+                        let savedTarget, let savedPosition, let kfTime):
                 guard index < viewport.lightManager.lights.count else { return }
                 viewport.lightManager.lights[index].intensity  = savedIntensity
                 viewport.lightManager.lights[index].color      = savedColor
-                viewport.lightManager.lights[index].direction  = savedDirection
                 viewport.lightManager.lights[index].position   = savedPosition
+                viewport.lightManager.lights[index].target     = savedTarget
                 print("[DEBUG] AppDelegate: cancelled light keyframe edit index=\(index)"
                     + " t=" + String(format: "%.3f", kfTime))
 

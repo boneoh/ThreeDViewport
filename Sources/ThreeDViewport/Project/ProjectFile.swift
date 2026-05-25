@@ -200,7 +200,7 @@ final class ProjectFile {
                     time:          kf.time,
                     intensity:     kf.intensity,
                     r: kf.color.x, g: kf.color.y, b: kf.color.z,
-                    dx: kf.direction.x, dy: kf.direction.y, dz: kf.direction.z,
+                    tx: kf.target.x, ty: kf.target.y, tz: kf.target.z,
                     px: kf.position.x,  py: kf.position.y,  pz: kf.position.z,
                     range:         kf.range,
                     beamThickness: kf.beamThickness
@@ -220,9 +220,9 @@ final class ProjectFile {
                 posX:                    l.position.x,
                 posY:                    l.position.y,
                 posZ:                    l.position.z,
-                dirX:                    l.direction.x,
-                dirY:                    l.direction.y,
-                dirZ:                    l.direction.z,
+                targetX:                 l.target.x,
+                targetY:                 l.target.y,
+                targetZ:                 l.target.z,
                 innerConeAngle:          l.innerConeAngle,
                 outerConeAngle:          l.outerConeAngle,
                 range:                   l.range,
@@ -284,7 +284,7 @@ final class ProjectFile {
         }
 
         return ProjectData(
-            version:             25,
+            version:             26,   // v26: lights store position + target (was direction)
             modelPath:           nil,           // v3+ uses modelPaths instead
             modelPaths:          modelPaths,
             timeline:            timelineData,
@@ -534,7 +534,7 @@ final class ProjectFile {
                 l.color                   = SIMD3<Float>(lcd.colorR, lcd.colorG, lcd.colorB)
                 l.intensity               = lcd.intensity
                 l.position                = SIMD3<Float>(lcd.posX, lcd.posY, lcd.posZ)
-                l.direction               = SIMD3<Float>(lcd.dirX, lcd.dirY, lcd.dirZ)
+                l.target                  = SIMD3<Float>(lcd.targetX, lcd.targetY, lcd.targetZ)
                 l.innerConeAngle          = lcd.innerConeAngle
                 l.outerConeAngle          = lcd.outerConeAngle
                 l.range                   = lcd.range
@@ -736,7 +736,7 @@ final class ProjectFile {
                     time:          kf.time,
                     intensity:     kf.intensity,
                     color:         SIMD3<Float>(kf.r, kf.g, kf.b),
-                    direction:     simd_normalize(SIMD3<Float>(kf.dx, kf.dy, kf.dz)),
+                    target:        SIMD3<Float>(kf.tx, kf.ty, kf.tz),
                     position:      SIMD3<Float>(kf.px, kf.py, kf.pz),
                     range:         kf.range,
                     beamThickness: kf.beamThickness

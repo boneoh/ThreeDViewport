@@ -3,15 +3,15 @@ import simd
 // MARK: - LightKeyframe
 
 /// One keyframe for a single light. Stores the properties that can be animated:
-/// intensity, colour, direction (normalised; directional/spot/laser), position
-/// (point/spot/laser), range (beam/spot length), and beamThickness (laser only).
-/// Type, cone angles, and enabled state are not animated — change them statically
-/// in the Lights & Background inspector.
+/// intensity, colour, target (world-space aim point; directional/spot/laser),
+/// position (point/spot/laser), range (beam/spot length), and beamThickness
+/// (laser only).  Type, cone angles, and enabled state are not animated — change
+/// them statically in the Lights & Background inspector.
 struct LightKeyframe {
     var time:          Double
     var intensity:     Float
     var color:         SIMD3<Float>
-    var direction:     SIMD3<Float>   // always normalised
+    var target:        SIMD3<Float>   // world-space aim point
     var position:      SIMD3<Float>
     var range:         Float
     var beamThickness: Float
@@ -19,9 +19,9 @@ struct LightKeyframe {
 
 // MARK: - LightKeyframeTrack
 
-/// Ordered, interpolating keyframe track for one light. All four animated
-/// properties are linearly interpolated; direction is re-normalised after lerp
-/// to keep it unit-length. API mirrors KeyframeTrack / CameraKeyframeTrack.
+/// Ordered, interpolating keyframe track for one light. All animated properties
+/// (position, target, colour, intensity, range, beamThickness) are linearly
+/// interpolated. API mirrors KeyframeTrack / CameraKeyframeTrack.
 final class LightKeyframeTrack {
 
     var keyframes: [LightKeyframe] = []
@@ -96,14 +96,11 @@ final class LightKeyframeTrack {
 
             let t = Float((time - a.time) / span)
 
-            let blendedDir = a.direction + (b.direction - a.direction) * t
             return LightKeyframe(
                 time:          time,
                 intensity:     a.intensity     + (b.intensity     - a.intensity)     * t,
                 color:         a.color         + (b.color         - a.color)         * t,
-                direction:     simd_length(blendedDir) > 0.0001
-                               ? simd_normalize(blendedDir)
-                               : a.direction,
+                target:        a.target        + (b.target        - a.target)        * t,
                 position:      a.position      + (b.position      - a.position)      * t,
                 range:         a.range         + (b.range         - a.range)         * t,
                 beamThickness: a.beamThickness + (b.beamThickness - a.beamThickness) * t
