@@ -1719,6 +1719,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         let state = ModelInspectorState()
 
+        // World-space position provider — mirrors how SceneGeometryEncoder builds
+        // the model matrix (group transform × object transform), so the Position
+        // field tracks model/group animation, which lives in the group transform
+        // rather than the object's own transform.
+        state.worldPosition = { [weak viewport] obj in
+            let world: matrix_float4x4
+            if let sm = viewport?.sceneManager,
+               let gid = obj.groupID, let gt = sm.groupTransforms[gid] {
+                world = gt * obj.transform
+            } else {
+                world = obj.transform
+            }
+            let t = world.columns.3
+            return SIMD3<Float>(t.x, t.y, t.z)
+        }
+
         // Push current selection immediately.
         let selected = viewport.sceneManager.selectedObject
         let targets: [SceneObject]

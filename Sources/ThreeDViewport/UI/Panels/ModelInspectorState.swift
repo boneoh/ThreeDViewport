@@ -29,6 +29,11 @@ final class ModelInspectorState: ObservableObject {
     var onRedraw:         (() -> Void)?
     var onDirty:          (() -> Void)?
     var onRevealInFinder: (() -> Void)?
+    /// Live world-space position of an object as the renderer draws it (group
+    /// transform × object transform).  Wired by AppDelegate; without it the field
+    /// would miss model/group animation, which lives in the group transform — not
+    /// the object's own transform.
+    var worldPosition:    ((SceneObject) -> SIMD3<Float>)?
 
     // ── Private ───────────────────────────────────────────────────────────────
     private var targets:    [SceneObject] = []
@@ -57,17 +62,23 @@ final class ModelInspectorState: ObservableObject {
         let c = first.material.baseColorFactor
         baseColor = Color(red: Double(c.x), green: Double(c.y), blue: Double(c.z))
 
-        let t = first.transform.columns.3
-        position        = SIMD3<Float>(t.x, t.y, t.z)
+        position        = worldPos(of: first)
         canEditPosition = (newTargets.count == 1 && first.parentIndex == nil)
+    }
+
+    /// World position of `obj` as drawn (group transform × transform), via the
+    /// provider wired by AppDelegate; falls back to the local translation.
+    private func worldPos(of obj: SceneObject) -> SIMD3<Float> {
+        if let wp = worldPosition { return wp(obj) }
+        let t = obj.transform.columns.3
+        return SIMD3<Float>(t.x, t.y, t.z)
     }
 
     /// Re-reads the selected object's live world position so the field tracks
     /// viewport moves.  Suppresses the write-back sink and skips no-op updates.
     func refreshPosition() {
         guard hasSelection, let obj = targets.first else { return }
-        let t = obj.transform.columns.3
-        let p = SIMD3<Float>(t.x, t.y, t.z)
+        let p = worldPos(of: obj)
         if p != position {
             isUpdating = true
             position   = p
