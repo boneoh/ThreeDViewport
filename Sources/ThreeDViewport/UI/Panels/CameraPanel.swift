@@ -18,13 +18,14 @@ final class CameraPanelState: ObservableObject {
     /// the panel is shown.  Reactively drives the picker contents.
     @Published var availableObjectNames: [String] = []
 
-    /// Live camera world position (read-only display; editing arrives in Phase 3).
+    /// Camera world position (eye), editable — writes back via `onPositionEdited`.
     @Published var position: SIMD3<Float> = .zero
     /// Camera look-at target in world space (editable).
     @Published var target:   SIMD3<Float> = .zero
 
-    /// Propagates a Target edit back to the active camera (wired by ViewportView).
-    var onTargetEdited: ((SIMD3<Float>) -> Void)?
+    /// Propagate Position / Target edits back to the active camera (wired by ViewportView).
+    var onPositionEdited: ((SIMD3<Float>) -> Void)?
+    var onTargetEdited:   ((SIMD3<Float>) -> Void)?
 
     private var isUpdating   = false
     private var cancellables = Set<AnyCancellable>()
@@ -41,6 +42,11 @@ final class CameraPanelState: ObservableObject {
     }
 
     private func setupSinks() {
+        $position.dropFirst()
+            .sink { [weak self] v in
+                guard let self, !isUpdating else { return }
+                onPositionEdited?(v)
+            }.store(in: &cancellables)
         $target.dropFirst()
             .sink { [weak self] v in
                 guard let self, !isUpdating else { return }
@@ -114,20 +120,19 @@ struct CameraPanel: View {
 
                 Divider().padding(.vertical, 14)
 
-                // ── Position (read-only; editing arrives in Phase 3) ──────────
+                // ── Position (editable) ───────────────────────────────────────
                 HStack {
                     Text("Position").font(.headline)
                     Spacer()
-                    Button { clipboard.position = state.position } label: {
-                        Image(systemName: "doc.on.doc").foregroundColor(.editableBlue)
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Copy the camera position")
+                    CoordCopyPasteButtons(
+                        onCopy:   { clipboard.position = state.position },
+                        onPaste:  { if let p = clipboard.position { state.position = p } },
+                        canPaste: clipboard.position != nil)
                 }
                 .padding(.bottom, 4)
-                coordReadoutRow("X", state.position.x)
-                coordReadoutRow("Y", state.position.y)
-                coordReadoutRow("Z", state.position.z)
+                SliderRow(label: "X", value: $state.position.x, range: -100...100, format: "%.2f")
+                SliderRow(label: "Y", value: $state.position.y, range: -100...100, format: "%.2f")
+                SliderRow(label: "Z", value: $state.position.z, range: -100...100, format: "%.2f")
 
                 Divider().padding(.vertical, 14)
 
@@ -151,20 +156,6 @@ struct CameraPanel: View {
         .background(Color(NSColor.windowBackgroundColor))
         .onReceive(Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()) { _ in
             onRefresh()
-        }
-    }
-
-    /// Fixed-width label + monospaced numeric value, for read-only coordinates.
-    private func coordReadoutRow(_ label: String, _ value: Float) -> some View {
-        HStack(spacing: 6) {
-            Text(label)
-                .frame(width: 46, alignment: .leading)
-                .foregroundColor(.secondary)
-                .font(.caption)
-            Text(String(format: "%.2f", value))
-                .font(.caption.monospacedDigit())
-                .foregroundColor(.secondary)
-            Spacer()
         }
     }
 

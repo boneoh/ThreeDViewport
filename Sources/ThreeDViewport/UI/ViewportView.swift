@@ -217,8 +217,14 @@ final class ViewportView: MTKView {
         renderer?.fogSettings         = fogSettings
         renderer?.particleManager     = particleManager
 
-        // Camera panel — Target edits write back to the real rendering camera
-        // (never the Director), so the inspector stays meaningful in Scene mode.
+        // Camera panel — Position / Target edits write back to the real rendering
+        // camera (never the Director), so the inspector stays meaningful in Scene mode.
+        cameraPanelState.onPositionEdited = { [weak self] v in
+            guard let self else { return }
+            self.camera.setEyePosition(v)
+            self.needsDisplay = true
+            self.onCameraEdited?()
+        }
         cameraPanelState.onTargetEdited = { [weak self] v in
             guard let self else { return }
             self.camera.target = v

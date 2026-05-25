@@ -43,6 +43,21 @@ final class CameraController {
         return SIMD3<Float>(x, y, z)
     }
 
+    /// Inverse of `eyePosition`: re-derive yaw / pitch / distance so the camera
+    /// eye sits at `eye`, keeping `target` fixed.  Distance and pitch are clamped
+    /// to the same limits as zoom / orbit so the camera stays well-conditioned.
+    /// Used by the Camera inspector's editable Position field.
+    func setEyePosition(_ eye: SIMD3<Float>) {
+        let d    = eye - target
+        let dist = simd_length(d)
+        guard dist > 1e-4 else { return }      // can't aim from the target itself
+        distance = min(5000.0, max(0.05, dist))
+        var p    = asin(max(-1, min(1, d.y / dist)))
+        p        = max(-Float.pi / 2 + 0.01, min(Float.pi / 2 - 0.01, p))
+        pitch    = p
+        yaw      = atan2(d.x, d.z)
+    }
+
     /// Unit vector pointing from the camera toward the target (world space).
     var forwardVector: SIMD3<Float> {
         simd_normalize(target - eyePosition)
