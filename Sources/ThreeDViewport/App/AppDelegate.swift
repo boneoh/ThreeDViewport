@@ -576,6 +576,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         openProjectItem.target = self
         fileMenu.addItem(openProjectItem)
 
+        fileMenu.addItem(NSMenuItem.separator())
+
+        let openLightingHDRItem = NSMenuItem(
+            title: "Open Lighting HDR...",
+            action: #selector(openLightingHDR(_:)),
+            keyEquivalent: ""
+        )
+        openLightingHDRItem.target = self
+        fileMenu.addItem(openLightingHDRItem)
+
+        let openBackgroundHDRItem = NSMenuItem(
+            title: "Open Background HDR...",
+            action: #selector(openBackgroundHDR(_:)),
+            keyEquivalent: ""
+        )
+        openBackgroundHDRItem.target = self
+        fileMenu.addItem(openBackgroundHDRItem)
+
+        fileMenu.addItem(NSMenuItem.separator())
+
         let saveProjectItem = NSMenuItem(
             title: "Save Project",
             action: #selector(saveProject(_:)),
@@ -1147,10 +1167,77 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             // Sync the Camera panel's Follow Target list to the new scene so it
             // doesn't keep showing objects from the previously-loaded project.
             refreshCameraFollowTargets()
+            checkMissingHDRs(in: viewport)
             print("[DEBUG] AppDelegate: project loaded from " + url.lastPathComponent)
         } catch {
             showErrorAlert(message: "Could not open project", detail: error.localizedDescription)
         }
+    }
+
+    // MARK: - HDR environment (Lighting / Background)
+
+    @objc private func openLightingHDR(_ sender: Any) {
+        pickHDR(title: "Open Lighting HDR") { [weak self] url in
+            guard let self, let vp = self.viewportView else { return }
+            if vp.renderer?.reloadLightingHDR(url) == true {
+                vp.renderSettings.lightingHDRPath = url.path
+                vp.needsDisplay = true
+                self.markDirty()
+                print("[DEBUG] AppDelegate: lighting HDR → " + url.lastPathComponent)
+            } else {
+                self.showErrorAlert(message: "Couldn't load Lighting HDR",
+                    detail: "\"\(url.lastPathComponent)\" couldn't be read as a Radiance .hdr image.")
+            }
+        }
+    }
+
+    @objc private func openBackgroundHDR(_ sender: Any) {
+        pickHDR(title: "Open Background HDR") { [weak self] url in
+            guard let self, let vp = self.viewportView else { return }
+            if vp.renderer?.setBackgroundHDR(url) == true {
+                vp.backgroundConfig.backgroundHDRPath = url.path
+                vp.backgroundConfig.mode = .environment   // show the new backdrop immediately
+                vp.needsDisplay = true
+                self.markDirty()
+                print("[DEBUG] AppDelegate: background HDR → " + url.lastPathComponent)
+            } else {
+                self.showErrorAlert(message: "Couldn't load Background HDR",
+                    detail: "\"\(url.lastPathComponent)\" couldn't be read as a Radiance .hdr image.")
+            }
+        }
+    }
+
+    /// Modal `.hdr` file picker; calls `completion` with the chosen URL.
+    private func pickHDR(title: String, _ completion: (URL) -> Void) {
+        let panel = NSOpenPanel()
+        panel.title                   = title
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories    = false
+        panel.canChooseFiles          = true
+        if let hdr = UTType(filenameExtension: "hdr") { panel.allowedContentTypes = [hdr] }
+        if panel.runModal() == .OK, let url = panel.url { completion(url) }
+    }
+
+    /// After a project opens, warn if any referenced HDR file is missing on disk.
+    private func checkMissingHDRs(in vp: ViewportView) {
+        var missing: [String] = []
+        let lp = vp.renderSettings.lightingHDRPath
+        if !lp.isEmpty, !FileManager.default.fileExists(atPath: AppSettings.expand(lp).path) {
+            missing.append("Lighting HDR — " + lp)
+        }
+        let bp = vp.backgroundConfig.backgroundHDRPath
+        if !bp.isEmpty, !FileManager.default.fileExists(atPath: AppSettings.expand(bp).path) {
+            missing.append("Background HDR — " + bp)
+        }
+        guard !missing.isEmpty else { return }
+        let alert = NSAlert()
+        alert.messageText = "Missing HDR file" + (missing.count > 1 ? "s" : "")
+        alert.informativeText = "This project references HDR file(s) that couldn't be found:\n\n"
+            + missing.joined(separator: "\n")
+            + "\n\nThe bundled environment is used until you re-link them via "
+            + "File ▸ Open Lighting/Background HDR."
+        alert.alertStyle = .warning
+        alert.runModal()
     }
 
     // MARK: - Save Project

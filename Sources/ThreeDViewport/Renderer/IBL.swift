@@ -10,8 +10,9 @@ import simd
 // 4 (prefiltered specular cubemap).
 final class IBL {
 
-    let device:       MTLDevice
-    private let queue: MTLCommandQueue
+    let device:         MTLDevice
+    private let queue:   MTLCommandQueue
+    private let library: MTLLibrary
 
     // ── Generated resources ───────────────────────────────────────────────────
     private(set) var brdfLUT:        MTLTexture?
@@ -59,8 +60,9 @@ final class IBL {
     }()
 
     init?(device: MTLDevice, library: MTLLibrary, commandQueue: MTLCommandQueue) {
-        self.device = device
-        self.queue  = commandQueue
+        self.device  = device
+        self.queue   = commandQueue
+        self.library = library
 
         guard let lut = Self.generateBRDFLUT(device:        device,
                                               library:       library,
@@ -71,45 +73,81 @@ final class IBL {
         self.brdfLUT = lut
         print("[DEBUG] IBL: BRDF LUT ready (\(Self.brdfLUTSize)×\(Self.brdfLUTSize) RG16F)")
 
-        // Prefer the bundled HDR studio environment; fall back to procedural sky.
+        // Build the environment from the bundled HDR.  A loaded project overrides
+        // it at runtime via reloadEnvironment(hdrURL:) — no app restart needed.
+        guard reloadEnvironment(hdrURL: nil) else {
+            print("[DEBUG] IBL: environment generation failed (HDR and procedural)")
+            return nil
+        }
+    }
+
+    // MARK: - Environment (hot-reloadable)
+
+    /// Rebuilds the environment cubemap, irradiance, prefiltered specular, and the
+    /// retained equirect from `hdrURL` (nil → bundled HDR → procedural fallback).
+    /// Returns false only if no environment could be produced at all.  Safe to call
+    /// at runtime to swap the Lighting HDR without restarting.
+    @discardableResult
+    func reloadEnvironment(hdrURL: URL?) -> Bool {
+        let url = hdrURL ?? Self.bundledHDRURL()
         let env: MTLTexture
-        if let hdr = Self.loadHDREnvCubemap(device:       device,
-                                            library:      library,
-                                            commandQueue: commandQueue) {
+        if let url,
+           let hdr = Self.loadHDREnvCubemap(url: url, device: device,
+                                            library: library, commandQueue: queue) {
             env = hdr.cube
             self.envEquirect = hdr.equirect      // retained for the sharp backdrop
         } else if let proc = Self.generateEnvCubemap(device:       device,
                                                      library:      library,
-                                                     commandQueue: commandQueue,
+                                                     commandQueue: queue,
                                                      params:       Self.defaultSkyParams) {
             env = proc                            // procedural — no equirect source
+            self.envEquirect = nil
         } else {
-            print("[DEBUG] IBL: env cubemap generation failed (HDR and procedural)")
-            return nil
+            return false
         }
-        self.envCubemap = env
-        print("[DEBUG] IBL: env cubemap ready (\(Self.envCubeSize)² × 6, RGBA16F)")
 
         guard let irr = Self.generateIrradianceCubemap(device:       device,
                                                        library:      library,
-                                                       commandQueue: commandQueue,
-                                                       envCubemap:   env) else {
-            print("[DEBUG] IBL: irradiance cubemap generation failed")
-            return nil
+                                                       commandQueue: queue,
+                                                       envCubemap:   env),
+              let spec = Self.generateSpecularCubemap(device:       device,
+                                                      library:      library,
+                                                      commandQueue: queue,
+                                                      envCubemap:   env) else {
+            return false
         }
+        self.envCubemap     = env
         self.irradianceCube = irr
-        print("[DEBUG] IBL: irradiance cubemap ready (\(Self.irradianceSize)² × 6, RGBA16F)")
+        self.specularCube   = spec
+        print("[DEBUG] IBL: environment ready (\(hdrURL?.lastPathComponent ?? "bundled/procedural"))")
+        return true
+    }
 
-        guard let spec = Self.generateSpecularCubemap(device:       device,
-                                                       library:      library,
-                                                       commandQueue: commandQueue,
-                                                       envCubemap:   env) else {
-            print("[DEBUG] IBL: specular cubemap generation failed")
+    /// URL of the bundled fallback HDR, if present.
+    private static func bundledHDRURL() -> URL? {
+        Bundle.module.url(forResource: environmentHDRName, withExtension: "hdr")
+    }
+
+    /// Loads an equirect `.hdr` into an RGBA32F 2D texture (shared, shaderRead).
+    /// Used for the lighting cube projection and the standalone background backdrop.
+    static func loadEquirectTexture(url: URL, device: MTLDevice) -> MTLTexture? {
+        guard let hdr = HDRImage(url: url) else {
+            print("[DEBUG] IBL: HDR parse failed for \(url.lastPathComponent)")
             return nil
         }
-        self.specularCube = spec
-        print("[DEBUG] IBL: prefiltered specular ready "
-            + "(\(Self.specularSize)² × 6, \(Self.specularMipCount) mips, RGBA16F)")
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba32Float, width: hdr.width, height: hdr.height, mipmapped: false)
+        desc.usage       = [.shaderRead]
+        desc.storageMode = .shared
+        guard let tex = device.makeTexture(descriptor: desc) else { return nil }
+        tex.label = "IBL_Equirect(\(url.lastPathComponent))"
+        hdr.rgba.withUnsafeBytes { raw in
+            tex.replace(region:      MTLRegionMake2D(0, 0, hdr.width, hdr.height),
+                        mipmapLevel: 0,
+                        withBytes:   raw.baseAddress!,
+                        bytesPerRow: hdr.width * 4 * MemoryLayout<Float>.size)
+        }
+        return tex
     }
 
     // MARK: - BRDF LUT precompute
@@ -167,57 +205,16 @@ final class IBL {
 
     // MARK: - HDR environment loading
 
-    // Resolves which HDR to load: a user-configured path from AppSettings if set
-    // and present on disk, otherwise the bundled default.  Returns nil only when
-    // neither is available (caller then falls back to procedural).
-    private static func resolveHDRURL() -> URL? {
-        let configured = AppSettings.shared.hdrPath
-        if !configured.isEmpty {
-            let url = AppSettings.expand(configured)
-            if FileManager.default.fileExists(atPath: url.path) {
-                print("[DEBUG] IBL: using configured HDR " + url.path)
-                return url
-            }
-            print("[DEBUG] IBL: configured HDR not found (" + url.path + ") — bundled fallback")
-        }
-        return Bundle.module.url(forResource: environmentHDRName, withExtension: "hdr")
-    }
-
-    // Loads the bundled equirectangular HDR and projects it into the env cubemap.
-    // Returns nil (so the caller falls back to procedural) if the resource is
+    // Loads the equirect HDR at `url` and projects it into the env cubemap.
+    // Returns nil (so the caller falls back to procedural) if the file is
     // missing, unparseable, or any Metal step fails.
-    private static func loadHDREnvCubemap(device:       MTLDevice,
+    private static func loadHDREnvCubemap(url:          URL,
+                                          device:       MTLDevice,
                                           library:      MTLLibrary,
                                           commandQueue: MTLCommandQueue)
         -> (cube: MTLTexture, equirect: MTLTexture)? {
-        guard let url = resolveHDRURL() else {
-            print("[DEBUG] IBL: no HDR available — procedural fallback")
+        guard let eqTex = loadEquirectTexture(url: url, device: device) else {
             return nil
-        }
-        guard let hdr = HDRImage(url: url) else {
-            print("[DEBUG] IBL: HDR parse failed — procedural fallback")
-            return nil
-        }
-        print("[DEBUG] IBL: HDR loaded \(hdr.width)×\(hdr.height) (\(environmentHDRName))")
-
-        // Upload equirect as a CPU-writable RGBA32F 2D texture.
-        let eqDesc = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .rgba32Float,
-            width:  hdr.width,
-            height: hdr.height,
-            mipmapped: false)
-        eqDesc.usage       = [.shaderRead]
-        eqDesc.storageMode = .shared
-        guard let eqTex = device.makeTexture(descriptor: eqDesc) else {
-            print("[DEBUG] IBL: equirect makeTexture failed")
-            return nil
-        }
-        eqTex.label = "IBL_EquirectHDR"
-        hdr.rgba.withUnsafeBytes { raw in
-            eqTex.replace(region:      MTLRegionMake2D(0, 0, hdr.width, hdr.height),
-                          mipmapLevel: 0,
-                          withBytes:   raw.baseAddress!,
-                          bytesPerRow: hdr.width * 4 * MemoryLayout<Float>.size)
         }
 
         // Destination env cubemap.

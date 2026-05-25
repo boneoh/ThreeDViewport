@@ -138,6 +138,8 @@ final class VideoExporter {
     // Environment skybox pipeline (mirrors Renderer's skybox pipeline)
     private var skyboxPipelineState:     MTLRenderPipelineState?
     private var dummyEquirect:           MTLTexture?
+    /// Dedicated background HDR equirect, shared from the Renderer so export matches.
+    var backgroundEquirect:              MTLTexture?
 
     // Feedback settings — nil means no feedback during export
     var feedbackSettings: FeedbackSettings?
@@ -761,17 +763,18 @@ final class VideoExporter {
                 encoder.setRenderPipelineState(skyPipe)
                 encoder.setDepthStencilState(bgDepth)
                 encoder.setCullMode(.none)
+                let bgEquirect = backgroundEquirect ?? ibl.envEquirect
                 var sky = SkyboxUniforms(
                     inverseViewProjection: simd_inverse(camera.viewProjectionMatrix),
                     cameraPos:             SIMD4<Float>(camera.eyePosition, 1),
                     intensity:             backgroundConfig.environmentIntensity,
-                    useEquirect:           ibl.envEquirect != nil ? 1 : 0,
+                    useEquirect:           bgEquirect != nil ? 1 : 0,
                     colorMode:             UInt32(colorMode.rawValue))
                 encoder.setFragmentBytes(&sky,
                                          length: MemoryLayout<SkyboxUniforms>.stride,
                                          index: 0)
                 encoder.setFragmentTexture(cube, index: 0)
-                encoder.setFragmentTexture(ibl.envEquirect ?? dummyEquirect, index: 1)
+                encoder.setFragmentTexture(bgEquirect ?? dummyEquirect, index: 1)
                 encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             }
 

@@ -26,6 +26,10 @@ final class Renderer: NSObject, MTKViewDelegate {
     // Environment skybox pipeline — samples the IBL env by camera-ray direction.
     var skyboxPipelineState: MTLRenderPipelineState?
     private var dummyEquirect: MTLTexture?   // 1×1 placeholder for the equirect slot
+    /// Optional dedicated background HDR equirect.  When set, the skybox samples
+    /// this instead of the lighting (IBL) equirect, so backdrop and lighting can
+    /// use different HDRs.  Nil = mirror the lighting environment.
+    var backgroundEquirect: MTLTexture?
 
     // Fallback buffers — bound when an object has no UVs or tangents so
     // buffer(4)/buffer(5) are always valid Metal bindings.
@@ -175,6 +179,26 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
         ibl = IBL(device: device, library: library, commandQueue: commandQueue)
         if ibl == nil { print("[DEBUG] Renderer: IBL precompute failed") }
+    }
+
+    /// Hot-swaps the Lighting HDR (rebuilds the IBL environment).  `url == nil`
+    /// reverts to the bundled HDR.  Returns false if no environment could build.
+    @discardableResult
+    func reloadLightingHDR(_ url: URL?) -> Bool {
+        return ibl?.reloadEnvironment(hdrURL: url) ?? false
+    }
+
+    /// Sets (or clears) the dedicated Background HDR backdrop.  `url == nil` clears
+    /// it so the skybox mirrors the lighting environment.  Returns false if a URL
+    /// was given but couldn't be loaded.
+    @discardableResult
+    func setBackgroundHDR(_ url: URL?) -> Bool {
+        guard let url else { backgroundEquirect = nil; return true }
+        if let tex = IBL.loadEquirectTexture(url: url, device: device) {
+            backgroundEquirect = tex
+            return true
+        }
+        return false
     }
 
     // MARK: - Pipeline setup
@@ -752,17 +776,18 @@ final class Renderer: NSObject, MTKViewDelegate {
             encoder.setRenderPipelineState(skyPipe)
             encoder.setDepthStencilState(bgDepth)
             encoder.setCullMode(.none)
+            let bgEquirect = backgroundEquirect ?? ibl.envEquirect   // dedicated bg, else lighting env
             var sky = SkyboxUniforms(
                 inverseViewProjection: simd_inverse(viewCamera.viewProjectionMatrix),
                 cameraPos:             SIMD4<Float>(viewCamera.eyePosition, 1),
                 intensity:             backgroundConfig.environmentIntensity,
-                useEquirect:           ibl.envEquirect != nil ? 1 : 0,
+                useEquirect:           bgEquirect != nil ? 1 : 0,
                 colorMode:             UInt32(colorMode.rawValue))
             encoder.setFragmentBytes(&sky,
                                      length: MemoryLayout<SkyboxUniforms>.stride,
                                      index: 0)
             encoder.setFragmentTexture(cube, index: 0)
-            encoder.setFragmentTexture(ibl.envEquirect ?? dummyEquirect, index: 1)
+            encoder.setFragmentTexture(bgEquirect ?? dummyEquirect, index: 1)
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         }
 

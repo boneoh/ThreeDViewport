@@ -1469,6 +1469,7 @@ final class ViewportView: MTKView {
         exporter.fogSettings        = fogSettings
         exporter.particleManager    = particleManager
         exporter.ibl                = renderer?.ibl   // share IBL so exports match preview
+        exporter.backgroundEquirect = renderer?.backgroundEquirect   // dedicated bg HDR (if any)
         feedbackProcessor.reset()   // clear live queue; exporter has its own processor
         timeline.pause()
         isPaused = true

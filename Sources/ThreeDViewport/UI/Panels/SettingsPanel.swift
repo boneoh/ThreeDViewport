@@ -15,7 +15,6 @@ struct SettingsPanel: View {
     @State private var moviesPath          = ""
     @State private var modelsPathPrimary   = ""
     @State private var modelsPathSecondary = ""
-    @State private var hdrPath             = ""
     @State private var exportWidth         = ""
     @State private var exportHeight        = ""
     @State private var codecIndex          = 0
@@ -32,14 +31,6 @@ struct SettingsPanel: View {
             pathRow("Movies",            $moviesPath,          directory: true)
             pathRow("Models (primary)",  $modelsPathPrimary,   directory: true)
             pathRow("Models (fallback)", $modelsPathSecondary, directory: true)
-
-            Divider()
-
-            Text("Environment").font(.subheadline).foregroundColor(.secondary)
-            pathRow("HDR file", $hdrPath, directory: false)
-            Text("Leave blank to use the bundled studio HDR. Takes effect on next launch.")
-                .font(.caption)
-                .foregroundColor(.secondary)
 
             Divider()
 
@@ -95,7 +86,6 @@ struct SettingsPanel: View {
         moviesPath          = settings.moviesPath
         modelsPathPrimary   = settings.modelsPathPrimary
         modelsPathSecondary = settings.modelsPathSecondary
-        hdrPath             = settings.hdrPath
         exportWidth         = String(settings.exportWidth)
         exportHeight        = String(settings.exportHeight)
         codecIndex          = settings.exportCodecID == "proRes422HQ" ? 1 : 0
@@ -106,7 +96,6 @@ struct SettingsPanel: View {
         settings.moviesPath          = moviesPath
         settings.modelsPathPrimary   = modelsPathPrimary
         settings.modelsPathSecondary = modelsPathSecondary
-        settings.hdrPath             = hdrPath
         settings.exportWidth         = Int(exportWidth)  ?? settings.exportWidth
         settings.exportHeight        = Int(exportHeight) ?? settings.exportHeight
         settings.exportCodecID       = codecIndex == 1 ? "proRes422HQ" : "proRes4444"

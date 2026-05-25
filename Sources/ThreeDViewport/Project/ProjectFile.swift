@@ -244,7 +244,8 @@ final class ProjectFile {
             gradBottomR: bg.gradientBottom.x,
             gradBottomG: bg.gradientBottom.y,
             gradBottomB: bg.gradientBottom.z,
-            environmentIntensity: bg.environmentIntensity
+            environmentIntensity: bg.environmentIntensity,
+            backgroundHDRPath:    bg.backgroundHDRPath
         )
 
         // ── Color grade (v12; exposure v16) ───────────────────────────────────
@@ -285,7 +286,7 @@ final class ProjectFile {
         }
 
         return ProjectData(
-            version:             27,   // v27: environment skybox background + intensity
+            version:             28,   // v28: per-project Lighting + Background HDR paths
             modelPath:           nil,           // v3+ uses modelPaths instead
             modelPaths:          modelPaths,
             timeline:            timelineData,
@@ -305,6 +306,7 @@ final class ProjectFile {
             colorGrade:          colorGradeData,
             groupKeyframeTracks: groupTrackData,
             iblIntensity:        vp.renderSettings.iblIntensity,
+            lightingHDRPath:     vp.renderSettings.lightingHDRPath,
             fog:                 FogData(isEnabled: vp.fogSettings.isEnabled,
                                          r: vp.fogSettings.color.x,
                                          g: vp.fogSettings.color.y,
@@ -515,6 +517,11 @@ final class ProjectFile {
         vp.backgroundConfig.gradientTop  = SIMD3<Float>(bd.gradTopR,    bd.gradTopG,    bd.gradTopB)
         vp.backgroundConfig.gradientBottom = SIMD3<Float>(bd.gradBottomR, bd.gradBottomG, bd.gradBottomB)
         vp.backgroundConfig.environmentIntensity = bd.environmentIntensity
+        // v28: dedicated Background HDR (empty = mirror lighting; missing → fall back).
+        vp.backgroundConfig.backgroundHDRPath = bd.backgroundHDRPath
+        let bgURL = bd.backgroundHDRPath.isEmpty ? nil : AppSettings.expand(bd.backgroundHDRPath)
+        let bgOK  = bgURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? true
+        vp.renderer?.setBackgroundHDR(bgOK ? bgURL : nil)
         print("[DEBUG] ProjectFile: background mode=\(vp.backgroundConfig.mode.displayName)"
             + " solid=(\(bd.solidR),\(bd.solidG),\(bd.solidB))")
 
@@ -588,6 +595,11 @@ final class ProjectFile {
         // ── IBL intensity (v16) ───────────────────────────────────────────────
         vp.renderSettings.iblIntensity = data.iblIntensity
         print("[DEBUG] ProjectFile: iblIntensity=\(data.iblIntensity)")
+        // v28: hot-reload the Lighting HDR from the saved path (bundled if missing).
+        vp.renderSettings.lightingHDRPath = data.lightingHDRPath
+        let lightURL = data.lightingHDRPath.isEmpty ? nil : AppSettings.expand(data.lightingHDRPath)
+        let lightOK  = lightURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? true
+        vp.renderer?.reloadLightingHDR(lightOK ? lightURL : nil)
 
         // ── Fog volume (v19 distance fog → v22 box volume) ────────────────────
         vp.fogSettings.isEnabled = data.fog.isEnabled

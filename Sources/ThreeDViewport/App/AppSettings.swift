@@ -18,7 +18,6 @@ final class AppSettings: ObservableObject {
     @Published var moviesPath:          String
     @Published var modelsPathPrimary:   String     // tried first (e.g. Favorites)
     @Published var modelsPathSecondary: String     // fallback if primary missing
-    @Published var hdrPath:             String     // empty = bundled default HDR
     @Published var exportWidth:         Int
     @Published var exportHeight:        Int
     @Published var exportCodecID:       String     // ExportCodec.id
@@ -37,7 +36,6 @@ final class AppSettings: ObservableObject {
          moviesPath:          String = Defaults.movies,
          modelsPathPrimary:   String = Defaults.modelsFav,
          modelsPathSecondary: String = Defaults.models,
-         hdrPath:             String = "",
          exportWidth:         Int    = Defaults.width,
          exportHeight:        Int    = Defaults.height,
          exportCodecID:       String = Defaults.codecID) {
@@ -45,7 +43,6 @@ final class AppSettings: ObservableObject {
         self.moviesPath          = moviesPath
         self.modelsPathPrimary   = modelsPathPrimary
         self.modelsPathSecondary = modelsPathSecondary
-        self.hdrPath             = hdrPath
         self.exportWidth         = exportWidth
         self.exportHeight        = exportHeight
         self.exportCodecID       = exportCodecID
@@ -59,7 +56,6 @@ final class AppSettings: ObservableObject {
         var moviesPath:          String
         var modelsPathPrimary:   String
         var modelsPathSecondary: String
-        var hdrPath:             String
         var exportWidth:         Int
         var exportHeight:        Int
         var exportCodecID:       String
@@ -85,7 +81,6 @@ final class AppSettings: ObservableObject {
                            moviesPath:          s.moviesPath,
                            modelsPathPrimary:   s.modelsPathPrimary,
                            modelsPathSecondary: s.modelsPathSecondary,
-                           hdrPath:             s.hdrPath,
                            exportWidth:         s.exportWidth,
                            exportHeight:        s.exportHeight,
                            exportCodecID:       s.exportCodecID)
@@ -96,7 +91,6 @@ final class AppSettings: ObservableObject {
                        moviesPath:          moviesPath,
                        modelsPathPrimary:   modelsPathPrimary,
                        modelsPathSecondary: modelsPathSecondary,
-                       hdrPath:             hdrPath,
                        exportWidth:         exportWidth,
                        exportHeight:        exportHeight,
                        exportCodecID:       exportCodecID)

@@ -43,6 +43,10 @@ final class RenderSettings: ObservableObject {
     // Written through to Renderer.ibl?.intensity by ViewportView's Combine sink.
     @Published var iblIntensity: Float = 1.0
 
+    // Per-project Lighting HDR file path (drives the IBL).  Empty = bundled HDR.
+    // The actual IBL reload is triggered on load / via File ▸ Open Lighting HDR.
+    @Published var lightingHDRPath: String = ""
+
     init() {
         print("[DEBUG] RenderSettings: initialized — color mode")
     }

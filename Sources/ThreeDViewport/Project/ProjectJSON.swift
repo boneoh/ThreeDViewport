@@ -54,6 +54,7 @@ struct ProjectData: Codable {
     /// v14 (Phase 2): group-level animation tracks, one per loaded multi-part model.
     var groupKeyframeTracks: [GroupTrackData] = []
     var iblIntensity:        Float = 1.0                 // v16; per-scene IBL strength.
+    var lightingHDRPath:     String = ""                 // v28; per-project Lighting HDR path (empty = bundled).
     var fog:                 FogData = FogData()         // v19/v22; fog volume (atmosphere).
     var particles:           ParticleEffectData = ParticleEffectData()  // v21; legacy single emitter (migration).
     var fogKeyframes:        [AtmosphereKeyframeData] = []  // v23; fog volume animation.
@@ -83,6 +84,7 @@ struct ProjectData: Codable {
          colorGrade:          ColorGradeData         = ColorGradeData(),
          groupKeyframeTracks: [GroupTrackData]       = [],
          iblIntensity:        Float                  = 1.0,
+         lightingHDRPath:     String                 = "",
          fog:                 FogData                = FogData(),
          particles:           ParticleEffectData     = ParticleEffectData(),
          fogKeyframes:        [AtmosphereKeyframeData] = [],
@@ -109,6 +111,7 @@ struct ProjectData: Codable {
         self.colorGrade          = colorGrade
         self.groupKeyframeTracks = groupKeyframeTracks
         self.iblIntensity        = iblIntensity
+        self.lightingHDRPath     = lightingHDRPath
         self.fog                 = fog
         self.particles           = particles
         self.fogKeyframes        = fogKeyframes
@@ -149,6 +152,7 @@ struct ProjectData: Codable {
         colorGrade          = (try? c.decode(ColorGradeData.self,        forKey: .colorGrade))          ?? ColorGradeData()
         groupKeyframeTracks = (try? c.decode([GroupTrackData].self,      forKey: .groupKeyframeTracks)) ?? []
         iblIntensity        = (try? c.decode(Float.self,                 forKey: .iblIntensity))        ?? 1.0
+        lightingHDRPath     = (try? c.decode(String.self,                forKey: .lightingHDRPath))     ?? ""
         fog                 = (try? c.decode(FogData.self,               forKey: .fog))                 ?? FogData()
         particles           = (try? c.decode(ParticleEffectData.self,    forKey: .particles))           ?? ParticleEffectData()
         fogKeyframes        = (try? c.decode([AtmosphereKeyframeData].self, forKey: .fogKeyframes))      ?? []
@@ -317,6 +321,8 @@ struct BackgroundData: Codable {
     var gradBottomB:     Float = 0
     // v27: environment skybox brightness multiplier
     var environmentIntensity: Float = 1.0
+    // v28: per-project Background HDR path (empty = mirror the lighting environment)
+    var backgroundHDRPath:    String = ""
 }
 
 // v5: Feedback delay-line settings.  Defaults match FeedbackSettings initial values
