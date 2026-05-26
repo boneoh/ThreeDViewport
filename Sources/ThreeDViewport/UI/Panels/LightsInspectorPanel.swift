@@ -36,6 +36,10 @@ struct LightsInspectorPanel: View {
     @ObservedObject var renderSettings:   RenderSettings
     @ObservedObject var clipboard:        CoordinateClipboard
     let camera: CameraController
+    /// Fires after a Paste or Z click on a light's Position/Target.  AppDelegate
+    /// wires it to conditionally stamp a light keyframe at the current playhead
+    /// for the given light index (only if its track already has keyframes).
+    var onAutoStampLight: (Int) -> Void = { _ in }
 
     var body: some View {
         ScrollView {
@@ -303,7 +307,8 @@ struct LightsInspectorPanel: View {
                             onPaste:  { if let p = clipboard.position { lightManager.lights[i].position = p } },
                             canPaste: clipboard.position != nil,
                             onZero:   { lightManager.lights[i].position = .zero },
-                            canZero:  true)
+                            canZero:  true,
+                            onAutoStamp: { onAutoStampLight(i) })
                     }
                 }
             }
@@ -338,7 +343,8 @@ struct LightsInspectorPanel: View {
                             onPaste:  { if let p = clipboard.position { lightManager.lights[i].target = p } },
                             canPaste: clipboard.position != nil,
                             onZero:   { lightManager.lights[i].target = .zero },
-                            canZero:  true)
+                            canZero:  true,
+                            onAutoStamp: { onAutoStampLight(i) })
                     }
                 }
             }

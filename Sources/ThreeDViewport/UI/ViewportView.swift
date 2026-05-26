@@ -243,6 +243,14 @@ final class ViewportView: MTKView {
             self.needsDisplay = true
             self.onCameraEdited?()
         }
+        // Conditional auto-stamp after Paste/Z on Position or Target: stamp only
+        // when the camera track already has keyframes.
+        cameraPanelState.onAutoStamp = { [weak self] in
+            guard let self,
+                  let track = self.camera.keyframeTrack,
+                  !track.keyframes.isEmpty else { return }
+            self.addCameraKeyframeFromPanel()
+        }
 
         // Sync renderSettings → renderer whenever toggles change
         colorModeCancellable = renderSettings.$colorMode.sink { [weak self] value in

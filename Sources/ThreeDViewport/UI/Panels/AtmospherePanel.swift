@@ -28,6 +28,10 @@ struct AtmospherePanel: View {
     var onClearFog:       () -> Void = {}
     var onStampParticles: () -> Void = {}
     var onClearParticles: () -> Void = {}
+    /// Conditional auto-stamps for the Position groups (fired after Paste/Z).
+    /// AppDelegate wires these to stamp only when the relevant track is non-empty.
+    var onAutoStampFog:       () -> Void = {}
+    var onAutoStampParticles: () -> Void = {}
 
     private var fogKeyCount: Int { fog.keyframeTrack?.keyframes.count ?? 0 }
 
@@ -111,7 +115,8 @@ struct AtmospherePanel: View {
                     VStack(alignment: .leading, spacing: 0) {
                         Text("Fog Volume").font(.caption2).foregroundColor(.secondary).padding(.top, 6)
                         AtmoDetailControls(source: fog, varianceKP: \.variance,
-                                           positionKP: \.position, sizeKP: \.size, clipboard: clipboard)
+                                           positionKP: \.position, sizeKP: \.size, clipboard: clipboard,
+                                           onAutoStampPosition: onAutoStampFog)
                         FogSliderRow(label: "Quality", value: $fog.raymarchSteps, range: 8...96, format: "%.0f")
 
                         Divider().padding(.vertical, 8)
@@ -119,7 +124,8 @@ struct AtmospherePanel: View {
                         Text("Weather Emitter").font(.caption2).foregroundColor(.secondary)
                         if let fx = particleManager.selected {
                             AtmoDetailControls(source: fx, varianceKP: \.variance,
-                                               positionKP: \.position, sizeKP: \.size, clipboard: clipboard)
+                                               positionKP: \.position, sizeKP: \.size, clipboard: clipboard,
+                                               onAutoStampPosition: onAutoStampParticles)
                             EmitterAdvancedControls(emitter: fx)
                         }
                     }
@@ -200,6 +206,9 @@ private struct AtmoDetailControls<Source: ObservableObject>: View {
     let positionKP: ReferenceWritableKeyPath<Source, SIMD3<Float>>
     let sizeKP:     ReferenceWritableKeyPath<Source, SIMD3<Float>>
     @ObservedObject var clipboard: CoordinateClipboard
+    /// Fires after a Paste or Z on this section's Position group.  Wired by
+    /// AtmospherePanel to the source-appropriate conditional stamp callback.
+    var onAutoStampPosition: () -> Void = {}
 
     private func fbind<V>(_ kp: ReferenceWritableKeyPath<Source, V>) -> Binding<V> {
         Binding(get: { source[keyPath: kp] }, set: { source[keyPath: kp] = $0 })
@@ -218,7 +227,8 @@ private struct AtmoDetailControls<Source: ObservableObject>: View {
                     onPaste:  { if let p = clipboard.position { source[keyPath: positionKP] = p } },
                     canPaste: clipboard.position != nil,
                     onZero:   { source[keyPath: positionKP] = .zero },
-                    canZero:  true)
+                    canZero:  true,
+                    onAutoStamp: { onAutoStampPosition() })
             }
             FogSliderRow(label: "X", value: fbind(positionKP).x, range: -20...20, format: "%.1f")
             FogSliderRow(label: "Y", value: fbind(positionKP).y, range: -20...20, format: "%.1f")

@@ -53,7 +53,8 @@ struct ModelInspectorPanel: View {
                     onPaste:  { if let p = clipboard.position { state.position = p } },
                     canPaste: state.canEditPosition && clipboard.position != nil,
                     onZero:   { state.position = .zero },
-                    canZero:  state.canEditPosition)
+                    canZero:  state.canEditPosition,
+                    onAutoStamp: { state.onAutoStamp?() })
             }
             SliderRow(label: "X", value: $state.position.x, range: -100...100, format: "%.2f")
                 .disabled(!state.canEditPosition)
@@ -76,7 +77,8 @@ struct ModelInspectorPanel: View {
                     onPaste:  { if let r = clipboard.rotation { state.rotation = r } },
                     canPaste: state.canEditRotation && clipboard.rotation != nil,
                     onZero:   { state.rotation = .zero },
-                    canZero:  state.canEditRotation)
+                    canZero:  state.canEditRotation,
+                    onAutoStamp: { state.onAutoStamp?() })
             }
             SliderRow(label: "X", value: $state.rotation.x, range: -180...180, format: "%.1f")
                 .disabled(!state.canEditRotation)

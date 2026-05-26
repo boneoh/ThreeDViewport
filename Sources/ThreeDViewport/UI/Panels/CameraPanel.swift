@@ -30,6 +30,10 @@ final class CameraPanelState: ObservableObject {
     var onPositionEdited:    ((SIMD3<Float>) -> Void)?
     var onTargetEdited:      ((SIMD3<Float>) -> Void)?
     var onFocalLengthEdited: ((Float) -> Void)?
+    /// Fires after a Paste or Z click on Position / Target.  AppDelegate wires it
+    /// to conditionally stamp a camera keyframe at the current playhead (only
+    /// when the camera track already has keyframes).
+    var onAutoStamp:         (() -> Void)?
 
     private var isUpdating   = false
     private var cancellables = Set<AnyCancellable>()
@@ -141,7 +145,8 @@ struct CameraPanel: View {
                         onPaste:  { if let p = clipboard.position { state.position = p } },
                         canPaste: clipboard.position != nil,
                         onZero:   { state.position = .zero },
-                        canZero:  true)
+                        canZero:  true,
+                        onAutoStamp: { state.onAutoStamp?() })
                 }
                 .padding(.bottom, 4)
                 SliderRow(label: "X", value: $state.position.x, range: -100...100, format: "%.2f")
@@ -159,7 +164,8 @@ struct CameraPanel: View {
                         onPaste:  { if let p = clipboard.position { state.target = p } },
                         canPaste: clipboard.position != nil,
                         onZero:   { state.target = .zero },
-                        canZero:  true)
+                        canZero:  true,
+                        onAutoStamp: { state.onAutoStamp?() })
                 }
                 .padding(.bottom, 4)
                 SliderRow(label: "X", value: $state.target.x, range: -100...100, format: "%.2f")

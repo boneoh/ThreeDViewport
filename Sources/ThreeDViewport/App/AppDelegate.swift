@@ -1676,7 +1676,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             backgroundConfig: viewport.backgroundConfig,
             renderSettings:   viewport.renderSettings,
             clipboard:        viewport.coordinateClipboard,
-            camera:           viewport.camera
+            camera:           viewport.camera,
+            // Conditional auto-stamp after Paste/Z on a light's Position/Target:
+            // stamp only when that light's track already has keyframes.
+            onAutoStampLight: { [weak viewport] i in
+                guard let vp = viewport,
+                      i < vp.lightManager.keyframeTracks.count,
+                      let track = vp.lightManager.keyframeTracks[i],
+                      !track.keyframes.isEmpty else { return }
+                vp.addLightKeyframeAtCurrentTime(forLightAt: i)
+            }
         )
 
         let hostingView = NSHostingView(rootView: inspectorView)
@@ -1821,6 +1830,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             onClearParticles: { [weak viewport] in
                 guard let vp = viewport else { return }
                 vp.clearParticleKeyframes(at: vp.particleManager.selectedIndex)
+            },
+            // Conditional auto-stamp after Paste/Z on Fog/Emitter Position: stamp
+            // only when the corresponding track already has keyframes.
+            onAutoStampFog: { [weak viewport] in
+                guard let vp = viewport,
+                      let track = vp.fogSettings.keyframeTrack,
+                      !track.keyframes.isEmpty else { return }
+                vp.addFogKeyframeAtCurrentTime()
+            },
+            onAutoStampParticles: { [weak viewport] in
+                guard let vp = viewport else { return }
+                let i = vp.particleManager.selectedIndex
+                guard i < vp.particleManager.emitters.count,
+                      let track = vp.particleManager.emitters[i].keyframeTrack,
+                      !track.keyframes.isEmpty else { return }
+                vp.addParticleKeyframeAtCurrentTime(forEmitterAt: i)
             })
         panel.contentView = NSHostingView(rootView: atmoView)
 
@@ -1977,6 +2002,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 world = obj.transform
             }
             return TransformMath.eulerFromMatrix(world)
+        }
+
+        // Conditional auto-stamp: after a Paste/Z on Position or Rotation, stamp
+        // an object/group keyframe at the current playhead — but only if the
+        // relevant track already has keyframes (so static setup never auto-keys).
+        state.onAutoStamp = { [weak viewport] in
+            guard let viewport,
+                  let selected = viewport.sceneManager.selectedObject else { return }
+            if let gid = selected.groupID {
+                guard let track = viewport.sceneManager.groupKeyframeTracks[gid],
+                      !track.keyframes.isEmpty else { return }
+                viewport.addGroupKeyframeAtCurrentTime(for: gid)
+            } else {
+                guard let track = selected.keyframeTrack,
+                      !track.keyframes.isEmpty else { return }
+                viewport.addKeyframeAtCurrentTime(forObjectAt: viewport.sceneManager.selectedIndex)
+            }
         }
 
         // Group rotate — pivot every root part around the anchor's world position

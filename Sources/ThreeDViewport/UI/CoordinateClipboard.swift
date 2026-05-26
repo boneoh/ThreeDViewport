@@ -26,6 +26,10 @@ struct CoordCopyPasteButtons: View {
     /// the associated coordinates to zero.
     var onZero:   (() -> Void)? = nil
     var canZero:  Bool          = false   // ignored when onZero == nil
+    /// Optional callback fired AFTER Paste or Zero (never Copy).  Inspectors use
+    /// it to auto-stamp a keyframe at the current playhead when the relevant track
+    /// already has keyframes — the conditional check lives in AppDelegate.
+    var onAutoStamp: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 10) {
@@ -35,7 +39,7 @@ struct CoordCopyPasteButtons: View {
             .buttonStyle(.borderless)
             .help("Copy these coordinates")
 
-            Button(action: onPaste) {
+            Button(action: { onPaste(); onAutoStamp?() }) {
                 Image(systemName: "doc.on.clipboard")
                     .foregroundColor(canPaste ? .editableBlue : .gray)
             }
@@ -44,7 +48,7 @@ struct CoordCopyPasteButtons: View {
             .help("Paste copied coordinates")
 
             if let onZero {
-                Button(action: onZero) {
+                Button(action: { onZero(); onAutoStamp?() }) {
                     Text("Z")
                         .fontWeight(.semibold)
                         .foregroundColor(canZero ? .editableBlue : .gray)

@@ -48,6 +48,10 @@ final class ModelInspectorState: ObservableObject {
     /// Rotates a grouped selection so the anchor's world rotation becomes the given
     /// Euler — pivots every root around the anchor's world position.  Wired by AppDelegate.
     var setGroupWorldRotation: ((SceneObject, SIMD3<Float>) -> Void)?
+    /// Fires after a Paste or Z click on Position/Rotation.  AppDelegate wires it
+    /// to conditionally stamp an object/group keyframe at the current playhead
+    /// (only if the relevant track already has keyframes).
+    var onAutoStamp:           (() -> Void)?
 
     // ── Private ───────────────────────────────────────────────────────────────
     private var targets:    [SceneObject] = []
