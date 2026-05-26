@@ -216,7 +216,9 @@ private struct AtmoDetailControls<Source: ObservableObject>: View {
                 CoordCopyPasteButtons(
                     onCopy:   { clipboard.position = source[keyPath: positionKP] },
                     onPaste:  { if let p = clipboard.position { source[keyPath: positionKP] = p } },
-                    canPaste: clipboard.position != nil)
+                    canPaste: clipboard.position != nil,
+                    onZero:   { source[keyPath: positionKP] = .zero },
+                    canZero:  true)
             }
             FogSliderRow(label: "X", value: fbind(positionKP).x, range: -20...20, format: "%.1f")
             FogSliderRow(label: "Y", value: fbind(positionKP).y, range: -20...20, format: "%.1f")

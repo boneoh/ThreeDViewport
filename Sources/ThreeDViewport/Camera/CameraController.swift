@@ -48,9 +48,18 @@ final class CameraController {
     /// to the same limits as zoom / orbit so the camera stays well-conditioned.
     /// Used by the Camera inspector's editable Position field.
     func setEyePosition(_ eye: SIMD3<Float>) {
-        let d    = eye - target
-        let dist = simd_length(d)
-        guard dist > 1e-4 else { return }      // can't aim from the target itself
+        var d    = eye - target
+        var dist = simd_length(d)
+        if dist < 1e-4 {
+            // Eye coincides with target (e.g. clicking "Z" on Position when target
+            // is at the origin) — push target away along world −Z by the current
+            // orbit distance so the back-solve is well-defined.  Net effect: the
+            // eye lands where asked and the camera ends up looking along −Z.
+            let fallback: Float = distance > 1e-4 ? distance : 5.0
+            target = eye + SIMD3<Float>(0, 0, -fallback)
+            d      = eye - target                  // = (0, 0, fallback)
+            dist   = fallback
+        }
         distance = min(5000.0, max(0.05, dist))
         var p    = asin(max(-1, min(1, d.y / dist)))
         p        = max(-Float.pi / 2 + 0.01, min(Float.pi / 2 - 0.01, p))
