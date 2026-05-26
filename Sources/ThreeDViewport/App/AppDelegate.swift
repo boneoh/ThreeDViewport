@@ -447,6 +447,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             }
             .store(in: &settingsCancellables)
 
+        // Selecting a different light in the Lights & Background inspector
+        // (or anywhere else that mutates `selectedIndex`) switches the viewport
+        // into Light mode and re-emits onControlModeChanged with the new index,
+        // so the Timeline Editor lane lines up with the inspector's selection.
+        //
+        // `@Published` fires in willSet — `selectedIndex` is still the OLD value
+        // when the sink runs synchronously.  `receive(on: .main)` defers to the
+        // next run-loop tick so `currentTrackRef` reads the settled NEW value.
+        viewport.lightManager.$selectedIndex
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak viewport] _ in viewport?.setControlMode(.light) }
+            .store(in: &settingsCancellables)
+
         // FeedbackSettings covers all feedback panel controls.
         viewport.feedbackSettings.objectWillChange
             .sink { [weak self] in self?.markDirty() }
@@ -1294,6 +1308,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             probePosition:       viewport.probeConfig.position,
             includeBackground:   options.includeBackground,
             backgroundIntensity: viewport.backgroundConfig.environmentIntensity,
+            backgroundHorizon:   viewport.backgroundConfig.environmentHorizon,
             device:              device,
             sceneManager:        viewport.sceneManager,
             lightManager:        viewport.lightManager,
@@ -1688,7 +1703,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             }
         )
 
-        let hostingView = NSHostingView(rootView: inspectorView)
+        let hostingView = FirstClickHostingView(rootView: inspectorView)
         panel.contentView = hostingView
 
         // Position top-right of the main window if possible.
@@ -1703,6 +1718,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
 
         lightsPanel = panel
+
+        // When the panel becomes key, switch the viewport to Light mode.  The
+        // resulting onControlModeChanged carries .light(lightManager.selectedIndex),
+        // so the Timeline Editor lane lines up with the currently-selected light.
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification,
+            object:  panel,
+            queue:   .main
+        ) { [weak viewport] _ in
+            viewport?.setControlMode(.light)
+        }
+
         panel.makeKeyAndOrderFront(nil)
         print("[DEBUG] AppDelegate: lights inspector panel opened")
     }
@@ -1734,7 +1761,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             settings:  viewport.feedbackSettings,
             processor: viewport.feedbackProcessor
         )
-        panel.contentView = NSHostingView(rootView: feedbackView)
+        panel.contentView = FirstClickHostingView(rootView: feedbackView)
 
         if let win = window {
             let winFrame  = win.frame
@@ -1775,7 +1802,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.hidesOnDeactivate  = false
 
         let gradeView = ColorGradePanel(settings: viewport.colorGradeSettings)
-        panel.contentView = NSHostingView(rootView: gradeView)
+        panel.contentView = FirstClickHostingView(rootView: gradeView)
 
         if let win = window {
             let winFrame  = win.frame
@@ -1847,7 +1874,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                       !track.keyframes.isEmpty else { return }
                 vp.addParticleKeyframeAtCurrentTime(forEmitterAt: i)
             })
-        panel.contentView = NSHostingView(rootView: atmoView)
+        panel.contentView = FirstClickHostingView(rootView: atmoView)
 
         if let win = window {
             let winFrame  = win.frame
@@ -1922,7 +1949,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             },
             onRefresh: { [weak viewport] in viewport?.refreshCameraPanelState() }
         )
-        panel.contentView = NSHostingView(rootView: cameraView)
+        panel.contentView = FirstClickHostingView(rootView: cameraView)
         viewport.refreshCameraPanelState()   // seed values so the panel shows them immediately
 
         if let win = window {
@@ -1937,6 +1964,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
 
         cameraPanel = panel
+
+        // When the panel becomes key, switch the viewport to Camera mode (also
+        // highlights the camera lane in the Timeline Editor via onControlModeChanged).
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification,
+            object:  panel,
+            queue:   .main
+        ) { [weak viewport] _ in
+            viewport?.setControlMode(.camera)
+        }
+
         panel.makeKeyAndOrderFront(nil)
         print("[DEBUG] AppDelegate: camera panel opened")
     }
@@ -2083,7 +2121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.level                  = .normal    // don't float above other applications
         panel.hidesOnDeactivate  = false
 
-        panel.contentView = NSHostingView(rootView: ModelInspectorPanel(
+        panel.contentView = FirstClickHostingView(rootView: ModelInspectorPanel(
             state: state, clipboard: viewport.coordinateClipboard))
 
         if let win = window {
@@ -2147,7 +2185,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.level                  = .normal    // don't float above other applications
         panel.hidesOnDeactivate  = false
 
-        panel.contentView = NSHostingView(rootView: ProbeInspectorPanel(
+        panel.contentView = FirstClickHostingView(rootView: ProbeInspectorPanel(
             probe: viewport.probeConfig, clipboard: viewport.coordinateClipboard))
 
         if let win = window {

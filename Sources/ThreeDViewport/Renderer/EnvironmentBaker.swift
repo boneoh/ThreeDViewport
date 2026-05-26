@@ -33,6 +33,7 @@ enum EnvironmentBaker {
                      probePosition: SIMD3<Float>,
                      includeBackground: Bool,
                      backgroundIntensity: Float,
+                     backgroundHorizon:   Float,
                      device: MTLDevice,
                      sceneManager: SceneManager,
                      lightManager: LightManager,
@@ -143,7 +144,7 @@ enum EnvironmentBaker {
                     inverseViewProjection: simd_inverse(vp),
                     cameraPos:             SIMD4(probePosition, 1),
                     intensity:             backgroundIntensity,
-                    horizon:               0,   // bake the true environment (no cosmetic shift)
+                    horizon:               backgroundHorizon,   // WYSIWYG with the viewport
                     useEquirect:           eq != nil ? 1 : 0,
                     colorMode:             UInt32(RenderColorMode.color.rawValue))
                 enc.setFragmentBytes(&sky, length: MemoryLayout<SkyboxUniforms>.stride, index: 0)
