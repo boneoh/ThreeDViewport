@@ -22,10 +22,14 @@ final class CameraPanelState: ObservableObject {
     @Published var position: SIMD3<Float> = .zero
     /// Camera look-at target in world space (editable).
     @Published var target:   SIMD3<Float> = .zero
+    /// 35mm-full-frame equivalent focal length (mm).  Derived from fovYRadians via
+    /// `fl = 12 / tan(fovY/2)`; editing writes back through `onFocalLengthEdited`.
+    @Published var focalLength: Float    = 50
 
-    /// Propagate Position / Target edits back to the active camera (wired by ViewportView).
-    var onPositionEdited: ((SIMD3<Float>) -> Void)?
-    var onTargetEdited:   ((SIMD3<Float>) -> Void)?
+    /// Propagate Position / Target / FOV edits back to the active camera (wired by ViewportView).
+    var onPositionEdited:    ((SIMD3<Float>) -> Void)?
+    var onTargetEdited:      ((SIMD3<Float>) -> Void)?
+    var onFocalLengthEdited: ((Float) -> Void)?
 
     private var isUpdating   = false
     private var cancellables = Set<AnyCancellable>()
@@ -34,11 +38,14 @@ final class CameraPanelState: ObservableObject {
 
     /// Pulls live camera position/target in, suppressing the write-back sink and
     /// skipping no-op updates so it can run on a timer without fighting edits.
-    func refresh(position newPosition: SIMD3<Float>, target newTarget: SIMD3<Float>) {
+    func refresh(position newPosition: SIMD3<Float>,
+                 target   newTarget:   SIMD3<Float>,
+                 focalLength newFocalLength: Float) {
         isUpdating = true
         defer { isUpdating = false }
         if newPosition != position { position = newPosition }
         if newTarget   != target   { target   = newTarget }
+        if abs(newFocalLength - focalLength) > 1e-3 { focalLength = newFocalLength }
     }
 
     private func setupSinks() {
@@ -51,6 +58,11 @@ final class CameraPanelState: ObservableObject {
             .sink { [weak self] v in
                 guard let self, !isUpdating else { return }
                 onTargetEdited?(v)
+            }.store(in: &cancellables)
+        $focalLength.dropFirst()
+            .sink { [weak self] v in
+                guard let self, !isUpdating else { return }
+                onFocalLengthEdited?(v)
             }.store(in: &cancellables)
     }
 }
@@ -127,7 +139,9 @@ struct CameraPanel: View {
                     CoordCopyPasteButtons(
                         onCopy:   { clipboard.position = state.position },
                         onPaste:  { if let p = clipboard.position { state.position = p } },
-                        canPaste: clipboard.position != nil)
+                        canPaste: clipboard.position != nil,
+                        onZero:   { state.position = .zero },
+                        canZero:  true)
                 }
                 .padding(.bottom, 4)
                 SliderRow(label: "X", value: $state.position.x, range: -100...100, format: "%.2f")
@@ -143,12 +157,22 @@ struct CameraPanel: View {
                     CoordCopyPasteButtons(
                         onCopy:   { clipboard.position = state.target },
                         onPaste:  { if let p = clipboard.position { state.target = p } },
-                        canPaste: clipboard.position != nil)
+                        canPaste: clipboard.position != nil,
+                        onZero:   { state.target = .zero },
+                        canZero:  true)
                 }
                 .padding(.bottom, 4)
                 SliderRow(label: "X", value: $state.target.x, range: -100...100, format: "%.2f")
                 SliderRow(label: "Y", value: $state.target.y, range: -100...100, format: "%.2f")
                 SliderRow(label: "Z", value: $state.target.z, range: -100...100, format: "%.2f")
+
+                Divider().padding(.vertical, 14)
+
+                // ── Focal Length (35mm-full-frame equivalent) ────────────────
+                Text("Focal Length").font(.headline)
+                    .padding(.bottom, 4)
+                SliderRow(label: "mm", value: $state.focalLength,
+                          range: 12...140, format: "%.1f")
             }
             .padding(14)
         }

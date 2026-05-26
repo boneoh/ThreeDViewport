@@ -14,14 +14,17 @@ struct ProbeInspectorPanel: View {
 
                 HStack {
                     Image(systemName: "scope").foregroundColor(.accentColor)
-                    Text("Bake Probe").font(.headline)
+                    Text("Probe").font(.headline)
                     Spacer()
                 }
 
                 Toggle(isOn: $probe.isVisible) {
-                    Text("Show gizmo in viewport").font(.caption)
+                    Text("Show gizmo in viewport")
+                        .font(.caption)
+                        .foregroundColor(probe.isVisible ? .editableBlue : .primary)
                 }
                 .toggleStyle(.switch)
+                .tint(.editableBlue)
 
                 Divider()
 
@@ -31,13 +34,15 @@ struct ProbeInspectorPanel: View {
                     CoordCopyPasteButtons(
                         onCopy:   { clipboard.position = probe.position },
                         onPaste:  { if let p = clipboard.position { probe.position = p } },
-                        canPaste: clipboard.position != nil)
+                        canPaste: clipboard.position != nil,
+                        onZero:   { probe.position = .zero },
+                        canZero:  true)
                 }
                 SliderRow(label: "X", value: $probe.position.x, range: -100...100, format: "%.2f")
                 SliderRow(label: "Y", value: $probe.position.y, range: -100...100, format: "%.2f")
                 SliderRow(label: "Z", value: $probe.position.z, range: -100...100, format: "%.2f")
 
-                Text("The probe marks where the scene is captured from when baking "
+                Text("The probe marks where the scene is captured from when exporting "
                     + "an environment HDR.  It is never included in renders or exports.")
                     .font(.caption2).foregroundStyle(.secondary)
             }

@@ -322,6 +322,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             layout.atmospherePanel = WindowFrameData(x: f.origin.x, y: f.origin.y,
                                                      w: f.size.width, h: f.size.height)
         }
+        if let panel = probeInspectorPanel, panel.isVisible {
+            let f = panel.frame
+            layout.probeInspectorPanel = WindowFrameData(x: f.origin.x, y: f.origin.y,
+                                                         w: f.size.width, h: f.size.height)
+        }
         // Atmosphere section expand/collapse (saved regardless of panel visibility).
         if let vp = viewportView {
             layout.atmosphereFogExpanded      = vp.atmospherePanelState.fogExpanded
@@ -404,6 +409,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             if atmospherePanel == nil { showAtmospherePanel(self) }
             atmospherePanel?.setFrame(
                 NSRect(x: af.x, y: af.y, width: af.w, height: af.h), display: true)
+        }
+
+        // Probe inspector — open and position if it was visible
+        if let pf = layout.probeInspectorPanel {
+            if probeInspectorPanel == nil { showProbeInspector(self) }
+            probeInspectorPanel?.setFrame(
+                NSRect(x: pf.x, y: pf.y, width: pf.w, height: pf.h), display: true)
         }
     }
 
@@ -1432,6 +1444,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             p.orderOut(nil)
             panelsHiddenByMiniaturize.insert("atmosphere")
         }
+        if let p = probeInspectorPanel, p.isVisible {
+            p.orderOut(nil)
+            panelsHiddenByMiniaturize.insert("probeInspector")
+        }
         if let wc = timelineEditorWC, wc.window?.isVisible == true {
             wc.window?.orderOut(nil)
             panelsHiddenByMiniaturize.insert("timeline")
@@ -1483,6 +1499,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if panelsHiddenByMiniaturize.contains("camera")         { cameraPanel?.makeKeyAndOrderFront(nil) }
         if panelsHiddenByMiniaturize.contains("modelInspector") { modelInspectorPanel?.makeKeyAndOrderFront(nil) }
         if panelsHiddenByMiniaturize.contains("atmosphere")     { atmospherePanel?.makeKeyAndOrderFront(nil) }
+        if panelsHiddenByMiniaturize.contains("probeInspector") { probeInspectorPanel?.makeKeyAndOrderFront(nil) }
         if panelsHiddenByMiniaturize.contains("timeline")       { timelineEditorWC?.showWindow(nil) }
         if !panelsHiddenByMiniaturize.isEmpty {
             print("[DEBUG] AppDelegate: restored panels: "
@@ -1641,7 +1658,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         guard let viewport = viewportView else { return }
 
-        let panel = NSPanel(
+        let panel = KeyForwardingPanel(
             contentRect: NSRect(x: 0, y: 0, width: 296, height: 720),
             styleMask:   [.titled, .closable, .miniaturizable, .resizable, .utilityWindow, .nonactivatingPanel],
             backing:     .buffered,
@@ -1650,6 +1667,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.title         = "Lights & Background"
         panel.isFloatingPanel = true
         panel.becomesKeyOnlyIfNeeded = false
+        panel.forwardTarget          = viewport   // unhandled keys → viewport
+        panel.level                  = .normal    // don't float above other applications
         panel.hidesOnDeactivate = false
 
         let inspectorView = LightsInspectorPanel(
@@ -1689,7 +1708,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         guard let viewport = viewportView else { return }
 
-        let panel = NSPanel(
+        let panel = KeyForwardingPanel(
             contentRect: NSRect(x: 0, y: 0, width: 296, height: 280),
             styleMask:   [.titled, .closable, .miniaturizable, .resizable, .utilityWindow, .nonactivatingPanel],
             backing:     .buffered,
@@ -1698,6 +1717,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.title              = "Feedback"
         panel.isFloatingPanel    = true
         panel.becomesKeyOnlyIfNeeded = false
+        panel.forwardTarget          = viewport   // unhandled keys → viewport
+        panel.level                  = .normal    // don't float above other applications
         panel.hidesOnDeactivate  = false
 
         let feedbackView = FeedbackPanelWrapper(
@@ -1731,7 +1752,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         guard let viewport = viewportView else { return }
 
-        let panel = NSPanel(
+        let panel = KeyForwardingPanel(
             contentRect: NSRect(x: 0, y: 0, width: 296, height: 200),
             styleMask:   [.titled, .closable, .miniaturizable, .resizable, .utilityWindow, .nonactivatingPanel],
             backing:     .buffered,
@@ -1740,6 +1761,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.title              = "Color Grade"
         panel.isFloatingPanel    = true
         panel.becomesKeyOnlyIfNeeded = false
+        panel.forwardTarget          = viewport   // unhandled keys → viewport
+        panel.level                  = .normal    // don't float above other applications
         panel.hidesOnDeactivate  = false
 
         let gradeView = ColorGradePanel(settings: viewport.colorGradeSettings)
@@ -1771,7 +1794,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         guard let viewport = viewportView else { return }
 
-        let panel = NSPanel(
+        let panel = KeyForwardingPanel(
             contentRect: NSRect(x: 0, y: 0, width: 296, height: 280),
             styleMask:   [.titled, .closable, .miniaturizable, .resizable, .utilityWindow, .nonactivatingPanel],
             backing:     .buffered,
@@ -1780,6 +1803,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.title              = "Atmosphere"
         panel.isFloatingPanel    = true
         panel.becomesKeyOnlyIfNeeded = false
+        panel.forwardTarget          = viewport   // unhandled keys → viewport
+        panel.level                  = .normal    // don't float above other applications
         panel.hidesOnDeactivate  = false
 
         let atmoView = AtmospherePanel(
@@ -1850,7 +1875,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         guard let viewport = viewportView else { return }
 
-        let panel = NSPanel(
+        let panel = KeyForwardingPanel(
             contentRect: NSRect(x: 0, y: 0, width: 296, height: 260),
             styleMask:   [.titled, .closable, .miniaturizable, .resizable, .utilityWindow, .nonactivatingPanel],
             backing:     .buffered,
@@ -1859,6 +1884,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.title              = "Camera"
         panel.isFloatingPanel    = true
         panel.becomesKeyOnlyIfNeeded = false
+        panel.forwardTarget          = viewport   // unhandled keys → viewport
+        panel.level                  = .normal    // don't float above other applications
         panel.hidesOnDeactivate  = false
 
         let cameraView = CameraPanel(
@@ -1917,6 +1944,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             return SIMD3<Float>(t.x, t.y, t.z)
         }
 
+        // Group write — translate every root part of the anchor's group by the
+        // delta that lands the anchor at the requested world position.  Uses
+        // gt⁻¹ so the math is right even if a group animation has rotated the
+        // group.  Persists in obj.transform (saved like single-object edits).
+        state.setGroupWorldPosition = { [weak viewport] anchor, desiredWorld in
+            guard let sm = viewport?.sceneManager,
+                  let gid = anchor.groupID else { return }
+            let gt           = sm.groupTransforms[gid] ?? matrix_identity_float4x4
+            let world4       = gt * anchor.transform.columns.3
+            let currentWorld = SIMD3<Float>(world4.x, world4.y, world4.z)
+            let worldDelta   = desiredWorld - currentWorld
+            let localDelta4  = simd_inverse(gt)
+                             * SIMD4<Float>(worldDelta.x, worldDelta.y, worldDelta.z, 0)
+            for part in sm.objects(inGroup: gid) where part.parentIndex == nil {
+                let t = part.transform.columns.3
+                part.transform.columns.3 = SIMD4<Float>(t.x + localDelta4.x,
+                                                        t.y + localDelta4.y,
+                                                        t.z + localDelta4.z,
+                                                        1)
+            }
+        }
+
+        // World rotation (YXZ Euler degrees) — mirrors worldPosition: include the
+        // group transform if any, so the rotation field tracks group animation too.
+        state.worldRotation = { [weak viewport] obj in
+            let world: matrix_float4x4
+            if let sm = viewport?.sceneManager,
+               let gid = obj.groupID, let gt = sm.groupTransforms[gid] {
+                world = gt * obj.transform
+            } else {
+                world = obj.transform
+            }
+            return TransformMath.eulerFromMatrix(world)
+        }
+
+        // Group rotate — pivot every root part around the anchor's world position
+        // so the model spins as a rigid body in place.  Persists in obj.transform.
+        state.setGroupWorldRotation = { [weak viewport] anchor, desiredEuler in
+            guard let sm = viewport?.sceneManager,
+                  let gid = anchor.groupID else { return }
+            let gt           = sm.groupTransforms[gid] ?? matrix_identity_float4x4
+            let worldAnchor  = gt * anchor.transform
+            // Pivot at the anchor's current world position.
+            let P4           = worldAnchor.columns.3
+            let P            = SIMD3<Float>(P4.x, P4.y, P4.z)
+            // Delta rotation in world space = R_new × R_old⁻¹  (pure rotations).
+            let oldWorldR    = TransformMath.pureRotation(of: worldAnchor)
+            let newWorldR    = TransformMath.matrixFromEuler(desiredEuler)
+            let deltaR       = newWorldR * simd_inverse(oldWorldR)
+            // newRoot = gt⁻¹ · T(P) · ΔR · T(-P) · gt · oldRoot
+            let pivotXform   = TransformMath.translation(P)
+                             * deltaR
+                             * TransformMath.translation(-P)
+            let gtInv        = simd_inverse(gt)
+            for part in sm.objects(inGroup: gid) where part.parentIndex == nil {
+                let worldOld = gt * part.transform
+                let worldNew = pivotXform * worldOld
+                part.transform = gtInv * worldNew
+            }
+        }
+
         // Push current selection immediately.
         let selected = viewport.sceneManager.selectedObject
         let targets: [SceneObject]
@@ -1940,7 +2028,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             NSWorkspace.shared.activateFileViewerSelecting([url])
         }
 
-        let panel = NSPanel(
+        let panel = KeyForwardingPanel(
             contentRect: NSRect(x: 0, y: 0, width: 296, height: 440),
             styleMask:   [.titled, .closable, .miniaturizable, .resizable, .utilityWindow, .nonactivatingPanel],
             backing:     .buffered,
@@ -1949,6 +2037,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.title              = "Model Inspector"
         panel.isFloatingPanel    = true
         panel.becomesKeyOnlyIfNeeded = false
+        panel.forwardTarget          = viewport   // unhandled keys → viewport
+        panel.level                  = .normal    // don't float above other applications
         panel.hidesOnDeactivate  = false
 
         panel.contentView = NSHostingView(rootView: ModelInspectorPanel(
@@ -1966,6 +2056,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         modelInspectorState  = state
         modelInspectorPanel  = panel
+
+        // When the panel becomes key, align the viewport's control mode with the
+        // selection — group → Model, single non-grouped → Object.  setControlMode
+        // also fires onControlModeChanged, which the Timeline Editor uses to
+        // highlight the corresponding lane.
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification,
+            object:  panel,
+            queue:   .main
+        ) { [weak viewport] _ in
+            guard let viewport,
+                  let selected = viewport.sceneManager.selectedObject else { return }
+            let mode: ControlMode = (selected.groupID != nil) ? .model : .object
+            viewport.setControlMode(mode)
+        }
+
         panel.makeKeyAndOrderFront(nil)
         print("[DEBUG] AppDelegate: model inspector panel opened")
     }
@@ -1986,7 +2092,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let viewport = viewportView else { return }
         viewport.probeConfig.isVisible = true   // show the gizmo when the panel first opens
 
-        let panel = NSPanel(
+        let panel = KeyForwardingPanel(
             contentRect: NSRect(x: 0, y: 0, width: 296, height: 300),
             styleMask:   [.titled, .closable, .miniaturizable, .resizable, .utilityWindow, .nonactivatingPanel],
             backing:     .buffered,
@@ -1995,6 +2101,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.title              = "Probe"
         panel.isFloatingPanel    = true
         panel.becomesKeyOnlyIfNeeded = false
+        panel.forwardTarget          = viewport   // unhandled keys → viewport
+        panel.level                  = .normal    // don't float above other applications
         panel.hidesOnDeactivate  = false
 
         panel.contentView = NSHostingView(rootView: ProbeInspectorPanel(

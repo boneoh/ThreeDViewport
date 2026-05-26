@@ -229,7 +229,17 @@ final class ViewportView: MTKView {
         }
         cameraPanelState.onTargetEdited = { [weak self] v in
             guard let self else { return }
-            self.camera.target = v
+            self.camera.setTargetKeepingEye(v)   // re-aim, keep eye fixed (don't drag Position)
+            self.needsDisplay = true
+            self.onCameraEdited?()
+        }
+        cameraPanelState.onFocalLengthEdited = { [weak self] fl in
+            guard let self else { return }
+            // fovY = 2·atan(12/fl); clamp to the existing lens-zoom range (10°–90°).
+            let raw   = 2 * atan(12.0 / max(fl, 1))
+            let minFv = Float.pi / 18.0
+            let maxFv = Float.pi / 2.0
+            self.camera.fovYRadians = max(minFv, min(maxFv, raw))
             self.needsDisplay = true
             self.onCameraEdited?()
         }
@@ -1429,7 +1439,10 @@ final class ViewportView: MTKView {
     /// timer in CameraPanel while the panel is visible, so the read-only Position
     /// and editable Target track viewport moves.
     func refreshCameraPanelState() {
-        cameraPanelState.refresh(position: camera.eyePosition, target: camera.target)
+        let fl = 12.0 / tan(camera.fovYRadians / 2)
+        cameraPanelState.refresh(position:    camera.eyePosition,
+                                 target:      camera.target,
+                                 focalLength: fl)
     }
 
     // MARK: - Video Export
@@ -1630,7 +1643,8 @@ final class ViewportView: MTKView {
             }
 
         } else {
-            // Camera mode: axis-locked pan.
+            // Camera mode: axis-locked orbit around the fixed target (Target stays
+            // put, only Position moves).  Scene mode keeps its own scene-camera pan.
             if dragLockAxis == .none {
                 dragAccumX += dx
                 dragAccumY += dy
@@ -1639,15 +1653,13 @@ final class ViewportView: MTKView {
                 dragLockAxis = abs(dragAccumX) >= abs(dragAccumY) ? .horizontal : .vertical
             }
 
-            // Scene mode: pan the scene camera in the Director's screen plane so
-            // it tracks what the user sees.  Otherwise truck/pedestal as before.
             switch dragLockAxis {
             case .horizontal:
                 if sceneModeActive { panSceneCameraInDirectorPlane(dx: dx, dy: 0) }
-                else               { camera.pan(deltaX: -dx, deltaY: 0) }
+                else               { camera.orbit(deltaX: dx, deltaY: 0) }
             case .vertical:
                 if sceneModeActive { panSceneCameraInDirectorPlane(dx: 0, dy: dy) }
-                else               { camera.pan(deltaX: 0, deltaY: dy) }
+                else               { camera.orbit(deltaX: 0, deltaY: dy) }
             case .none:       return
             }
         }
@@ -1963,14 +1975,12 @@ final class ViewportView: MTKView {
                 // Shift+arrow behavior: dx>0 → free-look yaw +rotStep, dy>0 → +pitch.
                 camera.freeLook(deltaYaw: dxF * rotStep, deltaPitch: dyF * rotStep)
             } else {
-                // Truck / pedestal.  Sign convention matches the previous plain-arrow
-                // behavior: dx>0 (→) calls camera.pan(deltaX: -panStep, 0), and
-                // dx<0 (←) calls camera.pan(deltaX: +panStep, 0).
-                // Scene mode: pan the scene camera in the Director's screen plane.
+                // Plain arrow keys → orbit around the fixed target (Target stays put,
+                // only Position moves).  Scene mode keeps its own scene-camera pan.
                 if sceneModeActive {
                     panSceneCameraInDirectorPlane(dx: dxF * panStep, dy: dyF * panStep)
                 } else {
-                    camera.pan(deltaX: -dxF * panStep, deltaY: dyF * panStep)
+                    camera.orbit(deltaX: dxF * orbitKeyStep, deltaY: dyF * orbitKeyStep)
                 }
             }
 
@@ -2154,6 +2164,7 @@ final class ViewportView: MTKView {
     // panStep is passed to camera.pan() which applies its own sensitivity×distance scaling,
     // so the on-screen movement stays proportional to the current zoom level.
     private let panStep:       Float = 50.0             // camera pan pixels-equivalent per key
+    private let orbitKeyStep:  Float = Float.pi / 36.0 / 0.005   // 5° per key (camera.orbit sensitivity = 0.005)
     private let translateStep: Float = 0.05             // world-units per key (object)
     private let lightStep:     Float = Float.pi / 36.0  // 5° per key (light azimuth / elevation)
     private let rotStep:       Float = Float.pi / 36.0  // 5° per key (object/camera rotation)

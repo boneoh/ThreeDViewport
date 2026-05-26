@@ -301,7 +301,9 @@ struct LightsInspectorPanel: View {
                         CoordCopyPasteButtons(
                             onCopy:   { clipboard.position = lightManager.lights[i].position },
                             onPaste:  { if let p = clipboard.position { lightManager.lights[i].position = p } },
-                            canPaste: clipboard.position != nil)
+                            canPaste: clipboard.position != nil,
+                            onZero:   { lightManager.lights[i].position = .zero },
+                            canZero:  true)
                     }
                 }
             }
@@ -334,7 +336,9 @@ struct LightsInspectorPanel: View {
                         CoordCopyPasteButtons(
                             onCopy:   { clipboard.position = lightManager.lights[i].target },
                             onPaste:  { if let p = clipboard.position { lightManager.lights[i].target = p } },
-                            canPaste: clipboard.position != nil)
+                            canPaste: clipboard.position != nil,
+                            onZero:   { lightManager.lights[i].target = .zero },
+                            canZero:  true)
                     }
                 }
             }

@@ -15,6 +15,8 @@ struct ModelInspectorPanel: View {
                         Divider().padding(.vertical, 8)
                         positionSection
                         Divider().padding(.vertical, 8)
+                        rotationSection
+                        Divider().padding(.vertical, 8)
                         displaySection
                         Divider().padding(.vertical, 8)
                         materialSection
@@ -33,9 +35,9 @@ struct ModelInspectorPanel: View {
         }
         .frame(width: 280)
         .background(Color(NSColor.windowBackgroundColor))
-        // Keep the Position field tracking viewport moves of the selected object.
+        // Keep Position + Rotation fields tracking viewport moves of the selection.
         .onReceive(Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()) { _ in
-            state.refreshPosition()
+            state.refresh()
         }
     }
 
@@ -49,7 +51,9 @@ struct ModelInspectorPanel: View {
                 CoordCopyPasteButtons(
                     onCopy:   { clipboard.position = state.position },
                     onPaste:  { if let p = clipboard.position { state.position = p } },
-                    canPaste: state.canEditPosition && clipboard.position != nil)
+                    canPaste: state.canEditPosition && clipboard.position != nil,
+                    onZero:   { state.position = .zero },
+                    canZero:  state.canEditPosition)
             }
             SliderRow(label: "X", value: $state.position.x, range: -100...100, format: "%.2f")
                 .disabled(!state.canEditPosition)
@@ -57,10 +61,29 @@ struct ModelInspectorPanel: View {
                 .disabled(!state.canEditPosition)
             SliderRow(label: "Z", value: $state.position.z, range: -100...100, format: "%.2f")
                 .disabled(!state.canEditPosition)
-            if !state.canEditPosition {
-                Text("Copy works for any selection; editing is for a single root object.")
-                    .font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+
+    // MARK: - Rotation
+
+    private var rotationSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Rotation").font(.headline)
+                Spacer()
+                CoordCopyPasteButtons(
+                    onCopy:   { clipboard.rotation = state.rotation },
+                    onPaste:  { if let r = clipboard.rotation { state.rotation = r } },
+                    canPaste: state.canEditRotation && clipboard.rotation != nil,
+                    onZero:   { state.rotation = .zero },
+                    canZero:  state.canEditRotation)
             }
+            SliderRow(label: "X", value: $state.rotation.x, range: -180...180, format: "%.1f")
+                .disabled(!state.canEditRotation)
+            SliderRow(label: "Y", value: $state.rotation.y, range: -180...180, format: "%.1f")
+                .disabled(!state.canEditRotation)
+            SliderRow(label: "Z", value: $state.rotation.z, range: -180...180, format: "%.1f")
+                .disabled(!state.canEditRotation)
         }
     }
 

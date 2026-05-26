@@ -19,10 +19,14 @@ final class ModelInspectorState: ObservableObject {
     @Published var roughnessFactor: Float           = 0.5
     @Published var baseColor:       Color           = .white
     @Published var hasSelection:    Bool            = false
-    /// World-space position of the selection's first object.
+    /// World-space position of the selection's anchor (preferred-root) part.
     @Published var position:        SIMD3<Float>    = .zero
+    /// World-space Euler rotation (degrees, YXZ) of the anchor — for the sliders.
+    @Published var rotation:        SIMD3<Float>    = .zero
     /// Editing is allowed only for a single root object; copy works for any selection.
     @Published var canEditPosition: Bool            = false
+    /// Rotation editing mirrors the same selection rule as position.
+    @Published var canEditRotation: Bool            = false
 
     // ── Callbacks wired by AppDelegate ───────────────────────────────────────
     var onRebuildNormals: ((NormalMode, [SceneObject]) -> Void)?
@@ -34,9 +38,22 @@ final class ModelInspectorState: ObservableObject {
     /// would miss model/group animation, which lives in the group transform — not
     /// the object's own transform.
     var worldPosition:    ((SceneObject) -> SIMD3<Float>)?
+    /// Moves a grouped selection (multi-part model) so its anchor part lands at the
+    /// given world position — translates every root part of the group; FK children
+    /// follow via the per-frame hierarchy pass.  Wired by AppDelegate.
+    var setGroupWorldPosition: ((SceneObject, SIMD3<Float>) -> Void)?
+    /// Live world-space Euler rotation (degrees, YXZ) of the anchor as drawn.
+    /// Wired by AppDelegate; includes the group transform when present.
+    var worldRotation:    ((SceneObject) -> SIMD3<Float>)?
+    /// Rotates a grouped selection so the anchor's world rotation becomes the given
+    /// Euler — pivots every root around the anchor's world position.  Wired by AppDelegate.
+    var setGroupWorldRotation: ((SceneObject, SIMD3<Float>) -> Void)?
 
     // ── Private ───────────────────────────────────────────────────────────────
     private var targets:    [SceneObject] = []
+    /// The part used to read/write Position — preferred-root within the selection
+    /// (so the position shown is the model's overall position, not a child part's).
+    private var anchor:     SceneObject?
     private var isUpdating: Bool          = false
     private var cancellables = Set<AnyCancellable>()
 
@@ -62,8 +79,20 @@ final class ModelInspectorState: ObservableObject {
         let c = first.material.baseColorFactor
         baseColor = Color(red: Double(c.x), green: Double(c.y), blue: Double(c.z))
 
-        position        = worldPos(of: first)
-        canEditPosition = (newTargets.count == 1 && first.parentIndex == nil)
+        // Prefer a group root (parentIndex == nil) as the position anchor so the
+        // field shows the model's overall position, not an arbitrary child part.
+        anchor   = newTargets.first(where: { $0.parentIndex == nil }) ?? first
+        position = anchor.map { worldPos(of: $0) } ?? .zero
+        rotation = anchor.map { worldRot(of: $0) } ?? .zero
+
+        // Editing is allowed for a single non-grouped root (writes obj.transform),
+        // and for any uniform-group selection (translates / rotates the roots).
+        let allSameGroup        = first.groupID != nil
+                               && newTargets.allSatisfy { $0.groupID == first.groupID }
+        let singleNonGroupRoot  = newTargets.count == 1
+                               && first.parentIndex == nil && first.groupID == nil
+        canEditPosition = singleNonGroupRoot || allSameGroup
+        canEditRotation = canEditPosition
     }
 
     /// World position of `obj` as drawn (group transform × transform), via the
@@ -74,15 +103,24 @@ final class ModelInspectorState: ObservableObject {
         return SIMD3<Float>(t.x, t.y, t.z)
     }
 
-    /// Re-reads the selected object's live world position so the field tracks
-    /// viewport moves.  Suppresses the write-back sink and skips no-op updates.
-    func refreshPosition() {
-        guard hasSelection, let obj = targets.first else { return }
+    /// World rotation (YXZ Euler degrees) of `obj` as drawn, via the provider
+    /// wired by AppDelegate; falls back to decomposing the local transform.
+    private func worldRot(of obj: SceneObject) -> SIMD3<Float> {
+        if let wr = worldRotation { return wr(obj) }
+        return TransformMath.eulerFromMatrix(obj.transform)
+    }
+
+    /// Re-reads the anchor's live world position + rotation so the fields track
+    /// viewport moves.  Suppresses the write-back sinks and skips no-op updates.
+    func refresh() {
+        guard hasSelection, let obj = anchor else { return }
         let p = worldPos(of: obj)
         if p != position {
-            isUpdating = true
-            position   = p
-            isUpdating = false
+            isUpdating = true; position = p; isUpdating = false
+        }
+        let r = worldRot(of: obj)
+        if r != rotation {
+            isUpdating = true; rotation = r; isUpdating = false
         }
     }
 
@@ -142,12 +180,33 @@ final class ModelInspectorState: ObservableObject {
                 onRedraw?(); onDirty?()
             }.store(in: &cancellables)
 
-        // Position — write back only for a single root object (canEditPosition).
-        // Matches viewport object moves (set the transform's translation column).
+        // Position — non-grouped objects edit obj.transform directly; grouped
+        // selections delegate to AppDelegate (translates the group's root parts so
+        // the change persists in obj.transform like single-object edits do).
         $position.dropFirst()
             .sink { [weak self] v in
-                guard let self, !isUpdating, canEditPosition, let obj = targets.first else { return }
-                obj.transform.columns.3 = SIMD4<Float>(v.x, v.y, v.z, 1)
+                guard let self, !isUpdating, canEditPosition, let obj = anchor else { return }
+                if obj.groupID != nil {
+                    setGroupWorldPosition?(obj, v)
+                } else {
+                    obj.transform.columns.3 = SIMD4<Float>(v.x, v.y, v.z, 1)
+                }
+                onRedraw?(); onDirty?()
+            }.store(in: &cancellables)
+
+        // Rotation — non-grouped objects rebuild obj.transform's upper-3×3 from
+        // the new Euler (preserving scale + translation); grouped selections
+        // delegate to AppDelegate so the whole model rotates around the anchor.
+        $rotation.dropFirst()
+            .sink { [weak self] euler in
+                guard let self, !isUpdating, canEditRotation, let obj = anchor else { return }
+                if obj.groupID != nil {
+                    setGroupWorldRotation?(obj, euler)
+                } else {
+                    let s = TransformMath.scale(of: obj.transform)
+                    let R = TransformMath.matrixFromEuler(euler)
+                    obj.transform = TransformMath.applying(rotation: R, scale: s, to: obj.transform)
+                }
                 onRedraw?(); onDirty?()
             }.store(in: &cancellables)
     }

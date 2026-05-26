@@ -58,6 +58,15 @@ final class CameraController {
         yaw      = atan2(d.x, d.z)
     }
 
+    /// Sets the look-at `target` while keeping the eye where it currently sits —
+    /// re-aims the camera instead of translating the whole orbit rig.  Used by the
+    /// Camera inspector's Target sliders so editing Target doesn't drag Position.
+    func setTargetKeepingEye(_ newTarget: SIMD3<Float>) {
+        let savedEye = eyePosition
+        target = newTarget
+        setEyePosition(savedEye)               // back-solve yaw / pitch / distance
+    }
+
     /// Unit vector pointing from the camera toward the target (world space).
     var forwardVector: SIMD3<Float> {
         simd_normalize(target - eyePosition)
