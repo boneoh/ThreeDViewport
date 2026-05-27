@@ -75,7 +75,7 @@ struct LightUniforms {
 
 // ── Material uniforms (buffer index 4 — fragment only) ──────────────────────
 // Phase 8: PBR material factors + texture-presence flags + color mode.
-// Layout:
+// Layout (struct alignment = 16, so the final size is padded up):
 //   baseColorFactor     float4  16
 //   emissiveFactor      float4  16   (w = unused)
 //   metallicFactor      float    4
@@ -86,8 +86,8 @@ struct LightUniforms {
 //   hasEmissiveTex      uint     4
 //   colorMode           uint     4   (0 = greyscale, 1 = color, 2 = black + white)
 //   useFlatNormals      uint     4   (0 = vertex normals, 1 = compute from derivatives)
-//   ───────────────────────────────
-//   Total                       64
+//   opacity             float    4   (multiplied into output alpha)
+//   ───────────────────────────────  (+ 12 bytes pad → stride 80)
 struct MaterialUniforms {
     var baseColorFactor:     SIMD4<Float>
     var emissiveFactor:      SIMD4<Float>   // w unused
@@ -99,6 +99,7 @@ struct MaterialUniforms {
     var hasEmissiveTex:      UInt32
     var colorMode:           UInt32         // 0 = greyscale, 1 = color, 2 = black + white
     var useFlatNormals:      UInt32         // 0 = vertex normals, 1 = derivatives
+    var opacity:             Float          // multiplied into fragment alpha
 
     init() {
         baseColorFactor     = SIMD4<Float>(1, 1, 1, 1)
@@ -111,6 +112,7 @@ struct MaterialUniforms {
         hasEmissiveTex      = 0
         colorMode           = 0
         useFlatNormals      = 0
+        opacity             = 1.0
     }
 }
 

@@ -19,6 +19,13 @@ final class Renderer: NSObject, MTKViewDelegate {
     // masked off, so holdout objects write depth (occluding others) without
     // drawing themselves.  Uses the same depthStencilState.
     var holdoutPipelineState: MTLRenderPipelineState?
+    // Transparent pipeline — same shaders as the scene pipeline but with alpha
+    // blending on (src=sourceAlpha, dst=oneMinusSourceAlpha) and depth writes
+    // disabled.  Used for parts whose material.opacity < 1; drawn after opaque
+    // geometry, sorted back-to-front.  Alpha channel preserves dest.a so the
+    // feedback compositor still distinguishes geometry from background.
+    var transparentPipelineState: MTLRenderPipelineState?
+    var transparentDepthState:    MTLDepthStencilState?
 
     // Background gradient pipeline
     var backgroundPipelineState: MTLRenderPipelineState?
@@ -242,10 +249,40 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
         pipelineDesc.colorAttachments[0].writeMask = .all   // restore for any later reuse
 
+        // Transparent variant: same shaders, alpha blending on for the color
+        // channels (over-compositing), but alpha-channel write is configured
+        // to preserve the destination's existing alpha — so the feedback
+        // compositor still sees geometry pixels as a=1.
+        let tCA = pipelineDesc.colorAttachments[0]!
+        tCA.isBlendingEnabled                 = true
+        tCA.rgbBlendOperation                 = .add
+        tCA.sourceRGBBlendFactor              = .sourceAlpha
+        tCA.destinationRGBBlendFactor         = .oneMinusSourceAlpha
+        tCA.alphaBlendOperation               = .add
+        tCA.sourceAlphaBlendFactor            = .zero
+        tCA.destinationAlphaBlendFactor       = .one
+        do {
+            transparentPipelineState = try device.makeRenderPipelineState(descriptor: pipelineDesc)
+            print("[DEBUG] Renderer: transparent pipeline created")
+        } catch {
+            print("[DEBUG] Renderer: transparent pipeline failed — " + error.localizedDescription)
+        }
+        // Restore opaque blend state on the descriptor for any later reuse.
+        tCA.isBlendingEnabled = false
+
         let depthDesc = MTLDepthStencilDescriptor()
         depthDesc.depthCompareFunction = .less
         depthDesc.isDepthWriteEnabled  = true
         depthStencilState = device.makeDepthStencilState(descriptor: depthDesc)
+
+        // Transparent depth state — test, but don't write.  Lets transparent
+        // surfaces be occluded by opaque geometry in front, without writing
+        // depth values that would cause later transparent draws to fail
+        // self-occlusion when sorted back-to-front.
+        let tDepthDesc = MTLDepthStencilDescriptor()
+        tDepthDesc.depthCompareFunction = .less
+        tDepthDesc.isDepthWriteEnabled  = false
+        transparentDepthState = device.makeDepthStencilState(descriptor: tDepthDesc)
 
         // ── Background gradient pipeline ──────────────────────────────────────
         guard let bgVertFn = library.makeFunction(name: "background_vertex"),
@@ -843,10 +880,40 @@ final class Renderer: NSObject, MTKViewDelegate {
                     dummyTangent:      dummyTangentBuffer))
         }
 
-        if !visibleObjects.isEmpty, let ds = depthStencilState {
+        // Split into opaque (opacity == 1) and transparent (< 1) draw lists.
+        // Transparent parts are sorted back-to-front from the view camera so
+        // the over-compositing blend produces a correct result; without the
+        // sort, a near transparent surface drawn before a far one would
+        // composite the far one against background instead of the near one.
+        let opaqueObjects:      [SceneObject]
+        let transparentObjects: [SceneObject]
+        if visibleObjects.contains(where: { $0.material.opacity < 1.0 }) {
+            opaqueObjects = visibleObjects.filter { $0.material.opacity >= 1.0 }
+            let eye = viewCamera.eyePosition
+            transparentObjects = visibleObjects
+                .filter { $0.material.opacity < 1.0 }
+                .map { obj -> (SceneObject, Float) in
+                    let m: matrix_float4x4
+                    if let gid = obj.groupID, let gt = sceneManager.groupTransforms[gid] {
+                        m = gt * obj.transform
+                    } else {
+                        m = obj.transform
+                    }
+                    let p = SIMD3<Float>(m.columns.3.x, m.columns.3.y, m.columns.3.z)
+                    let d = p - eye
+                    return (obj, dot(d, d))
+                }
+                .sorted { $0.1 > $1.1 }     // farthest first
+                .map { $0.0 }
+        } else {
+            opaqueObjects      = visibleObjects
+            transparentObjects = []
+        }
+
+        if !opaqueObjects.isEmpty, let ds = depthStencilState {
             SceneGeometryEncoder.encode(
                 into:            encoder,
-                objects:         visibleObjects,
+                objects:         opaqueObjects,
                 groupTransforms: sceneManager.groupTransforms,
                 lightUniforms:   lightManager.buildLightUniforms(),
                 context: SceneGeometryEncoder.Context(
@@ -854,6 +921,27 @@ final class Renderer: NSObject, MTKViewDelegate {
                     eyePosition:       viewCamera.eyePosition,
                     pipelineState:     pipeline,
                     depthStencilState: ds,
+                    colorMode:         colorMode,
+                    isWireframe:       isWireframe,
+                    exposure:          colorGradeSettings?.exposure ?? 1.0,
+                    ibl:               ibl,
+                    dummyUV:           dummyUVBuffer,
+                    dummyTangent:      dummyTangentBuffer))
+        }
+
+        if !transparentObjects.isEmpty,
+           let tDS = transparentDepthState,
+           let tP  = transparentPipelineState {
+            SceneGeometryEncoder.encode(
+                into:            encoder,
+                objects:         transparentObjects,
+                groupTransforms: sceneManager.groupTransforms,
+                lightUniforms:   lightManager.buildLightUniforms(),
+                context: SceneGeometryEncoder.Context(
+                    viewProjection:    viewCamera.viewProjectionMatrix,
+                    eyePosition:       viewCamera.eyePosition,
+                    pipelineState:     tP,
+                    depthStencilState: tDS,
                     colorMode:         colorMode,
                     isWireframe:       isWireframe,
                     exposure:          colorGradeSettings?.exposure ?? 1.0,

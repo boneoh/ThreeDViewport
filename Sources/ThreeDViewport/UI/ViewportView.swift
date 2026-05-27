@@ -1501,7 +1501,9 @@ final class ViewportView: MTKView {
             fps:               fps,
             pipelineState:     pipeline,
             depthStencilState: depth,
-            holdoutPipelineState: r.holdoutPipelineState
+            holdoutPipelineState: r.holdoutPipelineState,
+            transparentPipelineState: r.transparentPipelineState,
+            transparentDepthState:    r.transparentDepthState
         ) else {
             print("[DEBUG] ViewportView: startExport — VideoExporter init returned nil")
             return

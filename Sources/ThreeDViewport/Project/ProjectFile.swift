@@ -155,7 +155,8 @@ final class ProjectFile {
                 normalMode:          obj.normalMode.rawValue,
                 metallicFactor:      obj.material.metallicFactor,
                 roughnessFactor:     obj.material.roughnessFactor,
-                baseColorFactor:     [bcf.x, bcf.y, bcf.z, bcf.w]
+                baseColorFactor:     [bcf.x, bcf.y, bcf.z, bcf.w],
+                opacity:             obj.material.opacity
             )
         }
 
@@ -692,6 +693,7 @@ final class ProjectFile {
                     saved.baseColorFactor[0], saved.baseColorFactor[1],
                     saved.baseColorFactor[2], saved.baseColorFactor[3])
             }
+            obj.material.opacity = saved.opacity
 
             // ── v4: restore baseTransform so manual repositioning survives reload ──
             if let m = decodeMatrix(saved.baseTransformMatrix) {

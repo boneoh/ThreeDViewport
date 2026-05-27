@@ -127,6 +127,7 @@ enum SceneGeometryEncoder {
         mu.hasMetallicRoughTex = mat.metallicRoughnessTexture != nil ? 1 : 0
         mu.hasEmissiveTex      = mat.emissiveTexture          != nil ? 1 : 0
         mu.colorMode           = UInt32(colorMode.rawValue)
+        mu.opacity             = mat.opacity
 
         // Flat shading: explicit user pick, or .auto on a file with no normals.
         let wantFlat = object.normalMode == .flat

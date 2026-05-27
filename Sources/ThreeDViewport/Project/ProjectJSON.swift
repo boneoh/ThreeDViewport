@@ -478,6 +478,9 @@ struct ObjectData: Codable {
     var metallicFactor:  Float   = -1
     var roughnessFactor: Float   = -1
     var baseColorFactor: [Float] = []
+    // User-controllable material opacity (0…1).  Default 1 → fully opaque, so
+    // older project files without the field load with no behavioural change.
+    var opacity:         Float   = 1
 
     // Custom decoder so older files without the v15 fields decode cleanly.
     init(from decoder: Decoder) throws {
@@ -492,13 +495,14 @@ struct ObjectData: Codable {
         metallicFactor       = (try? c.decode(Float.self,         forKey: .metallicFactor))      ?? -1
         roughnessFactor      = (try? c.decode(Float.self,         forKey: .roughnessFactor))     ?? -1
         baseColorFactor      = (try? c.decode([Float].self,       forKey: .baseColorFactor))     ?? []
+        opacity              = (try? c.decode(Float.self,         forKey: .opacity))             ?? 1
     }
 
     init(name: String, keyframes: [KeyframeData],
          baseTransformMatrix: [Float] = [], easingMode: Int = 0,
          isVisible: Bool = true, occludeWhenHidden: Bool = false, normalMode: Int = 0,
          metallicFactor: Float = -1, roughnessFactor: Float = -1,
-         baseColorFactor: [Float] = []) {
+         baseColorFactor: [Float] = [], opacity: Float = 1) {
         self.name                = name
         self.keyframes           = keyframes
         self.baseTransformMatrix = baseTransformMatrix
@@ -509,6 +513,7 @@ struct ObjectData: Codable {
         self.metallicFactor      = metallicFactor
         self.roughnessFactor     = roughnessFactor
         self.baseColorFactor     = baseColorFactor
+        self.opacity             = opacity
     }
 }
 

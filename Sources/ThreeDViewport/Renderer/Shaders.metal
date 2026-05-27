@@ -41,6 +41,7 @@ struct MaterialUniforms {
     uint    hasEmissiveTex;
     uint    colorMode;           // 0=greyscale, 1=color, 2=black+white
     uint    useFlatNormals;      // 0=vertex normals, 1=derivatives
+    float   opacity;             // multiplied into fragment alpha
 };
 
 struct BackgroundUniforms {
@@ -343,7 +344,11 @@ fragment float4 fragment_main(
         color = float3(1.0);
     }
 
-    return float4(color, 1.0);
+    // Output alpha = baseColorFactor.w × opacity.  For the opaque pipeline
+    // (blend off) this just writes a=1 as before; the transparent pipeline
+    // uses this alpha to blend against the destination.
+    float outAlpha = baseColor.a * matData.opacity;
+    return float4(color, outAlpha);
 }
 
 // ── Background gradient ───────────────────────────────────────────────────────

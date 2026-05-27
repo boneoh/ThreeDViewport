@@ -122,6 +122,11 @@ final class VideoExporter {
     // Holdout (depth-only) pipeline — shared from the Renderer so exports occlude
     // identically to the preview.  nil disables the holdout pass.
     private let holdoutPipelineState: MTLRenderPipelineState?
+    // Transparent (alpha-blended, no depth write) pipeline + matching depth state.
+    // Shared from the Renderer.  nil = transparent pass skipped (export will draw
+    // opacity<1 parts opaquely, matching pre-feature behaviour).
+    private let transparentPipelineState: MTLRenderPipelineState?
+    private let transparentDepthState:    MTLDepthStencilState?
     private let animDuration:      Double
     private let frameRate:         Double
     private let frameTimescale:    Int32   // CMTime timescale (rational, exact for NTSC)
@@ -195,7 +200,9 @@ final class VideoExporter {
           fps:               ExportFrameRate,
           pipelineState:     MTLRenderPipelineState,
           depthStencilState: MTLDepthStencilState,
-          holdoutPipelineState: MTLRenderPipelineState? = nil) {
+          holdoutPipelineState: MTLRenderPipelineState? = nil,
+          transparentPipelineState: MTLRenderPipelineState? = nil,
+          transparentDepthState:    MTLDepthStencilState?   = nil) {
 
         self.device            = device
         self.commandQueue      = commandQueue
@@ -205,7 +212,9 @@ final class VideoExporter {
         self.backgroundConfig  = backgroundConfig
         self.pipelineState     = pipelineState
         self.depthStencilState = depthStencilState
-        self.holdoutPipelineState = holdoutPipelineState
+        self.holdoutPipelineState     = holdoutPipelineState
+        self.transparentPipelineState = transparentPipelineState
+        self.transparentDepthState    = transparentDepthState
         self.animDuration      = timeline.duration
         self.frameRate         = fps.value
         self.frameTimescale    = fps.timescale
@@ -805,22 +814,74 @@ final class VideoExporter {
             }
 
             let visibleObjects = sceneManager.objects.filter { $0.isVisible }
-            SceneGeometryEncoder.encode(
-                into:            encoder,
-                objects:         visibleObjects,
-                groupTransforms: sceneManager.groupTransforms,
-                lightUniforms:   lightManager.buildLightUniforms(),
-                context: SceneGeometryEncoder.Context(
-                    viewProjection:    camera.viewProjectionMatrix,
-                    eyePosition:       camera.eyePosition,
-                    pipelineState:     pipelineState,
-                    depthStencilState: depthStencilState,
-                    colorMode:         colorMode,
-                    isWireframe:       isWireframe,
-                    exposure:          colorGradeSettings?.exposure ?? 1.0,
-                    ibl:               ibl,
-                    dummyUV:           dummyUVBuffer,
-                    dummyTangent:      dummyTangentBuffer))
+
+            // Split into opaque + transparent, sort transparent back-to-front
+            // from the camera so the over-compositing blend is correct.
+            // Mirrors the live Renderer's split so preview/export match.
+            let opaqueObjects:      [SceneObject]
+            let transparentObjects: [SceneObject]
+            if visibleObjects.contains(where: { $0.material.opacity < 1.0 }) {
+                opaqueObjects = visibleObjects.filter { $0.material.opacity >= 1.0 }
+                let eye = camera.eyePosition
+                transparentObjects = visibleObjects
+                    .filter { $0.material.opacity < 1.0 }
+                    .map { obj -> (SceneObject, Float) in
+                        let m: matrix_float4x4
+                        if let gid = obj.groupID, let gt = sceneManager.groupTransforms[gid] {
+                            m = gt * obj.transform
+                        } else {
+                            m = obj.transform
+                        }
+                        let p = SIMD3<Float>(m.columns.3.x, m.columns.3.y, m.columns.3.z)
+                        let d = p - eye
+                        return (obj, dot(d, d))
+                    }
+                    .sorted { $0.1 > $1.1 }
+                    .map { $0.0 }
+            } else {
+                opaqueObjects      = visibleObjects
+                transparentObjects = []
+            }
+
+            if !opaqueObjects.isEmpty {
+                SceneGeometryEncoder.encode(
+                    into:            encoder,
+                    objects:         opaqueObjects,
+                    groupTransforms: sceneManager.groupTransforms,
+                    lightUniforms:   lightManager.buildLightUniforms(),
+                    context: SceneGeometryEncoder.Context(
+                        viewProjection:    camera.viewProjectionMatrix,
+                        eyePosition:       camera.eyePosition,
+                        pipelineState:     pipelineState,
+                        depthStencilState: depthStencilState,
+                        colorMode:         colorMode,
+                        isWireframe:       isWireframe,
+                        exposure:          colorGradeSettings?.exposure ?? 1.0,
+                        ibl:               ibl,
+                        dummyUV:           dummyUVBuffer,
+                        dummyTangent:      dummyTangentBuffer))
+            }
+
+            if !transparentObjects.isEmpty,
+               let tP  = transparentPipelineState,
+               let tDS = transparentDepthState {
+                SceneGeometryEncoder.encode(
+                    into:            encoder,
+                    objects:         transparentObjects,
+                    groupTransforms: sceneManager.groupTransforms,
+                    lightUniforms:   lightManager.buildLightUniforms(),
+                    context: SceneGeometryEncoder.Context(
+                        viewProjection:    camera.viewProjectionMatrix,
+                        eyePosition:       camera.eyePosition,
+                        pipelineState:     tP,
+                        depthStencilState: tDS,
+                        colorMode:         colorMode,
+                        isWireframe:       isWireframe,
+                        exposure:          colorGradeSettings?.exposure ?? 1.0,
+                        ibl:               ibl,
+                        dummyUV:           dummyUVBuffer,
+                        dummyTangent:      dummyTangentBuffer))
+            }
 
             // ── Weather particles (hitEffectTime carries the frame time t) ─────
             drawParticleEffects(encoder: encoder, time: Double(hitEffectTime))

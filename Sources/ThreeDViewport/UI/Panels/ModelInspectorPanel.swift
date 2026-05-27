@@ -218,6 +218,11 @@ struct ModelInspectorPanel: View {
                       range: 0...1,
                       format: "%.2f")
 
+            SliderRow(label: "Opacity",
+                      value: $state.opacity,
+                      range: 0...1,
+                      format: "%.2f")
+
             LabeledColorRow(label: "Base Color", binding: $state.baseColor)
         }
     }

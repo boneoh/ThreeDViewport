@@ -21,4 +21,8 @@ struct PBRMaterial {
     // ── Emissive ──────────────────────────────────────────────────────────────
     var emissiveFactor:  SIMD3<Float> = SIMD3<Float>(0, 0, 0)
     var emissiveTexture: MTLTexture?
+
+    // User-controllable opacity (0 = fully transparent, 1 = fully opaque).
+    // Independent of baseColorFactor.w; the shader multiplies the two.
+    var opacity: Float = 1
 }

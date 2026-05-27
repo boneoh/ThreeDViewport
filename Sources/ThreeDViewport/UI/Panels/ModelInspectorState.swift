@@ -17,6 +17,7 @@ final class ModelInspectorState: ObservableObject {
     @Published var normalMode:      NormalMode      = .auto
     @Published var metallicFactor:  Float           = 0
     @Published var roughnessFactor: Float           = 0.5
+    @Published var opacity:         Float           = 1
     @Published var baseColor:       Color           = .white
     @Published var hasSelection:    Bool            = false
     /// World-space position of the selection's anchor (preferred-root) part.
@@ -88,6 +89,7 @@ final class ModelInspectorState: ObservableObject {
         normalMode      = first.normalMode
         metallicFactor  = first.material.metallicFactor
         roughnessFactor = first.material.roughnessFactor
+        opacity         = first.material.opacity
         let c = first.material.baseColorFactor
         baseColor = Color(red: Double(c.x), green: Double(c.y), blue: Double(c.z))
 
@@ -195,6 +197,13 @@ final class ModelInspectorState: ObservableObject {
             .sink { [weak self] v in
                 guard let self, !isUpdating else { return }
                 targets.forEach { $0.material.roughnessFactor = v }
+                onRedraw?(); onDirty?()
+            }.store(in: &cancellables)
+
+        $opacity.dropFirst()
+            .sink { [weak self] v in
+                guard let self, !isUpdating else { return }
+                targets.forEach { $0.material.opacity = v }
                 onRedraw?(); onDirty?()
             }.store(in: &cancellables)
 
