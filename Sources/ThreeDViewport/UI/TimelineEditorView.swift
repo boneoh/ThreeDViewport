@@ -283,7 +283,14 @@ final class TimelineEditorView: NSView {
     // One NSPopUpButton per object lane, positioned in the right half of the label
     // column.  Rebuilt whenever the object count, expansion state, or view bounds change.
 
-    private var easingPopups:    [NSPopUpButton] = []
+    /// Each easing popup is bound to its row's `TrackRef` so we know whether to
+    /// read/write `obj.keyframeTrack.easingMode` (`.object`) or
+    /// `sceneManager.groupKeyframeTracks[gid].easingMode` (`.group`).
+    private struct EasingPopupBinding {
+        let popup: NSPopUpButton
+        let ref:   TrackRef     // either .object(i) or .group(gid)
+    }
+    private var easingPopups:    [EasingPopupBinding] = []
     private var lastObjectCount: Int             = -1
     private var lastBounds:      NSRect          = .zero
 
@@ -728,8 +735,8 @@ final class TimelineEditorView: NSView {
     /// Re-shown when the row scrolls back below the header.
     private func updateEasingPopupOcclusion() {
         let band = NSRect(x: 0, y: visibleRect.minY, width: bounds.width, height: rulerHeight)
-        for popup in easingPopups {
-            popup.isHidden = popup.frame.intersects(band)
+        for b in easingPopups {
+            b.popup.isHidden = b.popup.frame.intersects(band)
         }
     }
 
@@ -2000,20 +2007,27 @@ final class TimelineEditorView: NSView {
         if needsRebuild {
             rebuildEasingPopups()
         } else {
-            // Lightweight pass: just keep selected item in sync with the track.
-            for popup in easingPopups {
-                let i = popup.tag
-                guard i < sm.objects.count else { continue }
-                let mode = sm.objects[i].keyframeTrack?.easingMode ?? .linear
-                if popup.selectedItem?.tag != mode.rawValue {
-                    popup.selectItem(withTag: mode.rawValue)
+            // Lightweight pass: keep each popup's selection synced with its track.
+            for b in easingPopups {
+                let mode: EasingMode
+                switch b.ref {
+                case .object(let i):
+                    guard i < sm.objects.count else { continue }
+                    mode = sm.objects[i].keyframeTrack?.easingMode ?? .linear
+                case .group(let gid):
+                    mode = sm.groupKeyframeTracks[gid]?.easingMode ?? .linear
+                default:
+                    continue
+                }
+                if b.popup.selectedItem?.tag != mode.rawValue {
+                    b.popup.selectItem(withTag: mode.rawValue)
                 }
             }
         }
     }
 
     private func rebuildEasingPopups() {
-        easingPopups.forEach { $0.removeFromSuperview() }
+        easingPopups.forEach { $0.popup.removeFromSuperview() }
         easingPopups.removeAll()
 
         guard let sm = sceneManager else { return }
@@ -2023,16 +2037,34 @@ final class TimelineEditorView: NSView {
         let popupH: CGFloat = 18
         let popupX: CGFloat = labelWidth - popupW - 3
 
-        // Walk the current track list so each popup lands on the correct lane,
-        // regardless of group expansion state.  All object rows (standalone or
-        // expanded part) get a popup so the user can set easing per part.
+        // Walk the current track list and attach a popup to:
+        //   • single-mesh object rows (no groupID) — drives `obj.keyframeTrack`.
+        //   • group-header rows — drives `groupKeyframeTracks[gid]` (one popup
+        //     for the whole multi-part model).
+        // Indented child-part rows are intentionally left out: they share the
+        // group's track, so a per-part popup would be misleading (and was the
+        // source of the "locked at Linear" confusion).
         let tracks = buildTracks()
         for (trackIndex, row) in tracks.enumerated() {
-            // Easing popups appear on all object rows (standalone and indented parts).
-            guard case .object(let i) = row.ref else { continue }
-            guard i < sm.objects.count else { continue }
-            let obj    = sm.objects[i]
             let popupY = laneTop(trackIndex) + (laneHeight - popupH) / 2
+
+            // Decide whether this row gets a popup, and what its initial easing is.
+            let action:    Selector
+            let tag:       Int
+            let current:   EasingMode
+            switch row.ref {
+            case .object(let i):
+                guard i < sm.objects.count, sm.objects[i].groupID == nil else { continue }
+                action  = #selector(easingPopupChanged(_:))
+                tag     = i
+                current = sm.objects[i].keyframeTrack?.easingMode ?? .linear
+            case .group(let gid):
+                action  = #selector(easingPopupGroupChanged(_:))
+                tag     = gid
+                current = sm.groupKeyframeTracks[gid]?.easingMode ?? .linear
+            default:
+                continue
+            }
 
             let popup = NSPopUpButton(frame: NSRect(x: popupX, y: popupY,
                                                     width: popupW, height: popupH),
@@ -2043,21 +2075,29 @@ final class TimelineEditorView: NSView {
             popup.bezelStyle  = .inline
             popup.font        = NSFont.systemFont(ofSize: 9, weight: .regular)
             popup.isBordered  = false
-            popup.tag         = i   // encodes object index for the action handler
+            popup.tag         = tag   // encodes object index OR groupID
 
             for mode in EasingMode.allCases {
                 popup.addItem(withTitle: mode.displayName)
                 popup.lastItem?.tag = mode.rawValue
             }
-            let current = obj.keyframeTrack?.easingMode ?? .linear
             popup.selectItem(withTag: current.rawValue)
 
             popup.target = self
-            popup.action = #selector(easingPopupChanged(_:))
+            popup.action = action
 
             addSubview(popup)
-            easingPopups.append(popup)
+            easingPopups.append(EasingPopupBinding(popup: popup, ref: row.ref))
         }
+    }
+
+    @objc private func easingPopupGroupChanged(_ sender: NSPopUpButton) {
+        let gid = sender.tag
+        guard let mode  = EasingMode(rawValue: sender.selectedItem?.tag ?? 0),
+              let track = sceneManager?.groupKeyframeTracks[gid] else { return }
+        track.easingMode = mode
+        print("[DEBUG] TimelineEditorView: group \(gid) easing → \(mode.displayName)")
+        needsDisplay = true
     }
 
     @objc private func easingPopupChanged(_ sender: NSPopUpButton) {
