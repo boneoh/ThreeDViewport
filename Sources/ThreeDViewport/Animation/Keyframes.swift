@@ -1,20 +1,28 @@
 import simd
 
 // One keyframe in a transform track.
+// `opacity` rides along with the transform so an object's fade is sampled at
+// the same keyframe times as its motion.  Group tracks also carry an opacity
+// field but it is not currently read by the renderer (only per-object tracks
+// drive material.opacity); the field exists so the struct stays uniform across
+// object and group tracks.
 struct TransformKeyframe {
     var time: Double
     var translation: SIMD3<Float>
     var rotation: simd_quatf
     var scale: SIMD3<Float>
+    var opacity: Float
 
     init(time: Double,
          translation: SIMD3<Float> = SIMD3<Float>(0, 0, 0),
          rotation: simd_quatf = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1),
-         scale: SIMD3<Float> = SIMD3<Float>(1, 1, 1)) {
+         scale: SIMD3<Float> = SIMD3<Float>(1, 1, 1),
+         opacity: Float = 1) {
         self.time        = time
         self.translation = translation
         self.rotation    = rotation
         self.scale       = scale
+        self.opacity     = opacity
     }
 }
 
@@ -196,6 +204,79 @@ final class KeyframeTrack {
         return makeMatrix(from: keyframes.last!)
     }
 
+    // MARK: - Opacity evaluation
+
+    /// Returns the interpolated opacity at the given time, or nil if the track
+    /// has no keyframes.  Uses the same easing mode as the matrix evaluator so
+    /// fades follow the same curve shape as the bundled position/rotation/scale.
+    /// Result is clamped to [0, 1] (the spline modes can briefly overshoot).
+    func evaluateOpacity(at time: Double) -> Float? {
+        if keyframes.isEmpty { return nil }
+        if time <= keyframes.first!.time { return keyframes.first!.opacity }
+        if time >= keyframes.last!.time  { return keyframes.last!.opacity  }
+
+        for i in 0..<(keyframes.count - 1) {
+            let a = keyframes[i]
+            let b = keyframes[i + 1]
+            guard time >= a.time && time <= b.time else { continue }
+
+            let span = b.time - a.time
+            if span < 0.0001 { return b.opacity }
+            let rawT = Float((time - a.time) / span)
+
+            let result: Float
+            switch easingMode {
+            case .linear:
+                result = a.opacity + (b.opacity - a.opacity) * rawT
+
+            case .splineS, .splineM, .splineL:
+                let tension: Float
+                switch easingMode {
+                case .splineS: tension = 0.25
+                case .splineM: tension = 0.5
+                default:       tension = 1.0   // .splineL
+                }
+                let prev = i > 0
+                    ? keyframes[i - 1]
+                    : mirrorKeyframe(b, around: a)
+                let next = i + 2 < keyframes.count
+                    ? keyframes[i + 2]
+                    : mirrorKeyframe(a, around: b)
+                result = KeyframeTrack.scalarCatmullRom(
+                    prev.opacity, a.opacity, b.opacity, next.opacity,
+                    t: rawT, tension: tension)
+
+            case .smooth:
+                let prev = i > 0
+                    ? keyframes[i - 1]
+                    : mirrorKeyframe(b, around: a)
+                let next = i + 2 < keyframes.count
+                    ? keyframes[i + 2]
+                    : mirrorKeyframe(a, around: b)
+                result = KeyframeTrack.scalarCatmullRom(
+                    prev.opacity, a.opacity, b.opacity, next.opacity,
+                    t: rawT, tension: 0.5)
+            }
+            return max(0, min(1, result))
+        }
+        return keyframes.last!.opacity
+    }
+
+    /// Hermite-form Catmull-Rom for a scalar — mirrors EasingMode.catmullRomTensioned
+    /// (SIMD3 version) but on Float; kept here so the opacity evaluator does not
+    /// have to fish through the SIMD3 helper.
+    private static func scalarCatmullRom(_ p0: Float, _ p1: Float, _ p2: Float, _ p3: Float,
+                                          t: Float, tension: Float) -> Float {
+        let t2 = t * t
+        let t3 = t2 * t
+        let m1 = tension * (p2 - p0)
+        let m2 = tension * (p3 - p1)
+        return ( 2*t3 - 3*t2 + 1) * p1
+             + (   t3 - 2*t2 + t) * m1
+             + (-2*t3 + 3*t2    ) * p2
+             + (   t3 -   t2    ) * m2
+    }
+
     // MARK: - Catmull-Rom endpoint helper
 
     // Creates a virtual control point by mirroring kf2 through kf1.
@@ -207,7 +288,8 @@ final class KeyframeTrack {
             time:        kf1.time - (kf2.time - kf1.time),
             translation: 2.0 * kf1.translation - kf2.translation,
             rotation:    simd_slerp(kf2.rotation, kf1.rotation, 2.0),
-            scale:       2.0 * kf1.scale - kf2.scale
+            scale:       2.0 * kf1.scale - kf2.scale,
+            opacity:     2.0 * kf1.opacity - kf2.opacity
         )
     }
 

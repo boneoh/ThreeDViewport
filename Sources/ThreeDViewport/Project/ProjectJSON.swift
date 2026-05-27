@@ -517,8 +517,10 @@ struct ObjectData: Codable {
     }
 }
 
-// One saved object keyframe — full TRS of the animation delta.
+// One saved object keyframe — full TRS of the animation delta plus opacity.
 // Quaternion stored as (rx=ix, ry=iy, rz=iz, rw=real) to match simd_quatf components.
+// Opacity rides along with the transform so an object's fade is sampled at the
+// same keyframe times as its motion; defaults to 1 for older project files.
 struct KeyframeData: Codable {
     var time: Double
     // Translation
@@ -527,6 +529,37 @@ struct KeyframeData: Codable {
     var rx: Float; var ry: Float; var rz: Float; var rw: Float
     // Scale
     var sx: Float; var sy: Float; var sz: Float
+    // Opacity (added later — missing in old project files → defaults to 1).
+    var opacity: Float = 1
+
+    init(time: Double,
+         tx: Float, ty: Float, tz: Float,
+         rx: Float, ry: Float, rz: Float, rw: Float,
+         sx: Float, sy: Float, sz: Float,
+         opacity: Float = 1) {
+        self.time = time
+        self.tx = tx; self.ty = ty; self.tz = tz
+        self.rx = rx; self.ry = ry; self.rz = rz; self.rw = rw
+        self.sx = sx; self.sy = sy; self.sz = sz
+        self.opacity = opacity
+    }
+
+    // Custom decoder so older project files (no `opacity` key) load cleanly.
+    init(from decoder: Decoder) throws {
+        let c    = try decoder.container(keyedBy: CodingKeys.self)
+        time     = try  c.decode(Double.self, forKey: .time)
+        tx       = try  c.decode(Float.self,  forKey: .tx)
+        ty       = try  c.decode(Float.self,  forKey: .ty)
+        tz       = try  c.decode(Float.self,  forKey: .tz)
+        rx       = try  c.decode(Float.self,  forKey: .rx)
+        ry       = try  c.decode(Float.self,  forKey: .ry)
+        rz       = try  c.decode(Float.self,  forKey: .rz)
+        rw       = try  c.decode(Float.self,  forKey: .rw)
+        sx       = try  c.decode(Float.self,  forKey: .sx)
+        sy       = try  c.decode(Float.self,  forKey: .sy)
+        sz       = try  c.decode(Float.self,  forKey: .sz)
+        opacity  = (try? c.decode(Float.self, forKey: .opacity)) ?? 1
+    }
 }
 
 // Phase 5: One saved camera keyframe — absolute camera state.

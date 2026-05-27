@@ -1872,7 +1872,8 @@ final class TimelineEditorView: NSView {
                 time:        t,
                 translation: src.translation,
                 rotation:    src.rotation,
-                scale:       src.scale))
+                scale:       src.scale,
+                opacity:     src.opacity))
 
         // ── Light (any light lane accepts a light clipboard) ──────────────────
         case (.light(let src), .light(let i)):
@@ -1896,7 +1897,8 @@ final class TimelineEditorView: NSView {
                 time:        t,
                 translation: src.translation,
                 rotation:    src.rotation,
-                scale:       src.scale))
+                scale:       src.scale,
+                opacity:     src.opacity))
 
         // ── Atmosphere (fog / weather lanes accept matching clipboards) ───────
         case (.fog(let src), .fog):
@@ -1953,7 +1955,8 @@ final class TimelineEditorView: NSView {
                 time:        t,
                 translation: src.translation,
                 rotation:    src.rotation,
-                scale:       src.scale))
+                scale:       src.scale,
+                opacity:     src.opacity))
         case (.light(let src), .light(let i)):
             guard let lm = lightManager, i < lm.keyframeTracks.count else { return }
             if lm.keyframeTracks[i] == nil { lm.keyframeTracks[i] = LightKeyframeTrack() }
@@ -1973,7 +1976,8 @@ final class TimelineEditorView: NSView {
                 time:        t,
                 translation: src.translation,
                 rotation:    src.rotation,
-                scale:       src.scale))
+                scale:       src.scale,
+                opacity:     src.opacity))
         case (.fog(let src), .fog):
             if fogSettings?.keyframeTrack == nil { fogSettings?.keyframeTrack = AtmosphereKeyframeTrack() }
             fogSettings?.keyframeTrack?.addKeyframe(AtmosphereKeyframe(

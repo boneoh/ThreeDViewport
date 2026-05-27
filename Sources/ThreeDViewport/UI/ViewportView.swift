@@ -1156,7 +1156,8 @@ final class ViewportView: MTKView {
             time:        timeline.currentTime,
             translation: translation,
             rotation:    rotation,
-            scale:       scale
+            scale:       scale,
+            opacity:     obj.material.opacity
         )
         obj.keyframeTrack?.addKeyframe(kf, mergeTolerance: stampMergeTolerance)
 

@@ -1499,6 +1499,13 @@ final class Renderer: NSObject, MTKViewDelegate {
                     object.transform = object.baseTransform * delta
                 }
             }
+            // Opacity rides on the same keyframes — sample it here so the
+            // animated value reaches the renderer through material.opacity.
+            // No track keyframes ⇒ no write, so the Inspector slider's static
+            // value is preserved on un-animated objects.
+            if let op = track.evaluateOpacity(at: timeline.currentTime) {
+                object.material.opacity = op
+            }
         }
 
         // ── Group-level transforms (Phase 2) ──────────────────────────────────

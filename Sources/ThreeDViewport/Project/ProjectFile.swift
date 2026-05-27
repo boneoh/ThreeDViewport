@@ -126,7 +126,8 @@ final class ProjectFile {
                     tx: kf.translation.x, ty: kf.translation.y, tz: kf.translation.z,
                     rx: kf.rotation.imag.x, ry: kf.rotation.imag.y,
                     rz: kf.rotation.imag.z, rw: kf.rotation.real,
-                    sx: kf.scale.x, sy: kf.scale.y, sz: kf.scale.z
+                    sx: kf.scale.x, sy: kf.scale.y, sz: kf.scale.z,
+                    opacity: kf.opacity
                 )
             }
             // Objects with keyframes: save baseTransform so delta computation
@@ -277,7 +278,8 @@ final class ProjectFile {
                     tx: kf.translation.x, ty: kf.translation.y, tz: kf.translation.z,
                     rx: kf.rotation.imag.x, ry: kf.rotation.imag.y,
                     rz: kf.rotation.imag.z, rw: kf.rotation.real,
-                    sx: kf.scale.x, sy: kf.scale.y, sz: kf.scale.z
+                    sx: kf.scale.x, sy: kf.scale.y, sz: kf.scale.z,
+                    opacity: kf.opacity
                 )
             }
             groupTrackData.append(GroupTrackData(
@@ -723,7 +725,8 @@ final class ProjectFile {
                     time:        kf.time,
                     translation: SIMD3<Float>(kf.tx, kf.ty, kf.tz),
                     rotation:    simd_quatf(ix: kf.rx, iy: kf.ry, iz: kf.rz, r: kf.rw),
-                    scale:       SIMD3<Float>(kf.sx, kf.sy, kf.sz)
+                    scale:       SIMD3<Float>(kf.sx, kf.sy, kf.sz),
+                    opacity:     kf.opacity
                 ))
             }
             obj.keyframeTrack = track
@@ -819,7 +822,8 @@ final class ProjectFile {
                     time:        kf.time,
                     translation: SIMD3<Float>(kf.tx, kf.ty, kf.tz),
                     rotation:    simd_quatf(ix: kf.rx, iy: kf.ry, iz: kf.rz, r: kf.rw),
-                    scale:       SIMD3<Float>(kf.sx, kf.sy, kf.sz)
+                    scale:       SIMD3<Float>(kf.sx, kf.sy, kf.sz),
+                    opacity:     kf.opacity
                 ))
             }
             sm.groupKeyframeTracks[gid] = track
