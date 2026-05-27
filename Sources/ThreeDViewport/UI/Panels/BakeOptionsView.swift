@@ -25,6 +25,7 @@ struct BakeOptionsView: View {
                 .frame(width: 200)
             }
             Toggle("Include current environment background", isOn: $options.includeBackground)
+                .environment(\.controlActiveState, .active)
             Text("Exports the visible, lit scene seen from the probe. Hide anything you "
                 + "don't want captured.")
                 .font(.caption).foregroundStyle(.secondary)

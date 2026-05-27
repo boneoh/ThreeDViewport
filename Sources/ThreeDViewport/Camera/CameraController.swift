@@ -9,8 +9,16 @@ final class CameraController {
     var pitch: Float = 0.4    // ~23° above horizon
     var distance: Float = 5.0
 
-    // Look-at target in world space
-    var target: SIMD3<Float> = SIMD3<Float>(0, 0, 0)
+    // Look-at target in world space.  Clamped to ±100 per axis so mouse pan,
+    // arrow-key pan, dolly, and freeLook honour the same hard limit as the
+    // Position / Target sliders in the Camera Inspector.
+    var target: SIMD3<Float> = SIMD3<Float>(0, 0, 0) {
+        didSet {
+            target = simd_clamp(target,
+                                SIMD3<Float>(repeating: -100),
+                                SIMD3<Float>(repeating:  100))
+        }
+    }
 
     // Updated by the renderer when the drawable size changes
     var aspectRatio: Float = 16.0 / 9.0

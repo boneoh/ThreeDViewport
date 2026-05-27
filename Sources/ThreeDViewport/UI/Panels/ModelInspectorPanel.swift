@@ -171,6 +171,7 @@ struct ModelInspectorPanel: View {
             }
             .toggleStyle(.switch)
             .tint(.green)
+            .environment(\.controlActiveState, .active)
 
             Toggle(isOn: $state.occludeWhenHidden) {
                 Text("Holdout (occlude while hidden)")
@@ -179,6 +180,7 @@ struct ModelInspectorPanel: View {
             }
             .toggleStyle(.switch)
             .tint(.green)
+            .environment(\.controlActiveState, .active)
             .help("When hidden, this object still blocks objects behind it — cutting "
                 + "a hole in the matte without drawing itself. Only takes effect while hidden.")
 

@@ -207,6 +207,7 @@ struct LightsInspectorPanel: View {
             ))
             .toggleStyle(.checkbox)
             .labelsHidden()
+            .environment(\.controlActiveState, .active)
 
             // Remove button (never remove last light)
             Button {
@@ -247,6 +248,7 @@ struct LightsInspectorPanel: View {
                 ))
                 .toggleStyle(.checkbox)
                 .font(.subheadline)
+                .environment(\.controlActiveState, .active)
             }
 
             // Type picker
@@ -392,6 +394,7 @@ struct LightsInspectorPanel: View {
                                    set: { lightManager.lights[i].excludeBeamFromFeedback = $0 }))
                             .font(.caption)
                             .toggleStyle(.checkbox)
+                            .environment(\.controlActiveState, .active)
                     }
                 }
             }

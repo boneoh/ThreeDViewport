@@ -56,7 +56,9 @@ struct AtmospherePanel: View {
                             Text("Enabled").font(.caption)
                                 .foregroundColor(fog.isEnabled ? .green : .primary)
                         }
-                        .toggleStyle(.switch).tint(.green).padding(.bottom, 8)
+                        .toggleStyle(.switch).tint(.green)
+                        .environment(\.controlActiveState, .active)
+                        .padding(.bottom, 8)
 
                         ColorPicker("Color", selection: atmoColorBinding({ fog.color }, { fog.color = $0 }),
                                     supportsOpacity: false)
@@ -179,7 +181,9 @@ private struct EmitterMainControls: View {
                 Text("Enabled").font(.caption)
                     .foregroundColor(emitter.isEnabled ? .green : .primary)
             }
-            .toggleStyle(.switch).tint(.green).padding(.bottom, 8)
+            .toggleStyle(.switch).tint(.green)
+            .environment(\.controlActiveState, .active)
+            .padding(.bottom, 8)
 
             Picker("Type", selection: $emitter.type) {
                 ForEach(ParticleType.allCases, id: \.self) { t in Text(t.displayName).tag(t) }

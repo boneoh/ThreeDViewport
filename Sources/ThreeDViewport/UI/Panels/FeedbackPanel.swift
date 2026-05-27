@@ -68,6 +68,7 @@ struct FeedbackPanel: View {
                         .toggleStyle(.switch)
                         .labelsHidden()
                         .tint(.green)
+                        .environment(\.controlActiveState, .active)
                 }
                 .padding(.bottom, 10)
 
@@ -132,6 +133,7 @@ struct FeedbackPanel: View {
                             .toggleStyle(.checkbox)
                             .font(.caption)
                             .foregroundColor(.secondary)
+                            .environment(\.controlActiveState, .active)
                         Spacer()
                     }
 

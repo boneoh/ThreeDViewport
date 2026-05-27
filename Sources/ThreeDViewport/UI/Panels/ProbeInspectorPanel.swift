@@ -21,10 +21,11 @@ struct ProbeInspectorPanel: View {
                 Toggle(isOn: $probe.isVisible) {
                     Text("Show gizmo in viewport")
                         .font(.caption)
-                        .foregroundColor(probe.isVisible ? .editableBlue : .primary)
+                        .foregroundColor(probe.isVisible ? .green : .primary)
                 }
                 .toggleStyle(.switch)
-                .tint(.editableBlue)
+                .tint(.green)
+                .environment(\.controlActiveState, .active)
 
                 Divider()
 

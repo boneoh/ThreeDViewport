@@ -121,7 +121,13 @@ final class LightManager: ObservableObject {
         case .ambient, .directional:
             return
         case .point, .spot, .laser:
-            lights[selectedIndex].position += delta
+            // Clamp to ±100 per axis to match the Lights Inspector slider's
+            // hard limit, so mouse drag / arrow keys can't push the light
+            // beyond the same bound the slider enforces.
+            let p = lights[selectedIndex].position + delta
+            lights[selectedIndex].position = simd_clamp(p,
+                                                        SIMD3<Float>(repeating: -100),
+                                                        SIMD3<Float>(repeating:  100))
         }
     }
 

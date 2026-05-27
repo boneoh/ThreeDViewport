@@ -621,6 +621,17 @@ final class ViewportView: MTKView {
     /// back-computes `localTransform` so the next `applyHierarchy()` call produces
     /// the same result.  For root / non-hierarchical objects, keeps `localTransform`
     /// equal to `transform` (they are the same thing for roots).
+    /// Clamps an object's world translation to ±100 per axis so mouse drag,
+    /// arrow keys, scroll-wheel translate, and depth keys honour the same hard
+    /// limit as the Model Inspector's Position sliders.
+    private func clampObjectPosition(_ obj: SceneObject) {
+        let p = obj.transform.columns.3
+        let c = simd_clamp(SIMD3<Float>(p.x, p.y, p.z),
+                           SIMD3<Float>(repeating: -100),
+                           SIMD3<Float>(repeating:  100))
+        obj.transform.columns.3 = SIMD4<Float>(c.x, c.y, c.z, p.w)
+    }
+
     private func syncLocalTransform(_ obj: SceneObject) {
         guard let parentIdx = obj.parentIndex,
               parentIdx < sceneManager.objects.count else {
@@ -890,13 +901,23 @@ final class ViewportView: MTKView {
                 obj.transform.columns.3.x += delta.x
                 obj.transform.columns.3.y += delta.y
                 obj.transform.columns.3.z += delta.z
+                clampObjectPosition(obj)
             }
             return
         }
         var t = matrix_identity_float4x4
         t.columns.3 = SIMD4<Float>(delta.x, delta.y, delta.z, 1)
         let current = sceneManager.groupTransforms[gid] ?? matrix_identity_float4x4
-        sceneManager.groupTransforms[gid] = t * current
+        var combined = t * current
+        // Clamp the group transform's translation column to ±100 per axis so
+        // Model-mode drag / arrow / depth-key moves honour the same hard limit
+        // as the Position sliders.
+        let p = combined.columns.3
+        let c = simd_clamp(SIMD3<Float>(p.x, p.y, p.z),
+                           SIMD3<Float>(repeating: -100),
+                           SIMD3<Float>(repeating:  100))
+        combined.columns.3 = SIMD4<Float>(c.x, c.y, c.z, p.w)
+        sceneManager.groupTransforms[gid] = combined
     }
 
     /// Rotates the group transform by `q` around the shared world-space `pivot`.
@@ -1583,6 +1604,7 @@ final class ViewportView: MTKView {
             obj.transform.columns.3.x += move.x
             obj.transform.columns.3.y += move.y
             obj.transform.columns.3.z += move.z
+            clampObjectPosition(obj)
             syncLocalTransform(obj)
 
         } else if controlMode == .model {
@@ -1890,6 +1912,7 @@ final class ViewportView: MTKView {
             let mc4    = obj.transform * SIMD4<Float>(localCentre, 0)
             let newPos = pivot - SIMD3<Float>(mc4.x, mc4.y, mc4.z)
             obj.transform.columns.3 = SIMD4<Float>(newPos.x, newPos.y, newPos.z, 1)
+            clampObjectPosition(obj)
             syncLocalTransform(obj)
 
         } else {
@@ -1899,6 +1922,7 @@ final class ViewportView: MTKView {
             obj.transform.columns.3.x += fwd.x * move
             obj.transform.columns.3.y += fwd.y * move
             obj.transform.columns.3.z += fwd.z * move
+            clampObjectPosition(obj)
             syncLocalTransform(obj)
         }
     }
@@ -2041,6 +2065,7 @@ final class ViewportView: MTKView {
                 obj.transform.columns.3.x += d.x
                 obj.transform.columns.3.y += d.y
                 obj.transform.columns.3.z += d.z
+                clampObjectPosition(obj)
                 syncLocalTransform(obj)
             }
 
@@ -2098,6 +2123,7 @@ final class ViewportView: MTKView {
                 obj.transform.columns.3.x += d.x
                 obj.transform.columns.3.y += d.y
                 obj.transform.columns.3.z += d.z
+                clampObjectPosition(obj)
             }
             syncLocalTransform(obj)
 
