@@ -275,13 +275,18 @@ final class Renderer: NSObject, MTKViewDelegate {
         depthDesc.isDepthWriteEnabled  = true
         depthStencilState = device.makeDepthStencilState(descriptor: depthDesc)
 
-        // Transparent depth state — test, but don't write.  Lets transparent
-        // surfaces be occluded by opaque geometry in front, without writing
-        // depth values that would cause later transparent draws to fail
-        // self-occlusion when sorted back-to-front.
+        // Transparent depth state — test AND write.  For a single closed mesh
+        // we need depth writes so the front-facing triangles occlude the
+        // back-facing ones; with depth-write off, back faces drawn later in
+        // the index buffer composite over the front faces and the surface
+        // breaks into diagonal seams.  The cost is that two transparent
+        // objects which *intersect* will clip at the crossing — but our
+        // back-to-front sort already handles non-intersecting overlap
+        // correctly, and intersecting transparent objects need OIT to look
+        // right regardless of how depth is configured.
         let tDepthDesc = MTLDepthStencilDescriptor()
         tDepthDesc.depthCompareFunction = .less
-        tDepthDesc.isDepthWriteEnabled  = false
+        tDepthDesc.isDepthWriteEnabled  = true
         transparentDepthState = device.makeDepthStencilState(descriptor: tDepthDesc)
 
         // ── Background gradient pipeline ──────────────────────────────────────

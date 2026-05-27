@@ -137,7 +137,9 @@ final class ModelInspectorState: ObservableObject {
 
     /// Re-reads the anchor's live world position + rotation + scale so the
     /// fields track viewport moves.  Suppresses the write-back sinks and skips
-    /// no-op updates.
+    /// no-op updates.  Opacity is also re-read because it is the only material
+    /// value driven by the timeline today — without this, the slider would lag
+    /// when the playhead moves through an opacity-bearing keyframe track.
     func refresh() {
         guard hasSelection, let obj = anchor else { return }
         let p = worldPos(of: obj)
@@ -151,6 +153,10 @@ final class ModelInspectorState: ObservableObject {
         let s = worldScl(of: obj)
         if s != scale {
             isUpdating = true; scale = s; isUpdating = false
+        }
+        let op = obj.material.opacity
+        if op != opacity {
+            isUpdating = true; opacity = op; isUpdating = false
         }
     }
 

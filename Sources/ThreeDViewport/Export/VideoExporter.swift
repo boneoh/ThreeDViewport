@@ -1306,6 +1306,11 @@ final class VideoExporter {
                     object.transform = object.baseTransform * delta
                 }
             }
+            // Opacity rides on the same keyframes — mirror the live Renderer's
+            // applyAnimation so exported frames fade identically to the preview.
+            if let op = track.evaluateOpacity(at: time) {
+                object.material.opacity = op
+            }
         }
 
         // ── FK hierarchy propagation ──────────────────────────────────────────
