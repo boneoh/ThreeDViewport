@@ -83,6 +83,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // True whenever the project has unsaved changes.
     private var isDirty: Bool = false
 
+    // Set when the user clicks "Save" in the Quit-time prompt for a project
+    // without a URL.  The saveProjectAs sheet completion checks this flag and
+    // re-issues termination after a successful save.  Without it, the sheet
+    // would close and the user would have to invoke Quit a second time.
+    private var pendingQuitAfterSave: Bool = false
+
     // Combine subscriptions that set isDirty when any Observable setting changes.
     private var settingsCancellables = Set<AnyCancellable>()
     /// Per-emitter dirty subscriptions, rebuilt whenever the emitter list changes.
@@ -260,7 +266,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     return .terminateCancel
                 }
             } else {
-                // No URL yet — show Save As; user must re-quit after saving.
+                // No URL yet — show Save As.  Flag the pending quit so the
+                // sheet's completion can re-issue termination once the save
+                // succeeds, sparing the user a second Quit invocation.
+                pendingQuitAfterSave = true
                 saveProjectAs(self)
                 return .terminateCancel
             }
@@ -999,7 +1008,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private func applyTemplateIfPresent() {
         let templateURL = defaultDirectory(for: "Projects")
             .appendingPathComponent("template.3dvp")
-        guard FileManager.default.fileExists(atPath: templateURL.path) else { return }
+        guard FileManager.default.fileExists(atPath: templateURL.path) else {
+            // Surface the missing template so the user knows why they got an
+            // empty scene — and where to drop the file if they want one.
+            let alert = NSAlert()
+            alert.messageText     = "Template file not found"
+            alert.informativeText = "No template was loaded — expected at:\n" + templateURL.path
+            alert.alertStyle      = .informational
+            alert.runModal()
+            return
+        }
 
         loadProject(from: templateURL)
 
@@ -1409,8 +1427,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
 
         panel.beginSheetModal(for: window) { [weak self] response in
-            guard response == .OK, var url = panel.url else { return }
             guard let self = self else { return }
+            // User cancelled — drop any pending-quit intent so the next Quit
+            // doesn't ricochet into another save sheet.
+            guard response == .OK, var url = panel.url else {
+                self.pendingQuitAfterSave = false
+                return
+            }
             // Ensure the file always gets the .3dvp extension even if the user omitted it.
             if url.pathExtension.lowercased() != "3dvp" {
                 url = url.appendingPathExtension("3dvp")
@@ -1424,7 +1447,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 self.window?.title = "ThreeDViewport — "
                     + url.deletingPathExtension().lastPathComponent
                 print("[DEBUG] AppDelegate: project saved as " + url.lastPathComponent)
+                // If the user reached Save As via the Quit prompt, finish the
+                // quit they started now that the save succeeded.
+                if self.pendingQuitAfterSave {
+                    self.pendingQuitAfterSave = false
+                    NSApp.terminate(self)
+                }
             } catch {
+                self.pendingQuitAfterSave = false
                 self.showErrorAlert(message: "Could not save project",
                                     detail: error.localizedDescription)
             }
@@ -2040,6 +2070,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 world = obj.transform
             }
             return TransformMath.eulerFromMatrix(world)
+        }
+
+        // World-effective scale — mirrors worldPosition: decompose the combined
+        // group × object matrix so grouped parts show the effective on-screen scale.
+        state.worldScale = { [weak viewport] obj in
+            let world: matrix_float4x4
+            if let sm = viewport?.sceneManager,
+               let gid = obj.groupID, let gt = sm.groupTransforms[gid] {
+                world = gt * obj.transform
+            } else {
+                world = obj.transform
+            }
+            return TransformMath.scale(of: world)
         }
 
         // Conditional auto-stamp: after a Paste/Z on Position or Rotation, stamp
@@ -2769,7 +2812,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             print("[DEBUG] AppDelegate: export — " + url.lastPathComponent
                 + " codec=" + codec.displayName
                 + " res=\(res.width)×\(res.height) fps=" + fps.display)
-            self.viewportView?.startExport(to: url, codec: codec, fps: fps, exportState: self.exportState)
+            self.viewportView?.startExport(
+                to: url, codec: codec, fps: fps, exportState: self.exportState
+            ) { [weak self] error in
+                // Mirror the HDR export confirmation so the user gets explicit
+                // acknowledgement at the end of a (often long) video export.
+                if let error = error {
+                    self?.showErrorAlert(message: "Video Export failed",
+                                         detail: error.localizedDescription)
+                } else {
+                    let alert = NSAlert()
+                    alert.messageText     = "Video Export Completed"
+                    alert.informativeText = "Saved \u{201C}\(url.lastPathComponent)\u{201D}."
+                    alert.alertStyle      = .informational
+                    alert.runModal()
+                }
+            }
         }
     }
 

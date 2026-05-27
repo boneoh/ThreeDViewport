@@ -23,10 +23,15 @@ final class ModelInspectorState: ObservableObject {
     @Published var position:        SIMD3<Float>    = .zero
     /// World-space Euler rotation (degrees, YXZ) of the anchor — for the sliders.
     @Published var rotation:        SIMD3<Float>    = .zero
+    /// Per-axis scale of the anchor (world-effective: group × object when grouped).
+    @Published var scale:           SIMD3<Float>    = SIMD3<Float>(1, 1, 1)
     /// Editing is allowed only for a single root object; copy works for any selection.
     @Published var canEditPosition: Bool            = false
     /// Rotation editing mirrors the same selection rule as position.
     @Published var canEditRotation: Bool            = false
+    /// Scale editing is only enabled for a single non-grouped root.  Multi-part
+    /// groups display the effective world scale but the sliders are greyed.
+    @Published var canEditScale:    Bool            = false
 
     // ── Callbacks wired by AppDelegate ───────────────────────────────────────
     var onRebuildNormals: ((NormalMode, [SceneObject]) -> Void)?
@@ -48,6 +53,9 @@ final class ModelInspectorState: ObservableObject {
     /// Rotates a grouped selection so the anchor's world rotation becomes the given
     /// Euler — pivots every root around the anchor's world position.  Wired by AppDelegate.
     var setGroupWorldRotation: ((SceneObject, SIMD3<Float>) -> Void)?
+    /// Live world-effective scale of the anchor (group × object when grouped).
+    /// Wired by AppDelegate; falls back to decomposing the local transform.
+    var worldScale:       ((SceneObject) -> SIMD3<Float>)?
     /// Fires after a Paste or Z click on Position/Rotation.  AppDelegate wires it
     /// to conditionally stamp an object/group keyframe at the current playhead
     /// (only if the relevant track already has keyframes).
@@ -88,6 +96,7 @@ final class ModelInspectorState: ObservableObject {
         anchor   = newTargets.first(where: { $0.parentIndex == nil }) ?? first
         position = anchor.map { worldPos(of: $0) } ?? .zero
         rotation = anchor.map { worldRot(of: $0) } ?? .zero
+        scale    = anchor.map { worldScl(of: $0) } ?? SIMD3<Float>(1, 1, 1)
 
         // Editing is allowed for a single non-grouped root (writes obj.transform),
         // and for any uniform-group selection (translates / rotates the roots).
@@ -97,6 +106,9 @@ final class ModelInspectorState: ObservableObject {
                                && first.parentIndex == nil && first.groupID == nil
         canEditPosition = singleNonGroupRoot || allSameGroup
         canEditRotation = canEditPosition
+        // Scale edits write obj.transform's upper-3×3 directly, so only enable
+        // for a single non-grouped root — groups would need to scale every part.
+        canEditScale    = singleNonGroupRoot
     }
 
     /// World position of `obj` as drawn (group transform × transform), via the
@@ -114,8 +126,16 @@ final class ModelInspectorState: ObservableObject {
         return TransformMath.eulerFromMatrix(obj.transform)
     }
 
-    /// Re-reads the anchor's live world position + rotation so the fields track
-    /// viewport moves.  Suppresses the write-back sinks and skips no-op updates.
+    /// World-effective scale of `obj` as drawn, via the provider wired by
+    /// AppDelegate; falls back to decomposing the local transform.
+    private func worldScl(of obj: SceneObject) -> SIMD3<Float> {
+        if let ws = worldScale { return ws(obj) }
+        return TransformMath.scale(of: obj.transform)
+    }
+
+    /// Re-reads the anchor's live world position + rotation + scale so the
+    /// fields track viewport moves.  Suppresses the write-back sinks and skips
+    /// no-op updates.
     func refresh() {
         guard hasSelection, let obj = anchor else { return }
         let p = worldPos(of: obj)
@@ -125,6 +145,10 @@ final class ModelInspectorState: ObservableObject {
         let r = worldRot(of: obj)
         if r != rotation {
             isUpdating = true; rotation = r; isUpdating = false
+        }
+        let s = worldScl(of: obj)
+        if s != scale {
+            isUpdating = true; scale = s; isUpdating = false
         }
     }
 
@@ -211,6 +235,17 @@ final class ModelInspectorState: ObservableObject {
                     let R = TransformMath.matrixFromEuler(euler)
                     obj.transform = TransformMath.applying(rotation: R, scale: s, to: obj.transform)
                 }
+                onRedraw?(); onDirty?()
+            }.store(in: &cancellables)
+
+        // Scale — single non-grouped roots only.  Rebuilds obj.transform's
+        // upper-3×3 from the existing pure rotation and the new per-axis scale,
+        // preserving translation.  Grouped selections are greyed (canEditScale).
+        $scale.dropFirst()
+            .sink { [weak self] s in
+                guard let self, !isUpdating, canEditScale, let obj = anchor else { return }
+                let R = TransformMath.pureRotation(of: obj.transform)
+                obj.transform = TransformMath.applying(rotation: R, scale: s, to: obj.transform)
                 onRedraw?(); onDirty?()
             }.store(in: &cancellables)
     }

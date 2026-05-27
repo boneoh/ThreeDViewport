@@ -51,13 +51,21 @@ struct TimelinePanel: View {
                     .frame(width: 70, alignment: .leading)
 
                 // ── Scrubber ──────────────────────────────────────────────────
+                // Frame-snap manually in the setter rather than via Slider's
+                // `step:`.  The step-quantizer left a dead zone narrower than
+                // one frame just above 0, so dragging left would stick at
+                // frame 1 instead of reaching the first frame.  Explicit
+                // round + clamp-to-zero makes frame 0 reachable.
                 Slider(
                     value: Binding(
                         get: { timeline.currentTime },
-                        set: { timeline.seek(to: $0) }
+                        set: { v in
+                            let fps = timeline.frameRate
+                            let snapped = max(0, (v * fps).rounded() / fps)
+                            timeline.seek(to: snapped)
+                        }
                     ),
-                    in: 0...max(timeline.duration, 0.001),
-                    step: 1.0 / timeline.frameRate
+                    in: 0...max(timeline.duration, 0.001)
                 )
                 .accentColor(Color(NSColor.controlAccentColor))
                 .disabled(exportState.isExporting)

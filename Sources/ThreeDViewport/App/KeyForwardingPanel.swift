@@ -12,6 +12,17 @@ final class KeyForwardingPanel: NSPanel {
     weak var forwardTarget: NSView?
 
     override func keyDown(with event: NSEvent) {
+        // Tab / Shift+Tab — move focus between controls within the panel itself
+        // rather than forwarding to the viewport.  Without this, Tab in an
+        // inspector ends up steering the viewport, which is never useful.
+        if event.keyCode == 48 {   // 48 == kVK_Tab
+            if event.modifierFlags.contains(.shift) {
+                selectPreviousKeyView(nil)
+            } else {
+                selectNextKeyView(nil)
+            }
+            return
+        }
         if let target = forwardTarget {
             target.keyDown(with: event)
         } else {

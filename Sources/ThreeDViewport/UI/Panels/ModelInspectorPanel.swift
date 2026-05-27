@@ -17,6 +17,8 @@ struct ModelInspectorPanel: View {
                         Divider().padding(.vertical, 8)
                         rotationSection
                         Divider().padding(.vertical, 8)
+                        scaleSection
+                        Divider().padding(.vertical, 8)
                         displaySection
                         Divider().padding(.vertical, 8)
                         materialSection
@@ -86,6 +88,23 @@ struct ModelInspectorPanel: View {
                 .disabled(!state.canEditRotation)
             SliderRow(label: "Z", value: $state.rotation.z, range: -180...180, format: "%.1f")
                 .disabled(!state.canEditRotation)
+        }
+    }
+
+    // MARK: - Scale
+
+    // Per-axis scale.  Enabled only for a single non-grouped root; grouped
+    // selections display the effective world scale but the sliders are greyed
+    // (group scale would need to scale every part — deferred).
+    private var scaleSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Scale").font(.headline)
+            SliderRow(label: "X", value: $state.scale.x, range: 0.01...10, format: "%.2f")
+                .disabled(!state.canEditScale)
+            SliderRow(label: "Y", value: $state.scale.y, range: 0.01...10, format: "%.2f")
+                .disabled(!state.canEditScale)
+            SliderRow(label: "Z", value: $state.scale.z, range: 0.01...10, format: "%.2f")
+                .disabled(!state.canEditScale)
         }
     }
 

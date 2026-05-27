@@ -1455,7 +1455,9 @@ final class ViewportView: MTKView {
 
     // MARK: - Video Export
 
-    func startExport(to url: URL, codec: ExportCodec, fps: ExportFrameRate, exportState: ExportState) {
+    func startExport(to url: URL, codec: ExportCodec, fps: ExportFrameRate,
+                     exportState: ExportState,
+                     onCompletion: ((Error?) -> Void)? = nil) {
         guard let dev = device else {
             print("[DEBUG] ViewportView: startExport — Metal device is nil")
             return
@@ -1516,6 +1518,7 @@ final class ViewportView: MTKView {
             } else {
                 exportState?.lastMessage = "Export complete!"
             }
+            onCompletion?(error)
         })
     }
 

@@ -230,9 +230,9 @@ private struct AtmoDetailControls<Source: ObservableObject>: View {
                     canZero:  true,
                     onAutoStamp: { onAutoStampPosition() })
             }
-            FogSliderRow(label: "X", value: fbind(positionKP).x, range: -20...20, format: "%.1f")
-            FogSliderRow(label: "Y", value: fbind(positionKP).y, range: -20...20, format: "%.1f")
-            FogSliderRow(label: "Z", value: fbind(positionKP).z, range: -20...20, format: "%.1f")
+            FogSliderRow(label: "X", value: fbind(positionKP).x, range: -100...100, format: "%.1f")
+            FogSliderRow(label: "Y", value: fbind(positionKP).y, range: -100...100, format: "%.1f")
+            FogSliderRow(label: "Z", value: fbind(positionKP).z, range: -100...100, format: "%.1f")
 
             Divider().padding(.vertical, 8)
             HStack {

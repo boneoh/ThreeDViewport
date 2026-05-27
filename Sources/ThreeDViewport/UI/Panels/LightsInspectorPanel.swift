@@ -286,17 +286,17 @@ struct LightsInspectorPanel: View {
                                   value: Binding<Float>(
                                       get: { lightManager.lights[i].position.x },
                                       set: { lightManager.lights[i].position.x = $0 }),
-                                  range: -10...10, format: "%.2f")
+                                  range: -100...100, format: "%.2f")
                         SliderRow(label: "Y",
                                   value: Binding<Float>(
                                       get: { lightManager.lights[i].position.y },
                                       set: { lightManager.lights[i].position.y = $0 }),
-                                  range: -10...10, format: "%.2f")
+                                  range: -100...100, format: "%.2f")
                         SliderRow(label: "Z",
                                   value: Binding<Float>(
                                       get: { lightManager.lights[i].position.z },
                                       set: { lightManager.lights[i].position.z = $0 }),
-                                  range: -10...10, format: "%.2f")
+                                  range: -100...100, format: "%.2f")
                     }
                 } label: {
                     HStack {
@@ -322,17 +322,17 @@ struct LightsInspectorPanel: View {
                                   value: Binding<Float>(
                                       get: { lightManager.lights[i].target.x },
                                       set: { lightManager.lights[i].target.x = $0 }),
-                                  range: -10...10, format: "%.2f")
+                                  range: -100...100, format: "%.2f")
                         SliderRow(label: "Y",
                                   value: Binding<Float>(
                                       get: { lightManager.lights[i].target.y },
                                       set: { lightManager.lights[i].target.y = $0 }),
-                                  range: -10...10, format: "%.2f")
+                                  range: -100...100, format: "%.2f")
                         SliderRow(label: "Z",
                                   value: Binding<Float>(
                                       get: { lightManager.lights[i].target.z },
                                       set: { lightManager.lights[i].target.z = $0 }),
-                                  range: -10...10, format: "%.2f")
+                                  range: -100...100, format: "%.2f")
                     }
                 } label: {
                     HStack {
