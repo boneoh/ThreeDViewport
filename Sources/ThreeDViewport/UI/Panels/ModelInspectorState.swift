@@ -30,8 +30,9 @@ final class ModelInspectorState: ObservableObject {
     @Published var canEditPosition: Bool            = false
     /// Rotation editing mirrors the same selection rule as position.
     @Published var canEditRotation: Bool            = false
-    /// Scale editing is only enabled for a single non-grouped root.  Multi-part
-    /// groups display the effective world scale but the sliders are greyed.
+    /// Scale editing is enabled for a single non-grouped root (writes
+    /// obj.transform directly) and for a uniform-group selection (delegates
+    /// to setGroupWorldScale so the whole model scales about its anchor).
     @Published var canEditScale:    Bool            = false
 
     // ── Callbacks wired by AppDelegate ───────────────────────────────────────
@@ -54,6 +55,10 @@ final class ModelInspectorState: ObservableObject {
     /// Rotates a grouped selection so the anchor's world rotation becomes the given
     /// Euler — pivots every root around the anchor's world position.  Wired by AppDelegate.
     var setGroupWorldRotation: ((SceneObject, SIMD3<Float>) -> Void)?
+    /// Scales a grouped selection so the anchor's world scale becomes the given
+    /// per-axis scale — scales every root about the anchor's world position
+    /// (so children move apart/closer AND grow/shrink in place).  Wired by AppDelegate.
+    var setGroupWorldScale:    ((SceneObject, SIMD3<Float>) -> Void)?
     /// Live world-effective scale of the anchor (group × object when grouped).
     /// Wired by AppDelegate; falls back to decomposing the local transform.
     var worldScale:       ((SceneObject) -> SIMD3<Float>)?
@@ -108,9 +113,7 @@ final class ModelInspectorState: ObservableObject {
                                && first.parentIndex == nil && first.groupID == nil
         canEditPosition = singleNonGroupRoot || allSameGroup
         canEditRotation = canEditPosition
-        // Scale edits write obj.transform's upper-3×3 directly, so only enable
-        // for a single non-grouped root — groups would need to scale every part.
-        canEditScale    = singleNonGroupRoot
+        canEditScale    = canEditPosition
     }
 
     /// World position of `obj` as drawn (group transform × transform), via the
@@ -253,14 +256,19 @@ final class ModelInspectorState: ObservableObject {
                 onRedraw?(); onDirty?()
             }.store(in: &cancellables)
 
-        // Scale — single non-grouped roots only.  Rebuilds obj.transform's
-        // upper-3×3 from the existing pure rotation and the new per-axis scale,
-        // preserving translation.  Grouped selections are greyed (canEditScale).
+        // Scale — non-grouped objects rebuild obj.transform's upper-3×3 from
+        // the existing pure rotation and the new per-axis scale (preserving
+        // translation); grouped selections delegate to AppDelegate so the
+        // whole model scales about the anchor.
         $scale.dropFirst()
             .sink { [weak self] s in
                 guard let self, !isUpdating, canEditScale, let obj = anchor else { return }
-                let R = TransformMath.pureRotation(of: obj.transform)
-                obj.transform = TransformMath.applying(rotation: R, scale: s, to: obj.transform)
+                if obj.groupID != nil {
+                    setGroupWorldScale?(obj, s)
+                } else {
+                    let R = TransformMath.pureRotation(of: obj.transform)
+                    obj.transform = TransformMath.applying(rotation: R, scale: s, to: obj.transform)
+                }
                 onRedraw?(); onDirty?()
             }.store(in: &cancellables)
     }

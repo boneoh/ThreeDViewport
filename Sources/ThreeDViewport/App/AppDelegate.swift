@@ -1254,6 +1254,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             // doesn't keep showing objects from the previously-loaded project.
             refreshCameraFollowTargets()
             checkMissingHDRs(in: viewport)
+            checkAndOfferGroupOffsetMigration(in: viewport)
             print("[DEBUG] AppDelegate: project loaded from " + url.lastPathComponent)
         } catch {
             showErrorAlert(message: "Could not open project", detail: error.localizedDescription)
@@ -1356,6 +1357,105 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.directoryURL            = defaultDirectory(for: "HDRs")
         if let hdr = UTType(filenameExtension: "hdr") { panel.allowedContentTypes = [hdr] }
         if panel.runModal() == .OK, let url = panel.url { completion(url) }
+    }
+
+    /// After a project opens, look for groups whose root has a non-zero
+    /// translation baked into `obj.transform.columns.3`.  This is a leftover
+    /// from old Position/Rotation/Scale slider edits (before the writers were
+    /// changed to mutate `groupTransforms[gid]` instead).  With the slider
+    /// edits stuck in the static layout, slerp on the group keyframes' rotation
+    /// rotates the offset vector around a sphere, producing a wide arc between
+    /// keyframes even though the endpoints render correctly.
+    ///
+    /// Fix: for each affected group, fold the root's translation into every
+    /// keyframe's translation (the rendered position at each existing keyframe
+    /// stays identical — see the algebra in MODELS.md), then zero the root's
+    /// `obj.transform` and `baseTransform` translation columns.  Asks first.
+    private func checkAndOfferGroupOffsetMigration(in vp: ViewportView) {
+        struct Candidate {
+            let name:   String
+            let root:   SceneObject
+            let track:  KeyframeTrack
+            let offset: SIMD3<Float>
+        }
+        let sm = vp.sceneManager
+        var candidates: [Candidate] = []
+        print("[DEBUG] AppDelegate: offset-migration check — scanning"
+            + " \(sm.groupKeyframeTracks.count) group track(s)")
+        for (gid, track) in sm.groupKeyframeTracks where !track.keyframes.isEmpty {
+            guard let root = sm.objects(inGroup: gid).first(where: { $0.parentIndex == nil }) else {
+                print("[DEBUG] AppDelegate: offset-migration — no root found for gid=\(gid)")
+                continue
+            }
+            let t      = root.transform.columns.3
+            let offset = SIMD3<Float>(t.x, t.y, t.z)
+            let len    = simd_length(offset)
+            print("[DEBUG] AppDelegate: offset-migration — gid=\(gid) root='\(root.name)'"
+                + " offset=(\(t.x), \(t.y), \(t.z)) len=\(len)")
+            if len > 1e-4 {
+                candidates.append(Candidate(name: root.name, root: root,
+                                            track: track, offset: offset))
+            }
+        }
+        guard !candidates.isEmpty else {
+            print("[DEBUG] AppDelegate: offset-migration — no candidates, skipping prompt")
+            return
+        }
+
+        let listText = candidates.map { c in
+            String(format: "• %@ — offset (%.2f, %.2f, %.2f) across %d keyframes",
+                   c.name, c.offset.x, c.offset.y, c.offset.z, c.track.keyframes.count)
+        }.joined(separator: "\n")
+
+        let alert = NSAlert()
+        alert.messageText = "Bake stale root translation into keyframes?"
+        alert.informativeText =
+            "This project has \(candidates.count) animated group(s) with a non-zero "
+            + "translation baked into the root part:\n\n"
+            + listText
+            + "\n\nThis is a leftover from old slider edits and causes the model to "
+            + "arc between keyframes instead of moving in a straight line. Baking "
+            + "the offset into each keyframe's translation fixes the interpolation; "
+            + "the rendered position at every existing keyframe stays identical."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Bake")
+        alert.addButton(withTitle: "Skip")
+
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            print("[DEBUG] AppDelegate: user skipped group offset migration "
+                + "for \(candidates.count) group(s)")
+            return
+        }
+
+        for c in candidates {
+            for i in 0..<c.track.keyframes.count {
+                let kf = c.track.keyframes[i]
+                // newKf.trans = oldKf.trans + R(kf.rotation) · diag(kf.scale) · offset
+                // Compute the rotation matrix the same way Keyframes.swift's makeMatrix
+                // does, so the bake is bit-for-bit consistent with playback.
+                let n  = simd_normalize(kf.rotation)
+                let x  = n.imag.x, y = n.imag.y, z = n.imag.z, w = n.real
+                let c0 = SIMD3<Float>(1 - 2*(y*y + z*z),     2*(x*y + z*w),     2*(x*z - y*w))
+                let c1 = SIMD3<Float>(    2*(x*y - z*w), 1 - 2*(x*x + z*z),     2*(y*z + x*w))
+                let c2 = SIMD3<Float>(    2*(x*z + y*w),     2*(y*z - x*w), 1 - 2*(x*x + y*y))
+                let scaledOffset = SIMD3<Float>(kf.scale.x * c.offset.x,
+                                                 kf.scale.y * c.offset.y,
+                                                 kf.scale.z * c.offset.z)
+                let rotated = c0 * scaledOffset.x + c1 * scaledOffset.y + c2 * scaledOffset.z
+                c.track.keyframes[i].translation = kf.translation + rotated
+            }
+            // Zero out the root's static translation in both transform and
+            // baseTransform.  Save-load uses obj.transform for groups without
+            // per-object keyframes and baseTransform for those that have any;
+            // updating both keeps the data consistent either way.
+            c.root.transform.columns.3     = SIMD4<Float>(0, 0, 0, 1)
+            c.root.baseTransform.columns.3 = SIMD4<Float>(0, 0, 0, 1)
+            print("[DEBUG] AppDelegate: baked offset \(c.offset) into \(c.track.keyframes.count) "
+                + "keyframes of group root '\(c.name)'")
+        }
+        markDirty()
+        vp.renderer?.invalidateAnimationCache()
+        vp.needsDisplay = true
     }
 
     /// After a project opens, warn if any referenced HDR file is missing on disk.
@@ -2037,26 +2137,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             return SIMD3<Float>(t.x, t.y, t.z)
         }
 
-        // Group write — translate every root part of the anchor's group by the
-        // delta that lands the anchor at the requested world position.  Uses
-        // gt⁻¹ so the math is right even if a group animation has rotated the
-        // group.  Persists in obj.transform (saved like single-object edits).
+        // Group write — translate the GROUP transform by the world-space delta
+        // that lands the anchor at the requested position.  Lives in the
+        // animation layer (groupTransforms[gid]) just like Model-mode drag, so
+        // a slider edit at time t1 doesn't shift the rendered position at any
+        // other keyframe time.  Without stamping, the edit is reset to the
+        // keyframe-evaluated value the next time the playhead moves —
+        // intentional, matching translateGroup's behavior.
         state.setGroupWorldPosition = { [weak viewport] anchor, desiredWorld in
             guard let sm = viewport?.sceneManager,
                   let gid = anchor.groupID else { return }
-            let gt           = sm.groupTransforms[gid] ?? matrix_identity_float4x4
+            var gt           = sm.groupTransforms[gid] ?? matrix_identity_float4x4
             let world4       = gt * anchor.transform.columns.3
             let currentWorld = SIMD3<Float>(world4.x, world4.y, world4.z)
             let worldDelta   = desiredWorld - currentWorld
-            let localDelta4  = simd_inverse(gt)
-                             * SIMD4<Float>(worldDelta.x, worldDelta.y, worldDelta.z, 0)
-            for part in sm.objects(inGroup: gid) where part.parentIndex == nil {
-                let t = part.transform.columns.3
-                part.transform.columns.3 = SIMD4<Float>(t.x + localDelta4.x,
-                                                        t.y + localDelta4.y,
-                                                        t.z + localDelta4.z,
-                                                        1)
-            }
+            let tCol         = gt.columns.3
+            let newT         = SIMD3<Float>(tCol.x + worldDelta.x,
+                                            tCol.y + worldDelta.y,
+                                            tCol.z + worldDelta.z)
+            // Match translateGroup's ±100 clamp on the group translation.
+            let clamped = simd_clamp(newT,
+                                     SIMD3<Float>(repeating: -100),
+                                     SIMD3<Float>(repeating:  100))
+            gt.columns.3 = SIMD4<Float>(clamped.x, clamped.y, clamped.z, tCol.w)
+            sm.groupTransforms[gid] = gt
         }
 
         // World rotation (YXZ Euler degrees) — mirrors worldPosition: include the
@@ -2102,30 +2206,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             }
         }
 
-        // Group rotate — pivot every root part around the anchor's world position
-        // so the model spins as a rigid body in place.  Persists in obj.transform.
+        // Group rotate — pivot the GROUP transform about the anchor's current
+        // world position so the model spins as a rigid body in place.  Lives
+        // in the animation layer (groupTransforms[gid]), same as the group
+        // position writer; stamp at the current time to record it.
         state.setGroupWorldRotation = { [weak viewport] anchor, desiredEuler in
             guard let sm = viewport?.sceneManager,
                   let gid = anchor.groupID else { return }
             let gt           = sm.groupTransforms[gid] ?? matrix_identity_float4x4
             let worldAnchor  = gt * anchor.transform
-            // Pivot at the anchor's current world position.
             let P4           = worldAnchor.columns.3
             let P            = SIMD3<Float>(P4.x, P4.y, P4.z)
             // Delta rotation in world space = R_new × R_old⁻¹  (pure rotations).
             let oldWorldR    = TransformMath.pureRotation(of: worldAnchor)
             let newWorldR    = TransformMath.matrixFromEuler(desiredEuler)
             let deltaR       = newWorldR * simd_inverse(oldWorldR)
-            // newRoot = gt⁻¹ · T(P) · ΔR · T(-P) · gt · oldRoot
+            // gt_new = T(P) · ΔR · T(-P) · gt
             let pivotXform   = TransformMath.translation(P)
                              * deltaR
                              * TransformMath.translation(-P)
-            let gtInv        = simd_inverse(gt)
-            for part in sm.objects(inGroup: gid) where part.parentIndex == nil {
-                let worldOld = gt * part.transform
-                let worldNew = pivotXform * worldOld
-                part.transform = gtInv * worldNew
-            }
+            sm.groupTransforms[gid] = pivotXform * gt
+        }
+
+        // Group scale — pivot-scale the GROUP transform about the anchor's
+        // current world position by the per-axis delta (newScale / oldScale).
+        // Same animation-layer semantics as group position/rotation.
+        state.setGroupWorldScale = { [weak viewport] anchor, desiredWorldScale in
+            guard let sm = viewport?.sceneManager,
+                  let gid = anchor.groupID else { return }
+            let gt           = sm.groupTransforms[gid] ?? matrix_identity_float4x4
+            let worldAnchor  = gt * anchor.transform
+            let P4           = worldAnchor.columns.3
+            let P            = SIMD3<Float>(P4.x, P4.y, P4.z)
+            // Per-axis delta scale.  Guard against div-by-zero (the slider's
+            // 0.01 lower bound makes this almost impossible, but be safe).
+            let oldWorldScale = TransformMath.scale(of: worldAnchor)
+            let safeOld = SIMD3<Float>(
+                abs(oldWorldScale.x) > 1e-6 ? oldWorldScale.x : 1,
+                abs(oldWorldScale.y) > 1e-6 ? oldWorldScale.y : 1,
+                abs(oldWorldScale.z) > 1e-6 ? oldWorldScale.z : 1
+            )
+            let deltaS = desiredWorldScale / safeOld
+            var S = matrix_identity_float4x4
+            S.columns.0.x = deltaS.x
+            S.columns.1.y = deltaS.y
+            S.columns.2.z = deltaS.z
+            // gt_new = T(P) · S · T(-P) · gt
+            let pivotXform   = TransformMath.translation(P)
+                             * S
+                             * TransformMath.translation(-P)
+            sm.groupTransforms[gid] = pivotXform * gt
         }
 
         // Push current selection immediately.

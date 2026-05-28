@@ -93,9 +93,10 @@ struct ModelInspectorPanel: View {
 
     // MARK: - Scale
 
-    // Per-axis scale.  Enabled only for a single non-grouped root; grouped
-    // selections display the effective world scale but the sliders are greyed
-    // (group scale would need to scale every part — deferred).
+    // Per-axis scale.  Enabled for a single non-grouped root (writes
+    // obj.transform directly) and for a uniform-group selection (delegates
+    // to setGroupWorldScale; scales every root part about the anchor's
+    // world position so children move apart/closer AND scale in place).
     private var scaleSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Scale").font(.headline)
