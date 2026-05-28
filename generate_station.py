@@ -1,0 +1,270 @@
+"""
+generate_station.py — Stylized horizontal hexagonal space station.
+
+The geometry is benzene scaled ~2× and laid flat in the XZ plane (Y is up
+in the viewer). Each carbon hub and hydrogen pod has three angular-cone
+face-cluster cutouts in its icosphere mesh, producing irregular polygonal
+openings ("windows") that you can see through. The atom materials are
+`doubleSided = true` so the interior of the shell is visible from outside
+when looking through a hole, and the hull is visible from inside if the
+camera enters the station.
+
+The colour scheme matches benzene's molecule-scene split: heavy / hydrogen /
+bonds — three solid-colour PBR materials, three submeshes.
+
+Filenames:
+    station-{heavy}-{hydrogen}-{bond}-{material}.glb
+
+Scene graph:
+    heavy     (root)   — 6 carbon hubs with cutouts
+    ├── hydrogen        — 6 hydrogen pods with cutouts
+    └── bonds           — 6 radial C–H bonds + 6 ring-segment C–C bonds (solid)
+
+Usage:
+    /tmp/glb_env/bin/python3 generate_station.py        # interactive
+    /tmp/glb_env/bin/python3 generate_station.py -y     # default greyscale
+"""
+
+import os
+import sys
+
+import numpy as np
+import trimesh
+import trimesh.visual.material
+
+from generate_models import (
+    prompt_color, prompt_material,
+    _apply_solid_color, _align_to,
+)
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_DIR = os.path.join(SCRIPT_DIR, "Models")
+
+
+# ─── Geometry parameters (≈ 2× scaled benzene) ──────────────────────────────
+RING_R    = 0.66     # carbon hub ring radius
+TIP_R     = 1.06     # hydrogen pod ring radius
+C_ATOM_R  = 0.15     # carbon hub radius
+H_ATOM_R  = 0.11     # hydrogen pod radius
+CH_BOND_R = 0.044    # radial C–H bond cylinder radius
+CC_BOND_R = 0.054    # ring-segment C–C bond cylinder radius
+
+# Cone half-angles (degrees) for the icosphere cutouts.
+#   *_WIN_*  : window openings — the "see through" holes
+#   *_BOND_* : bond-entry openings — sized to fit the bond cross-section so the
+#              bond cylinder docks cleanly with the atom hull
+# At 22° on icosphere(2) about 12 faces fall inside the cone; at 28° about 24.
+C_WIN_HALF_ANGLE  = 22.0
+C_BOND_HALF_ANGLE = 22.0   # ≥ arcsin(CC_BOND_R / C_ATOM_R) = 21.1°
+H_WIN_HALF_ANGLE  = 28.0
+H_BOND_HALF_ANGLE = 25.0   # ≥ arcsin(CH_BOND_R / H_ATOM_R) = 23.6°
+
+ICOSPHERE_SUBDIV = 2
+
+
+# ─── Helpers ────────────────────────────────────────────────────────────────
+
+def _icosphere_with_cutouts(radius, cutout_specs,
+                            subdivisions=ICOSPHERE_SUBDIV):
+    """Build an icosphere centred at the origin, then delete any face whose
+    centroid lies inside an angular cone around one of the cutout directions.
+
+    `cutout_specs` is a list of (direction_vec3, half_angle_degrees) tuples,
+    so each cutout can have its own size — windows are typically larger than
+    bond-entry "doorways".
+
+    The leftover mesh is an open shell with irregular polygonal holes.
+    Caller is responsible for translating it into position.
+    """
+    sphere    = trimesh.creation.icosphere(subdivisions, radius)
+    centroids = sphere.triangles_center
+    norms     = np.linalg.norm(centroids, axis=1, keepdims=True)
+    dirs      = centroids / np.where(norms > 1e-12, norms, 1.0)
+
+    keep = np.ones(len(sphere.faces), dtype=bool)
+    for d, half_angle_deg in cutout_specs:
+        d_norm = np.asarray(d, dtype=float)
+        d_norm = d_norm / np.linalg.norm(d_norm)
+        cos_thresh = np.cos(np.radians(half_angle_deg))
+        keep &= (dirs @ d_norm) < cos_thresh
+
+    sphere.update_faces(keep)
+    return sphere
+
+
+def _open_bond(p0, p1, radius, sections=10):
+    """Cylinder connecting two 3D points, with end caps stripped — an open
+    tube. The caller should pick p0 and p1 on the surfaces of the atoms it
+    connects (not at their centres), so the tube terminates at the hull.
+    """
+    p0 = np.asarray(p0, dtype=float)
+    p1 = np.asarray(p1, dtype=float)
+    v  = p1 - p0
+    cyl = trimesh.creation.cylinder(radius=radius,
+                                     height=float(np.linalg.norm(v)),
+                                     sections=sections)
+    # Pre-transform the cylinder is Z-axial; end-cap face normals are ±Z.
+    # Anything else is a side face. Strip the caps before aligning.
+    nz = np.abs(cyl.face_normals[:, 2])
+    cyl.update_faces(nz < 0.99)
+    cyl.apply_transform(_align_to(v, (p0 + p1) * 0.5))
+    return cyl
+
+
+def _apply_solid_color_doublesided(mesh, rgb, metalness, roughness):
+    """Like _apply_solid_color but with doubleSided = True so the interior
+    surface is visible through the cutout windows (and vice versa).
+    """
+    r, g, b = [c / 255.0 for c in rgb]
+    mat = trimesh.visual.material.PBRMaterial(
+        baseColorFactor=[r, g, b, 1.0],
+        metallicFactor=metalness,
+        roughnessFactor=roughness,
+        doubleSided=True,
+    )
+    _  = mesh.vertex_normals
+    uv = np.zeros((len(mesh.vertices), 2), dtype=np.float32)
+    mesh.visual = trimesh.visual.TextureVisuals(uv=uv, material=mat)
+
+
+def colorizer_to_rgb(colorizer, brightness=220):
+    """Sample one representative RGB from a prompt_color colorizer.
+
+    Greyscale tonal range → (v, v, v). Palette → the colorizer's RGB output
+    at the given brightness. None → light grey.
+    """
+    if colorizer is None:
+        return (brightness, brightness, brightness)
+    sample = np.array([[brightness]], dtype=np.uint8)
+    out = colorizer(sample)
+    if out.ndim == 2:
+        v = int(out[0, 0])
+        return (v, v, v)
+    return tuple(int(c) for c in out[0, 0])
+
+
+# ─── Geometry ───────────────────────────────────────────────────────────────
+
+def build_station_scene(heavy_rgb, h_rgb, bond_rgb, metalness, roughness):
+    angles = np.linspace(0, 2 * np.pi, 6, endpoint=False)
+
+    # Ring lies flat in XZ (Y = 0). Y is up in the viewer.
+    C_pos = np.column_stack([RING_R * np.cos(angles),
+                              np.zeros(6),
+                              RING_R * np.sin(angles)])
+    H_pos = np.column_stack([TIP_R * np.cos(angles),
+                              np.zeros(6),
+                              TIP_R * np.sin(angles)])
+
+    c_parts, h_parts, b_parts = [], [], []
+
+    # Helper to spell out an XZ-plane unit vector at a given angle.
+    def xz(angle):
+        return np.array([np.cos(angle), 0.0, np.sin(angle)])
+
+    for i in range(6):
+        theta  = angles[i]
+        j_next = (i + 1) % 6
+        j_prev = (i - 1) % 6
+
+        # Direction from C_pos[i] toward each neighbour (unit vectors, all in XZ).
+        radial_i      = xz(theta)                                 # toward H_pos[i]
+        chord_to_next = (C_pos[j_next] - C_pos[i])
+        chord_to_next = chord_to_next / np.linalg.norm(chord_to_next)
+        chord_to_prev = (C_pos[j_prev] - C_pos[i])
+        chord_to_prev = chord_to_prev / np.linalg.norm(chord_to_prev)
+
+        # ─── Carbon hub: 3 window cutouts + 3 bond-entry cutouts ──────────
+        #   Windows: ±60° outward (flank C–H) + 180° inward (between C–Cs)
+        #   Doorways: along each of the 3 bond directions
+        c_cutouts = [
+            (xz(theta + np.pi / 3), C_WIN_HALF_ANGLE),
+            (xz(theta - np.pi / 3), C_WIN_HALF_ANGLE),
+            (xz(theta + np.pi),     C_WIN_HALF_ANGLE),
+            (radial_i,      C_BOND_HALF_ANGLE),
+            (chord_to_next, C_BOND_HALF_ANGLE),
+            (chord_to_prev, C_BOND_HALF_ANGLE),
+        ]
+        c_atom = _icosphere_with_cutouts(C_ATOM_R, c_cutouts)
+        c_atom.apply_translation(C_pos[i])
+        c_parts.append(c_atom)
+
+        # ─── Hydrogen pod: 3 window cutouts + 1 bond-entry cutout ─────────
+        #   Windows: outward radial + ±120°
+        #   Doorway: inward radial (back toward C)
+        h_cutouts = [
+            (xz(theta),                 H_WIN_HALF_ANGLE),
+            (xz(theta + 2 * np.pi / 3), H_WIN_HALF_ANGLE),
+            (xz(theta - 2 * np.pi / 3), H_WIN_HALF_ANGLE),
+            (-radial_i,                 H_BOND_HALF_ANGLE),
+        ]
+        h_atom = _icosphere_with_cutouts(H_ATOM_R, h_cutouts)
+        h_atom.apply_translation(H_pos[i])
+        h_parts.append(h_atom)
+
+        # ─── Bonds: open tubes, terminating at the atom surfaces ──────────
+        # C–H: from C surface (along radial_i) to H surface (along -radial_i)
+        ch_start = C_pos[i]      + radial_i * C_ATOM_R
+        ch_end   = H_pos[i]      - radial_i * H_ATOM_R
+        b_parts.append(_open_bond(ch_start, ch_end, CH_BOND_R))
+
+        # C–C: from C[i] surface (along chord_to_next) to C[j_next] surface
+        cc_start = C_pos[i]      + chord_to_next * C_ATOM_R
+        cc_end   = C_pos[j_next] - chord_to_next * C_ATOM_R
+        b_parts.append(_open_bond(cc_start, cc_end, CC_BOND_R))
+
+    c_mesh = trimesh.util.concatenate(c_parts)
+    h_mesh = trimesh.util.concatenate(h_parts)
+    b_mesh = trimesh.util.concatenate(b_parts)
+
+    # All three meshes have cutouts or open ends, so all three are doubleSided.
+    _apply_solid_color_doublesided(c_mesh, heavy_rgb, metalness, roughness)
+    _apply_solid_color_doublesided(h_mesh, h_rgb,     metalness, roughness)
+    _apply_solid_color_doublesided(b_mesh, bond_rgb,  metalness, roughness)
+
+    scene = trimesh.Scene()
+    scene.add_geometry(c_mesh, node_name="heavy",    geom_name="heavy")
+    scene.add_geometry(h_mesh, node_name="hydrogen", geom_name="hydrogen",
+                       parent_node_name="heavy")
+    scene.add_geometry(b_mesh, node_name="bonds",    geom_name="bonds",
+                       parent_node_name="heavy")
+    return scene
+
+
+# ─── Main ───────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    use_defaults = "-y" in sys.argv or "--defaults" in sys.argv
+
+    if use_defaults:
+        heavy_rgb = h_rgb = bond_rgb = (180, 180, 180)
+        heavy_label = h_label = bond_label = None
+        metalness, roughness, mat_label = 0.0, 0.85, None
+    else:
+        print("\n  Three colour choices, matching benzene's heavy / hydrogen / bonds split.")
+        print(f"  Output folder: {OUTPUT_DIR}")
+
+        heavy_fn, _, heavy_label = prompt_color("Heavy",    "6 carbon hubs on the inner ring")
+        h_fn,     _, h_label     = prompt_color("Hydrogen", "6 pods at the ring tips")
+        bond_fn,  _, bond_label  = prompt_color("Bonds",    "12 connecting cylinders")
+        metalness, roughness, mat_label, _ = prompt_material("Station")
+
+        heavy_rgb = colorizer_to_rgb(heavy_fn)
+        h_rgb     = colorizer_to_rgb(h_fn)
+        bond_rgb  = colorizer_to_rgb(bond_fn)
+
+    labels = [l for l in [heavy_label, h_label, bond_label, mat_label] if l]
+    stem   = "-".join(["station"] + labels) if labels else "station"
+    out    = os.path.join(OUTPUT_DIR, f"{stem}.glb")
+
+    print(f"\nBuilding station...", end=" ", flush=True)
+    scene = build_station_scene(heavy_rgb, h_rgb, bond_rgb, metalness, roughness)
+    scene.export(out)
+    size_kb  = os.path.getsize(out) / 1024
+    rel_path = os.path.relpath(out, SCRIPT_DIR)
+    print(f"→ {rel_path}  ({size_kb:.1f} KB)")
+
+    print(f"\n   Scene graph ({len(scene.graph.nodes)} nodes):")
+    for node in scene.graph.nodes:
+        print(f"     • {node}")

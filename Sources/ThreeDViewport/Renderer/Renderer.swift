@@ -892,11 +892,18 @@ final class Renderer: NSObject, MTKViewDelegate {
         // composite the far one against background instead of the near one.
         let opaqueObjects:      [SceneObject]
         let transparentObjects: [SceneObject]
-        if visibleObjects.contains(where: { $0.material.opacity < 1.0 }) {
-            opaqueObjects = visibleObjects.filter { $0.material.opacity >= 1.0 }
+        // A material renders transparent if either knob is < 1: the runtime
+        // opacity slider, OR baseColorFactor.w baked into the GLB (the latter
+        // is how Models/station/*.glb ships translucent window submeshes).
+        // The shader multiplies the two, so we test both here for routing.
+        func isTransparent(_ o: SceneObject) -> Bool {
+            o.material.opacity < 1.0 || o.material.baseColorFactor.w < 1.0
+        }
+        if visibleObjects.contains(where: isTransparent) {
+            opaqueObjects = visibleObjects.filter { !isTransparent($0) }
             let eye = viewCamera.eyePosition
             transparentObjects = visibleObjects
-                .filter { $0.material.opacity < 1.0 }
+                .filter(isTransparent)
                 .map { obj -> (SceneObject, Float) in
                     let m: matrix_float4x4
                     if let gid = obj.groupID, let gt = sceneManager.groupTransforms[gid] {

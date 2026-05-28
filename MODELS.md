@@ -108,7 +108,7 @@ The colour count is 6 greyscale ranges + 8 palettes × 3 variants (plain / c1 / 
 /tmp/glb_env/bin/python3 generate_models.py -y     # accept all defaults (greyscale + matte plastic)
 ```
 
-Builds every shape in `SHAPES` (currently 20) one at a time, prompting for a colour palette and a material preset before each shape. Filenames encode the choice, e.g. `sphere-sunset-c2-ceramic.glb`.
+Builds every shape in `SHAPES` (currently 21) one at a time, prompting for a colour palette and a material preset before each shape. Filenames encode the choice, e.g. `sphere-sunset-c2-ceramic.glb`.
 
 ### Shape catalog
 
@@ -117,13 +117,13 @@ Builds every shape in `SHAPES` (currently 20) one at a time, prompting for a col
 | Primitives | cube · cylinder · pyramid · sphere · torus · tetrahedron · octahedron · hexprism · capsule | mostly linear / radial / cylindrical gradients |
 | Surfaces | mobius · star · hyperboloid · trefoil · helix | spiral, cells, concentric rings, diagonal stripes, wood grain |
 | Buckyballs | buckyball-162 · buckyball-642 · buckyball-2562 | icospheres at three subdivisions (162, 642, 2562 verts) |
-| Molecules | water · methane · benzene | radial gradient / marble / angular stripes |
+| Molecules | water · methane · benzene · dna | radial gradient / marble / angular stripes / spiral |
 
 Each builder returns `(mesh, uv, gray_array)`. The greyscale texture is colourised by the chosen palette function, encoded as a PNG, and embedded as the mesh's `baseColorTexture`. UVs are precomputed per shape (box / cylindrical / spherical / per-vertex along path).
 
 ### Molecule note
 
-In `generate_models.py`'s standalone mode, molecules (water, methane, benzene) get a single PBR material like every other shape. In **`generate_all.py`**, the `c1` and `c2` palette variants of molecules instead use `MOLECULE_BUILDERS` to produce a multi-part scene with three solid-colour groups — `heavy` (O / C atoms), `hydrogen` (H atoms), `bonds` (cylinders) — coloured from the palette's bright / complementary / mid stops. This makes molecule colourings read as chemistry rather than as a single textured blob.
+In `generate_models.py`'s standalone mode, molecules (water, methane, benzene, dna) get a single PBR material like every other shape. In **`generate_all.py`**, the `c1` and `c2` palette variants of molecules instead use `MOLECULE_BUILDERS` to produce a multi-part scene with three solid-colour groups — `heavy` (O / C atoms), `hydrogen` (H atoms), `bonds` (cylinders) — coloured from the palette's bright / complementary / mid stops. This makes molecule colourings read as chemistry rather than as a single textured blob. DNA is a special case: both backbone strands map to `heavy` and the base-pair rungs map to `hydrogen`; there is no `bonds` node, so the palette's mid / `comp2a` stop is unused for DNA.
 
 The three parts are exported with `heavy` as the root mesh and `hydrogen` / `bonds` parented to it, mirroring how the robot is structured (`hips` as the root with everything else descending). On import, ThreeDViewport renames the root to the filename basename and the whole molecule appears as a single hierarchical object — selectable and movable as one unit in Model mode, exactly like the robot.
 
@@ -188,28 +188,77 @@ These are constants inside the script — adjust them there if you want a differ
 
 ---
 
+## `generate_station.py`
+
+```bash
+/tmp/glb_env/bin/python3 generate_station.py     # interactive
+/tmp/glb_env/bin/python3 generate_station.py -y  # default greyscale
+```
+
+Builds a stylized hexagonal space station as `station-{heavy}-{hydrogen}-{bond}-{material}.glb`. Geometry is benzene scaled ~2× and laid flat in the XZ plane (Y is up in the viewer). Three colour prompts mirror benzene's molecule-scene split (Heavy / Hydrogen / Bonds), then one material prompt.
+
+### Scene graph
+
+| Node | Contents |
+|------|----------|
+| `heavy` (root) | 6 carbon hubs (icospheres with face-cluster cutouts) |
+| `hydrogen` (child) | 6 outer pods (icospheres with face-cluster cutouts) |
+| `bonds` (child) | 6 radial C–H bonds + 6 ring-segment C–C bonds (solid cylinders) |
+
+### Hull cutouts
+
+Cutouts are produced by deleting any face of an atom's icosphere whose centroid lies inside an angular cone around a cutout direction. The leftover mesh is an open shell with irregular polygonal holes. There are two kinds:
+
+- **Windows** — the "see through" openings. Larger half-angles, placed in the angular gaps between bond directions.
+- **Bond-entry doorways** — sized just larger than the bond cylinder's cross-section so the bond cylinder docks cleanly with the hull. Placed along each bond direction at that atom.
+
+| Atom | Cutouts | Window half-angle | Bond-entry half-angle | Window layout |
+|------|---------|-------------------|------------------------|---------------|
+| Carbon hub  | 3 windows + 3 doorways | 22° | 22° (matches CC bond's `arcsin(0.054/0.15) = 21.1°`) | ±60° outward (flank C–H) + 180° inward (between C–Cs) |
+| Hydrogen pod | 3 windows + 1 doorway | 28° | 25° (matches CH bond's `arcsin(0.044/0.11) = 23.6°`) | Outward radial + ±120° on the equator |
+
+On `icosphere(2)` a 22° cone removes about 12 faces, a 28° cone about 24. After all cutouts the C atom is 248 faces (was 320, lost 6 × 12 = 72); the H pod is ~236 faces.
+
+The carbon hubs end up with **6 openings evenly spaced 60° apart around the equator** (alternating window / doorway), reading as 6-port hubs rather than spheres with a few windows.
+
+### Bonds as open tubes
+
+`_open_bond(p0, p1, radius)` builds a cylinder between two points then strips the end-cap faces (faces whose normal aligns with the cylinder's axial direction). The endpoints are placed on the atom *surfaces*, not the atom centres — `p0 = atom_a_center + atom_a_radius × bond_dir`, `p1 = atom_b_center − atom_b_radius × bond_dir`. The result is an open tube that terminates at the matching doorway in each atom hull, and the visible bond is the *whole* cylinder, not just the small stub between the two atom surfaces.
+
+### `doubleSided` on all materials
+
+All three materials (`heavy`, `hydrogen`, `bonds`) are exported with `doubleSided = true`. The atoms are hollow shells with holes; the bonds are open-ended tubes. Both kinds of geometry expose their inner surface to the camera somewhere, and the renderer needs to draw both sides for the geometry to look correct from arbitrary angles. (ThreeDViewport's renderer already runs with cull mode `.none` everywhere, so this is effectively a no-op for this viewer — but the GLBs render correctly in other tools too.)
+
+### Renderer.swift transparency routing
+
+`Renderer.swift` was updated alongside this work so any material with `baseColorFactor.w < 1.0` *or* `opacity < 1.0` routes into the transparent pipeline. The station is fully opaque now, so this doesn't affect it directly — but the routing change remains useful for any future model that bakes alpha into a GLB.
+
+---
+
 ## `generate_all.py`
 
 ```bash
-/tmp/glb_env/bin/python3 generate_all.py             # shapes + 30 uniform robots
+/tmp/glb_env/bin/python3 generate_all.py             # shapes + robots + stations
 /tmp/glb_env/bin/python3 generate_all.py --two-tone  # also generates 900 two-tone robots
 /tmp/glb_env/bin/python3 generate_all.py --shapes-only
 /tmp/glb_env/bin/python3 generate_all.py --robot-only
+/tmp/glb_env/bin/python3 generate_all.py --station-only
 ```
 
-Non-interactive. Iterates every (shape × colour × material) and every (robot × colour) combination, writing into `~/Documents/ThreeDViewport/Models/`. Progress is printed on a single rewriting line per shape so the output stays terse.
+Non-interactive. Iterates every (shape × colour × material), every (robot × colour), and every (station × colour × material) combination, writing into `~/Documents/ThreeDViewport/Models/`. Progress is printed on a single rewriting line per group so the output stays terse.
 
 | Mode | File count |
 |------|------------|
-| Default (shapes + uniform robots) | 20 × 30 × 5 + 30 = **3,030** |
-| `--shapes-only` | 20 × 30 × 5 = **3,000** |
+| Default (shapes + uniform robots + stations) | 3,150 + 30 + 150 = **3,330** |
+| `--shapes-only` | 21 × 30 × 5 = **3,150** |
 | `--robot-only` | **30** |
 | `--robot-only --two-tone` | 30 + 900 = **930** |
-| Default + `--two-tone` | **3,930** |
+| `--station-only` | 30 × 5 = **150** |
+| Default + `--two-tone` | 3,150 + 930 + 150 = **4,230** |
 
-Two-tone robots use body+legs as colour A and head+arms as colour B, named `robot-{A}-{B}.glb`.
+Two-tone robots use body+legs as colour A and head+arms as colour B, named `robot-{A}-{B}.glb`. The station has its own 3-colour split via `palette_molecule_colors()` (same mechanism as benzene's c1/c2 variants), so there is no separate two-tone flag for it — `c1` and `c2` variants of the eight palette colours give the distinct heavy/hydrogen/bond colour combinations automatically.
 
-The shapes pass uses `palette_molecule_colors()` for molecule shapes when the palette is `c1` or `c2`, producing the multi-part atom/bond colour split described above.
+The shapes pass uses `palette_molecule_colors()` for molecule shapes when the palette is `c1` or `c2`, producing the multi-part atom/bond colour split described above. The station pass uses the same function for the same reason.
 
 ---
 

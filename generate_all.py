@@ -1,19 +1,23 @@
 """
 generate_all.py  —  Batch-generate every colour × material combination.
 
-Shape output  : ~/Documents/ThreeDViewport/Models/<shape>/
-Robot output  : ~/Documents/ThreeDViewport/Models/robot/
+Shape output    : ~/Documents/ThreeDViewport/Models/<shape>/
+Robot output    : ~/Documents/ThreeDViewport/Models/robot/
+Station output  : ~/Documents/ThreeDViewport/Models/station/
 
 Filenames
-  shapes : {shape}-{colour}-{material}.glb   (150 per shape, 1 650 total)
-  robot  : robot-{colour}.glb                (30 uniform-colour)
-           robot-{body-colour}-{head-colour}.glb  (900 two-tone, opt-in)
+  shapes  : {shape}-{colour}-{material}.glb         (150 per shape)
+  robot   : robot-{colour}.glb                      (30 uniform-colour)
+            robot-{body-colour}-{head-colour}.glb   (900 two-tone, opt-in)
+  station : station-{colour}-{material}.glb         (150 — palette c1/c2 get
+            distinct heavy/hydrogen/bond colours via palette_molecule_colors)
 
 Usage:
-    python3 generate_all.py               # shapes + 30 uniform robots
-    python3 generate_all.py --two-tone    # also generates 900 two-tone robots
+    python3 generate_all.py             # shapes + robots + stations
+    python3 generate_all.py --two-tone  # adds 900 two-tone robots
     python3 generate_all.py --shapes-only
     python3 generate_all.py --robot-only
+    python3 generate_all.py --station-only
 """
 
 import os
@@ -25,6 +29,7 @@ from generate_models import (
     apply_palette, apply_tonal_range, apply_texture, make_png_bytes,
 )
 from generate_character import build_robot
+from generate_station   import build_station_scene, colorizer_to_rgb
 
 MODELS_ROOT = os.path.expanduser("~/Documents/ThreeDViewport/Models")
 
@@ -109,19 +114,59 @@ def generate_robot(two_tone=False):
     print(f"\r  {len(pairs)} two-tone robot files written.{' ' * 60}")
 
 
-if __name__ == "__main__":
-    two_tone    = "--two-tone"    in sys.argv
-    shapes_only = "--shapes-only" in sys.argv
-    robot_only  = "--robot-only"  in sys.argv
+def generate_station():
+    """Iterate (colour × material) just like the molecule shapes do:
+       - palette c1/c2 variants → distinct heavy/hydrogen/bond colours
+       - everything else (greyscale + base-palette) → uniform colour all parts
+    """
+    colors    = list(all_colors())
+    materials = [(n.lower().replace(" ", "-"), metal, rough)
+                 for _, (n, metal, rough) in MATERIAL_PRESETS.items()]
+    out_dir   = os.path.join(MODELS_ROOT, "station")
+    os.makedirs(out_dir, exist_ok=True)
 
-    if not robot_only:
+    total = len(colors) * len(materials)
+    done  = 0
+    print(f"  station  ({total} files)")
+    for color_label, colorizer, palette_key, variant in colors:
+        if palette_key and variant in ("c1", "c2"):
+            heavy, h, bond = palette_molecule_colors(palette_key, variant)
+        else:
+            rgb = colorizer_to_rgb(colorizer)
+            heavy = h = bond = rgb
+
+        for mat_label, metalness, roughness in materials:
+            stem = f"station-{color_label}-{mat_label}"
+            out  = os.path.join(out_dir, f"{stem}.glb")
+            build_station_scene(heavy, h, bond, metalness, roughness).export(out)
+            done += 1
+            print(f"\r    {done}/{total}  {stem}.glb", end="", flush=True)
+    print(f"\r  {done} station files written.{' ' * 60}")
+
+
+if __name__ == "__main__":
+    two_tone     = "--two-tone"     in sys.argv
+    shapes_only  = "--shapes-only"  in sys.argv
+    robot_only   = "--robot-only"   in sys.argv
+    station_only = "--station-only" in sys.argv
+
+    do_shapes  = not (robot_only  or station_only)
+    do_robot   = not (shapes_only or station_only)
+    do_station = not (shapes_only or robot_only)
+
+    if do_shapes:
         shape_total = len(list(all_colors())) * len(MATERIAL_PRESETS) * len(SHAPES)
         print(f"\nGenerating shapes ({shape_total:,} files)...")
         generate_shapes()
 
-    if not shapes_only:
+    if do_robot:
         robot_total = 30 + (900 if two_tone else 0)
         print(f"\nGenerating robots ({robot_total} files)...")
         generate_robot(two_tone=two_tone)
+
+    if do_station:
+        station_total = len(list(all_colors())) * len(MATERIAL_PRESETS)
+        print(f"\nGenerating stations ({station_total} files)...")
+        generate_station()
 
     print("\nDone.")

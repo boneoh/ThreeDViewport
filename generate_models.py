@@ -623,6 +623,32 @@ def build_benzene():
     return mesh, uv_box(mesh), tex_angular_stripes()
 
 
+def _dna_strand_points(turns, n_pts, helix_r, height, phase):
+    t = np.linspace(0, turns * 2 * np.pi, n_pts, endpoint=False)
+    z = np.linspace(-height / 2, height / 2, n_pts)
+    return np.column_stack([helix_r * np.cos(t + phase),
+                            helix_r * np.sin(t + phase),
+                            z])
+
+
+def build_dna():
+    turns, n_pts, n_rungs   = 2.5, 200, 10
+    helix_r, tube_r, rung_r = 0.25, 0.04, 0.025
+    height                  = 1.0
+
+    a_pts = _dna_strand_points(turns, n_pts, helix_r, height, 0.0)
+    b_pts = _dna_strand_points(turns, n_pts, helix_r, height, np.pi)
+
+    mesh_a, _ = _tube(a_pts, tube_r, sections=12, closed=False)
+    mesh_b, _ = _tube(b_pts, tube_r, sections=12, closed=False)
+
+    rung_idx = np.linspace(0, n_pts - 1, n_rungs, dtype=int)
+    rungs    = [_bond(a_pts[i], b_pts[i], rung_r) for i in rung_idx]
+
+    mesh = trimesh.util.concatenate([mesh_a, mesh_b] + rungs)
+    return mesh, uv_cylindrical(mesh.vertices), tex_spiral()
+
+
 # ---------------------------------------------------------------------------
 # Mathematical shape builders
 # ---------------------------------------------------------------------------
@@ -839,10 +865,37 @@ def build_benzene_scene(heavy_rgb, h_rgb, bond_rgb, metalness, roughness):
     return scene
 
 
+def build_dna_scene(heavy_rgb, h_rgb, bond_rgb, metalness, roughness):
+    turns, n_pts, n_rungs   = 2.5, 200, 10
+    helix_r, tube_r, rung_r = 0.25, 0.04, 0.025
+    height                  = 1.0
+
+    a_pts = _dna_strand_points(turns, n_pts, helix_r, height, 0.0)
+    b_pts = _dna_strand_points(turns, n_pts, helix_r, height, np.pi)
+
+    mesh_a, _ = _tube(a_pts, tube_r, sections=12, closed=False)
+    mesh_b, _ = _tube(b_pts, tube_r, sections=12, closed=False)
+    strands_mesh = trimesh.util.concatenate([mesh_a, mesh_b])
+
+    rung_idx   = np.linspace(0, n_pts - 1, n_rungs, dtype=int)
+    rungs_mesh = trimesh.util.concatenate(
+        [_bond(a_pts[i], b_pts[i], rung_r) for i in rung_idx]
+    )
+
+    _apply_solid_color(strands_mesh, heavy_rgb, metalness, roughness)
+    _apply_solid_color(rungs_mesh,   h_rgb,     metalness, roughness)
+
+    scene = trimesh.Scene()
+    scene.add_geometry(strands_mesh, node_name="heavy",    geom_name="heavy")
+    scene.add_geometry(rungs_mesh,   node_name="hydrogen", geom_name="hydrogen", parent_node_name="heavy")
+    return scene
+
+
 MOLECULE_BUILDERS = {
     "water":   build_water_scene,
     "methane":  build_methane_scene,
     "benzene":  build_benzene_scene,
+    "dna":      build_dna_scene,
 }
 
 
@@ -868,6 +921,7 @@ SHAPES = [
     ("water",           build_water,           "radial gradient"),
     ("methane",         build_methane,         "marble"),
     ("benzene",         build_benzene,         "angular stripes"),
+    ("dna",             build_dna,             "spiral"),
     ("trefoil",         build_trefoil,         "diagonal stripes"),
     ("helix",           build_helix,           "wood grain"),
     ("hyperboloid",     build_hyperboloid,     "concentric rings"),
