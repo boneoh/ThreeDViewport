@@ -61,35 +61,63 @@ H_BOND_HALF_ANGLE = 25.0   # ≥ arcsin(CH_BOND_R / H_ATOM_R) = 23.6°
 
 ICOSPHERE_SUBDIV = 2
 
+# Glass panes filling the window cutouts (NOT the doorway cutouts — those
+# stay open). The glass material is the same across every batch combination
+# so the windows read as a consistent piece of station hardware.
+GLASS_COLOR     = (180, 220, 255)   # pale arctic blue
+GLASS_OPACITY   = 0.30              # a bit more smoke than the first pass
+GLASS_METALNESS = 0.70              # stronger HDRI reflection
+GLASS_ROUGHNESS = 0.10              # smooth surface for tidy reflections
+
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
 
-def _icosphere_with_cutouts(radius, cutout_specs,
+def _icosphere_with_cutouts(radius, window_specs, doorway_specs,
                             subdivisions=ICOSPHERE_SUBDIV):
-    """Build an icosphere centred at the origin, then delete any face whose
-    centroid lies inside an angular cone around one of the cutout directions.
+    """Build an icosphere centred at the origin and split its faces into
+    two meshes: the opaque hull, and the translucent glass panes.
 
-    `cutout_specs` is a list of (direction_vec3, half_angle_degrees) tuples,
-    so each cutout can have its own size — windows are typically larger than
-    bond-entry "doorways".
+    `window_specs` and `doorway_specs` are each a list of
+    (direction_vec3, half_angle_degrees) tuples.
 
-    The leftover mesh is an open shell with irregular polygonal holes.
-    Caller is responsible for translating it into position.
+    Faces inside a *window* cone are removed from the hull and kept as the
+    `glass` mesh — they'll be filled in with a translucent material so the
+    window perfectly matches the sphere's curvature.
+
+    Faces inside a *doorway* cone are removed from the hull and discarded;
+    those holes are left open (e.g. for the robot to travel through).
+
+    Returns `(hull_mesh, glass_mesh)`. Caller is responsible for translating
+    both into position.
     """
     sphere    = trimesh.creation.icosphere(subdivisions, radius)
     centroids = sphere.triangles_center
     norms     = np.linalg.norm(centroids, axis=1, keepdims=True)
     dirs      = centroids / np.where(norms > 1e-12, norms, 1.0)
 
-    keep = np.ones(len(sphere.faces), dtype=bool)
-    for d, half_angle_deg in cutout_specs:
-        d_norm = np.asarray(d, dtype=float)
-        d_norm = d_norm / np.linalg.norm(d_norm)
-        cos_thresh = np.cos(np.radians(half_angle_deg))
-        keep &= (dirs @ d_norm) < cos_thresh
+    def faces_in_cones(specs):
+        mask = np.zeros(len(sphere.faces), dtype=bool)
+        for d, half_angle_deg in specs:
+            d_norm = np.asarray(d, dtype=float)
+            d_norm = d_norm / np.linalg.norm(d_norm)
+            cos_thresh = np.cos(np.radians(half_angle_deg))
+            mask |= (dirs @ d_norm) >= cos_thresh
+        return mask
 
-    sphere.update_faces(keep)
-    return sphere
+    win_mask  = faces_in_cones(window_specs)
+    door_mask = faces_in_cones(doorway_specs)
+
+    hull = sphere.copy()
+    hull.update_faces(~(win_mask | door_mask))
+
+    # Defensive `& ~door_mask`: if a window cone and doorway cone ever
+    # overlapped (they don't in the station's 60°-spaced layout, but
+    # asserting it here keeps the geometry honest), the doorway wins and
+    # those faces stay open rather than becoming glass.
+    glass = sphere.copy()
+    glass.update_faces(win_mask & ~door_mask)
+
+    return hull, glass
 
 
 def _open_bond(p0, p1, radius, sections=10):
@@ -127,6 +155,24 @@ def _apply_solid_color_doublesided(mesh, rgb, metalness, roughness):
     mesh.visual = trimesh.visual.TextureVisuals(uv=uv, material=mat)
 
 
+def _apply_glass(mesh, rgb, opacity, metalness, roughness):
+    """Translucent metallic PBR material for the glass panes. alphaMode=BLEND
+    + baseColorFactor.w < 1 routes the mesh into the transparent pipeline
+    automatically (Renderer.swift checks both opacity and baseColorFactor.w).
+    """
+    r, g, b = [c / 255.0 for c in rgb]
+    mat = trimesh.visual.material.PBRMaterial(
+        baseColorFactor=[r, g, b, opacity],
+        metallicFactor=metalness,
+        roughnessFactor=roughness,
+        alphaMode="BLEND",
+        doubleSided=True,
+    )
+    _  = mesh.vertex_normals
+    uv = np.zeros((len(mesh.vertices), 2), dtype=np.float32)
+    mesh.visual = trimesh.visual.TextureVisuals(uv=uv, material=mat)
+
+
 def colorizer_to_rgb(colorizer, brightness=220):
     """Sample one representative RGB from a prompt_color colorizer.
 
@@ -156,7 +202,7 @@ def build_station_scene(heavy_rgb, h_rgb, bond_rgb, metalness, roughness):
                               np.zeros(6),
                               TIP_R * np.sin(angles)])
 
-    c_parts, h_parts, b_parts = [], [], []
+    c_parts, h_parts, b_parts, glass_parts = [], [], [], []
 
     # Helper to spell out an XZ-plane unit vector at a given angle.
     def xz(angle):
@@ -174,33 +220,41 @@ def build_station_scene(heavy_rgb, h_rgb, bond_rgb, metalness, roughness):
         chord_to_prev = (C_pos[j_prev] - C_pos[i])
         chord_to_prev = chord_to_prev / np.linalg.norm(chord_to_prev)
 
-        # ─── Carbon hub: 3 window cutouts + 3 bond-entry cutouts ──────────
+        # ─── Carbon hub: 3 windows (glass-filled) + 3 doorways (open) ─────
         #   Windows: ±60° outward (flank C–H) + 180° inward (between C–Cs)
         #   Doorways: along each of the 3 bond directions
-        c_cutouts = [
+        c_windows = [
             (xz(theta + np.pi / 3), C_WIN_HALF_ANGLE),
             (xz(theta - np.pi / 3), C_WIN_HALF_ANGLE),
             (xz(theta + np.pi),     C_WIN_HALF_ANGLE),
+        ]
+        c_doorways = [
             (radial_i,      C_BOND_HALF_ANGLE),
             (chord_to_next, C_BOND_HALF_ANGLE),
             (chord_to_prev, C_BOND_HALF_ANGLE),
         ]
-        c_atom = _icosphere_with_cutouts(C_ATOM_R, c_cutouts)
-        c_atom.apply_translation(C_pos[i])
-        c_parts.append(c_atom)
+        c_hull, c_glass = _icosphere_with_cutouts(C_ATOM_R, c_windows, c_doorways)
+        c_hull.apply_translation(C_pos[i])
+        c_glass.apply_translation(C_pos[i])
+        c_parts.append(c_hull)
+        glass_parts.append(c_glass)
 
-        # ─── Hydrogen pod: 3 window cutouts + 1 bond-entry cutout ─────────
+        # ─── Hydrogen pod: 3 windows (glass-filled) + 1 doorway (open) ────
         #   Windows: outward radial + ±120°
         #   Doorway: inward radial (back toward C)
-        h_cutouts = [
+        h_windows = [
             (xz(theta),                 H_WIN_HALF_ANGLE),
             (xz(theta + 2 * np.pi / 3), H_WIN_HALF_ANGLE),
             (xz(theta - 2 * np.pi / 3), H_WIN_HALF_ANGLE),
+        ]
+        h_doorways = [
             (-radial_i,                 H_BOND_HALF_ANGLE),
         ]
-        h_atom = _icosphere_with_cutouts(H_ATOM_R, h_cutouts)
-        h_atom.apply_translation(H_pos[i])
-        h_parts.append(h_atom)
+        h_hull, h_glass = _icosphere_with_cutouts(H_ATOM_R, h_windows, h_doorways)
+        h_hull.apply_translation(H_pos[i])
+        h_glass.apply_translation(H_pos[i])
+        h_parts.append(h_hull)
+        glass_parts.append(h_glass)
 
         # ─── Bonds: open tubes, terminating at the atom surfaces ──────────
         # C–H: from C surface (along radial_i) to H surface (along -radial_i)
@@ -213,20 +267,25 @@ def build_station_scene(heavy_rgb, h_rgb, bond_rgb, metalness, roughness):
         cc_end   = C_pos[j_next] - chord_to_next * C_ATOM_R
         b_parts.append(_open_bond(cc_start, cc_end, CC_BOND_R))
 
-    c_mesh = trimesh.util.concatenate(c_parts)
-    h_mesh = trimesh.util.concatenate(h_parts)
-    b_mesh = trimesh.util.concatenate(b_parts)
+    c_mesh     = trimesh.util.concatenate(c_parts)
+    h_mesh     = trimesh.util.concatenate(h_parts)
+    b_mesh     = trimesh.util.concatenate(b_parts)
+    glass_mesh = trimesh.util.concatenate(glass_parts)
 
-    # All three meshes have cutouts or open ends, so all three are doubleSided.
+    # All hull/bond meshes have cutouts or open ends → doubleSided.
     _apply_solid_color_doublesided(c_mesh, heavy_rgb, metalness, roughness)
     _apply_solid_color_doublesided(h_mesh, h_rgb,     metalness, roughness)
     _apply_solid_color_doublesided(b_mesh, bond_rgb,  metalness, roughness)
+    _apply_glass(glass_mesh, GLASS_COLOR, GLASS_OPACITY,
+                 GLASS_METALNESS, GLASS_ROUGHNESS)
 
     scene = trimesh.Scene()
-    scene.add_geometry(c_mesh, node_name="heavy",    geom_name="heavy")
-    scene.add_geometry(h_mesh, node_name="hydrogen", geom_name="hydrogen",
+    scene.add_geometry(c_mesh,     node_name="heavy",    geom_name="heavy")
+    scene.add_geometry(h_mesh,     node_name="hydrogen", geom_name="hydrogen",
                        parent_node_name="heavy")
-    scene.add_geometry(b_mesh, node_name="bonds",    geom_name="bonds",
+    scene.add_geometry(b_mesh,     node_name="bonds",    geom_name="bonds",
+                       parent_node_name="heavy")
+    scene.add_geometry(glass_mesh, node_name="glass",    geom_name="glass",
                        parent_node_name="heavy")
     return scene
 

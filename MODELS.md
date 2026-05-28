@@ -203,7 +203,8 @@ Builds a stylized hexagonal space station as `station-{heavy}-{hydrogen}-{bond}-
 |------|----------|
 | `heavy` (root) | 6 carbon hubs (icospheres with face-cluster cutouts) |
 | `hydrogen` (child) | 6 outer pods (icospheres with face-cluster cutouts) |
-| `bonds` (child) | 6 radial C–H bonds + 6 ring-segment C–C bonds (solid cylinders) |
+| `bonds` (child) | 6 radial C–H bonds + 6 ring-segment C–C bonds (open tubes) |
+| `glass` (child) | 36 spherical-cap window panes filling the window cutouts (translucent metallic) |
 
 ### Hull cutouts
 
@@ -220,6 +221,22 @@ Cutouts are produced by deleting any face of an atom's icosphere whose centroid 
 On `icosphere(2)` a 22° cone removes about 12 faces, a 28° cone about 24. After all cutouts the C atom is 248 faces (was 320, lost 6 × 12 = 72); the H pod is ~236 faces.
 
 The carbon hubs end up with **6 openings evenly spaced 60° apart around the equator** (alternating window / doorway), reading as 6-port hubs rather than spheres with a few windows.
+
+### Glass panes
+
+The `glass` submesh fills the window cutouts (not the doorway cutouts — those stay open for the future robot-through-tube animation). `_icosphere_with_cutouts` returns both the opaque `hull` and a `glass` mesh built from *the very faces that were removed* — so each pane is a piece of the original icosphere, perfectly matching the sphere's curvature in the hole it fills.
+
+The glass material is the same on every batch combination (it's not driven by the palette), so the windows read as a consistent piece of station hardware:
+
+```
+GLASS_COLOR     = (180, 220, 255)   # pale arctic blue
+GLASS_OPACITY   = 0.30              # a bit more smoke than the first pass
+GLASS_METALNESS = 0.70              # stronger HDRI reflection
+GLASS_ROUGHNESS = 0.10              # smooth surface for tidy reflections
+alphaMode = "BLEND",  doubleSided = true
+```
+
+With `baseColorFactor.w < 1.0` baked in, the glass automatically routes to the transparent pipeline through `Renderer.swift`'s opacity-or-alpha check. Reflections come from `metallicFactor` interacting with the loaded HDRI environment — turn an HDRI on in the viewer and the panes will pick up its highlights. Because the glass material is `doubleSided`, the *inside* surfaces of the spherical-cap panes reflect the HDRI too, which is why HDR highlights also appear inside each atom when you look through a doorway.
 
 ### Bonds as open tubes
 
