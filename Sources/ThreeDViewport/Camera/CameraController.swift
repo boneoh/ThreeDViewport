@@ -38,6 +38,12 @@ final class CameraController {
     /// by the follow-resolved values each frame.
     var followSuspended: Bool = false
 
+    /// World-space up vector override for the view matrix.  Set by
+    /// `applyCameraFollow` when the resolved follow keyframe carries a
+    /// `followUpLocal` — the camera then rolls with the followed object.
+    /// Nil restores the default world Y up.
+    var followUpOverride: SIMD3<Float>? = nil
+
     init() {
         print("[DEBUG] CameraController: initialized, distance=" + String(distance))
     }
@@ -100,7 +106,8 @@ final class CameraController {
     }
 
     var viewMatrix: matrix_float4x4 {
-        return makeLookAt(eye: eyePosition, center: target, up: SIMD3<Float>(0, 1, 0))
+        let up = followUpOverride ?? SIMD3<Float>(0, 1, 0)
+        return makeLookAt(eye: eyePosition, center: target, up: up)
     }
 
     var projectionMatrix: matrix_float4x4 {

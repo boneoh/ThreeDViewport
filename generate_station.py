@@ -61,6 +61,16 @@ H_BOND_HALF_ANGLE = 25.0   # ≥ arcsin(CH_BOND_R / H_ATOM_R) = 23.6°
 
 ICOSPHERE_SUBDIV = 2
 
+# Inner shells inside every opaque part.  The atom/bond surfaces are rendered
+# from both sides (the viewer's cull mode is .none) and the PBR shader uses the
+# stored normal as-is, so a polished-metal back-face sprays the user's eye with
+# strong HDRI reflections that don't match the outside.  An inverted-winding,
+# slightly inset shell with a ceramic-style material gives the inside a soft,
+# colour-matched look without altering the outside.
+INNER_INSET     = 0.005   # 0.5% scale toward each part's local centre
+INNER_METALNESS = 0.00    # matches the "Matte Plastic" preset in generate_models.py
+INNER_ROUGHNESS = 0.85
+
 # Glass panes filling the window cutouts (NOT the doorway cutouts — those
 # stay open). The glass material is the same across every batch combination
 # so the windows read as a consistent piece of station hardware.
@@ -139,6 +149,30 @@ def _open_bond(p0, p1, radius, sections=10):
     return cyl
 
 
+def _build_inner_shell(outer_mesh, inset=INNER_INSET):
+    """Copy of `outer_mesh` with face winding reversed (normals now point
+    inward) and vertices scaled toward the origin by `1 - inset`.
+
+    Only valid when the source mesh is centred at the origin — which is the
+    case for `_icosphere_with_cutouts` output, before it gets translated to its
+    final position in the station.  Apply the same translation to both the
+    outer and inner shells.
+    """
+    inner = outer_mesh.copy()
+    inner.invert()
+    inner.vertices = inner.vertices * (1.0 - inset)
+    return inner
+
+
+def _inner_bond(p0, p1, outer_radius, inset=INNER_INSET, sections=10):
+    """Open tube along (p0, p1) at radius `outer_radius * (1 - inset)`, with
+    face winding reversed so the normals face the interior of the tube.
+    """
+    inner = _open_bond(p0, p1, outer_radius * (1.0 - inset), sections=sections)
+    inner.invert()
+    return inner
+
+
 def _apply_solid_color_doublesided(mesh, rgb, metalness, roughness):
     """Like _apply_solid_color but with doubleSided = True so the interior
     surface is visible through the cutout windows (and vice versa).
@@ -202,7 +236,8 @@ def build_station_scene(heavy_rgb, h_rgb, bond_rgb, metalness, roughness):
                               np.zeros(6),
                               TIP_R * np.sin(angles)])
 
-    c_parts, h_parts, b_parts, glass_parts = [], [], [], []
+    c_parts,       h_parts,       b_parts,       glass_parts = [], [], [], []
+    c_inner_parts, h_inner_parts, b_inner_parts              = [], [], []
 
     # Helper to spell out an XZ-plane unit vector at a given angle.
     def xz(angle):
@@ -234,10 +269,13 @@ def build_station_scene(heavy_rgb, h_rgb, bond_rgb, metalness, roughness):
             (chord_to_prev, C_BOND_HALF_ANGLE),
         ]
         c_hull, c_glass = _icosphere_with_cutouts(C_ATOM_R, c_windows, c_doorways)
-        c_hull.apply_translation(C_pos[i])
+        c_inner         = _build_inner_shell(c_hull)
+        c_hull .apply_translation(C_pos[i])
+        c_inner.apply_translation(C_pos[i])
         c_glass.apply_translation(C_pos[i])
-        c_parts.append(c_hull)
-        glass_parts.append(c_glass)
+        c_parts      .append(c_hull)
+        c_inner_parts.append(c_inner)
+        glass_parts  .append(c_glass)
 
         # ─── Hydrogen pod: 3 windows (glass-filled) + 1 doorway (open) ────
         #   Windows: outward radial + ±120°
@@ -251,41 +289,62 @@ def build_station_scene(heavy_rgb, h_rgb, bond_rgb, metalness, roughness):
             (-radial_i,                 H_BOND_HALF_ANGLE),
         ]
         h_hull, h_glass = _icosphere_with_cutouts(H_ATOM_R, h_windows, h_doorways)
-        h_hull.apply_translation(H_pos[i])
+        h_inner         = _build_inner_shell(h_hull)
+        h_hull .apply_translation(H_pos[i])
+        h_inner.apply_translation(H_pos[i])
         h_glass.apply_translation(H_pos[i])
-        h_parts.append(h_hull)
-        glass_parts.append(h_glass)
+        h_parts      .append(h_hull)
+        h_inner_parts.append(h_inner)
+        glass_parts  .append(h_glass)
 
         # ─── Bonds: open tubes, terminating at the atom surfaces ──────────
         # C–H: from C surface (along radial_i) to H surface (along -radial_i)
         ch_start = C_pos[i]      + radial_i * C_ATOM_R
         ch_end   = H_pos[i]      - radial_i * H_ATOM_R
-        b_parts.append(_open_bond(ch_start, ch_end, CH_BOND_R))
+        b_parts      .append(_open_bond (ch_start, ch_end, CH_BOND_R))
+        b_inner_parts.append(_inner_bond(ch_start, ch_end, CH_BOND_R))
 
         # C–C: from C[i] surface (along chord_to_next) to C[j_next] surface
         cc_start = C_pos[i]      + chord_to_next * C_ATOM_R
         cc_end   = C_pos[j_next] - chord_to_next * C_ATOM_R
-        b_parts.append(_open_bond(cc_start, cc_end, CC_BOND_R))
+        b_parts      .append(_open_bond (cc_start, cc_end, CC_BOND_R))
+        b_inner_parts.append(_inner_bond(cc_start, cc_end, CC_BOND_R))
 
-    c_mesh     = trimesh.util.concatenate(c_parts)
-    h_mesh     = trimesh.util.concatenate(h_parts)
-    b_mesh     = trimesh.util.concatenate(b_parts)
-    glass_mesh = trimesh.util.concatenate(glass_parts)
+    c_mesh       = trimesh.util.concatenate(c_parts)
+    h_mesh       = trimesh.util.concatenate(h_parts)
+    b_mesh       = trimesh.util.concatenate(b_parts)
+    glass_mesh   = trimesh.util.concatenate(glass_parts)
+    c_inner_mesh = trimesh.util.concatenate(c_inner_parts)
+    h_inner_mesh = trimesh.util.concatenate(h_inner_parts)
+    b_inner_mesh = trimesh.util.concatenate(b_inner_parts)
 
-    # All hull/bond meshes have cutouts or open ends → doubleSided.
+    # Outer hulls use the user's chosen material preset.
     _apply_solid_color_doublesided(c_mesh, heavy_rgb, metalness, roughness)
     _apply_solid_color_doublesided(h_mesh, h_rgb,     metalness, roughness)
     _apply_solid_color_doublesided(b_mesh, bond_rgb,  metalness, roughness)
     _apply_glass(glass_mesh, GLASS_COLOR, GLASS_OPACITY,
                  GLASS_METALNESS, GLASS_ROUGHNESS)
+    # Inner shells share the outer colour but always use a fixed ceramic-ish
+    # material so the interior reads as soft and colour-matched no matter
+    # which outside preset (polished metal, brushed, matte, ceramic, rubber)
+    # the station was generated with.
+    _apply_solid_color_doublesided(c_inner_mesh, heavy_rgb, INNER_METALNESS, INNER_ROUGHNESS)
+    _apply_solid_color_doublesided(h_inner_mesh, h_rgb,     INNER_METALNESS, INNER_ROUGHNESS)
+    _apply_solid_color_doublesided(b_inner_mesh, bond_rgb,  INNER_METALNESS, INNER_ROUGHNESS)
 
     scene = trimesh.Scene()
-    scene.add_geometry(c_mesh,     node_name="heavy",    geom_name="heavy")
-    scene.add_geometry(h_mesh,     node_name="hydrogen", geom_name="hydrogen",
+    scene.add_geometry(c_mesh,       node_name="heavy",          geom_name="heavy")
+    scene.add_geometry(h_mesh,       node_name="hydrogen",       geom_name="hydrogen",
                        parent_node_name="heavy")
-    scene.add_geometry(b_mesh,     node_name="bonds",    geom_name="bonds",
+    scene.add_geometry(b_mesh,       node_name="bonds",          geom_name="bonds",
                        parent_node_name="heavy")
-    scene.add_geometry(glass_mesh, node_name="glass",    geom_name="glass",
+    scene.add_geometry(glass_mesh,   node_name="glass",          geom_name="glass",
+                       parent_node_name="heavy")
+    scene.add_geometry(c_inner_mesh, node_name="heavy_inner",    geom_name="heavy_inner",
+                       parent_node_name="heavy")
+    scene.add_geometry(h_inner_mesh, node_name="hydrogen_inner", geom_name="hydrogen_inner",
+                       parent_node_name="heavy")
+    scene.add_geometry(b_inner_mesh, node_name="bonds_inner",    geom_name="bonds_inner",
                        parent_node_name="heavy")
     return scene
 

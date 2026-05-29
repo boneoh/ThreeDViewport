@@ -1608,6 +1608,15 @@ final class Renderer: NSObject, MTKViewDelegate {
                 camera.pitch = max(-Float.pi / 2 + 0.01,
                                 min( Float.pi / 2 - 0.01, pitch))
             }
+            // worldUp non-nil = POV keyframe asked the camera to roll with the
+            // followed object.  Renormalize defensively in case the inter-segment
+            // lerp produced a near-axis vector.
+            if let up = follow.worldUp {
+                let len = simd_length(up)
+                camera.followUpOverride = len > 1e-4 ? up / len : nil
+            } else {
+                camera.followUpOverride = nil
+            }
         }
     }
 }

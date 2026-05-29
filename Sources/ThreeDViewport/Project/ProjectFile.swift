@@ -176,7 +176,8 @@ final class ProjectFile {
                 followYawOffset:    kf.followYawOffset,
                 followPitchOffset:  kf.followPitchOffset,
                 targetOffset:       [kf.targetOffset.x, kf.targetOffset.y, kf.targetOffset.z],
-                followForwardLocal: kf.followForwardLocal.map { [$0.x, $0.y, $0.z] }
+                followForwardLocal: kf.followForwardLocal.map { [$0.x, $0.y, $0.z] },
+                followUpLocal:      kf.followUpLocal     .map { [$0.x, $0.y, $0.z] }
             )
         }
 
@@ -329,7 +330,8 @@ final class ProjectFile {
             particleEmitterKeyframes: vp.particleManager.emitters.map { captureAtmosphereKeyframes($0.keyframeTrack) },
             probe:               ProbeData(px: vp.probeConfig.position.x,
                                            py: vp.probeConfig.position.y,
-                                           pz: vp.probeConfig.position.z)
+                                           pz: vp.probeConfig.position.z),
+            groupBaseTransforms: captureGroupBaseTransforms(from: vp)
         )
     }
 
@@ -432,6 +434,9 @@ final class ProjectFile {
                 let fwdLocal: SIMD3<Float>? = kfData.followForwardLocal.flatMap {
                     $0.count >= 3 ? SIMD3<Float>($0[0], $0[1], $0[2]) : nil
                 }
+                let upLocal: SIMD3<Float>? = kfData.followUpLocal.flatMap {
+                    $0.count >= 3 ? SIMD3<Float>($0[0], $0[1], $0[2]) : nil
+                }
                 camTrack.addKeyframe(CameraKeyframe(
                     time:               kfData.time,
                     yaw:                kfData.yaw,
@@ -443,7 +448,8 @@ final class ProjectFile {
                     followYawOffset:    kfData.followYawOffset,
                     followPitchOffset:  kfData.followPitchOffset,
                     targetOffset:       targetOff,
-                    followForwardLocal: fwdLocal
+                    followForwardLocal: fwdLocal,
+                    followUpLocal:      upLocal
                 ))
             }
             vp.camera.keyframeTrack = camTrack
@@ -586,6 +592,15 @@ final class ProjectFile {
         // ── Group keyframe tracks (v14 / Phase 2) ─────────────────────────────
         applyGroupKeyframes(data.groupKeyframeTracks, to: vp,
                             substitutedFilenames: substitutedFilenames)
+
+        // ── Group base transforms (v31) ───────────────────────────────────────
+        // Restores `gt` for groups that have slider/Model-mode edits but no
+        // keyframes (otherwise their `gt` would be lost on save/load and the
+        // model would snap back to auto-normalise size).  For groups WITH a
+        // track, the next applyAnimation pass overwrites `gt` from the track,
+        // so this restore is a no-op for them.
+        applyGroupBaseTransforms(data.groupBaseTransforms, to: vp,
+                                 substitutedFilenames: substitutedFilenames)
 
         // Sync HUD with restored scene.
         vp.syncOverlayState()
@@ -832,7 +847,68 @@ final class ProjectFile {
         }
     }
 
+    /// v31 counterpart to `applyGroupKeyframes`: writes each saved group's
+    /// matrix into `sceneManager.groupTransforms[gid]`.  Indexed by source
+    /// filename (gids are runtime ephemeral).  For tracked groups the value
+    /// is overwritten by the track evaluator on first frame; for untracked
+    /// groups it persists, which is the whole point.
+    private static func applyGroupBaseTransforms(_ entries: [GroupBaseTransformData],
+                                                 to vp: ViewportView,
+                                                 substitutedFilenames: [String: String] = [:]) {
+        guard !entries.isEmpty else { return }
+        let sm = vp.sceneManager
+
+        var fileToGID: [String: Int] = [:]
+        for obj in sm.objects {
+            guard let gid = obj.groupID,
+                  let fileName = obj.sourceURL?.lastPathComponent
+            else { continue }
+            fileToGID[fileName] = gid
+        }
+        for (savedName, loadedName) in substitutedFilenames {
+            if let gid = fileToGID[loadedName] {
+                fileToGID[savedName] = gid
+            }
+        }
+
+        for entry in entries {
+            guard let gid = fileToGID[entry.sourceFileName] else {
+                print("[DEBUG] ProjectFile: group base transform skipped — no loaded group"
+                    + " matches '\(entry.sourceFileName)'")
+                continue
+            }
+            guard let m = decodeMatrix(entry.matrix) else { continue }
+            sm.groupTransforms[gid] = m
+            print("[DEBUG] ProjectFile: restored group base transform for"
+                + " '\(entry.sourceFileName)' → gid=\(gid)")
+        }
+    }
+
     // MARK: - Matrix helpers
+
+    /// Snapshot `sceneManager.groupTransforms[gid]` for every loaded group,
+    /// keyed by the model's source filename.  Saving this means slider edits
+    /// and Model-mode drags that wrote to `gt` (but were never recorded as a
+    /// keyframe) survive save/load — e.g. setting a station's scale once for
+    /// the whole project.  Tracked groups still emit an entry but the track
+    /// evaluator overwrites `gt` on the first frame after load, so the saved
+    /// matrix is effectively unused for those.
+    private static func captureGroupBaseTransforms(from vp: ViewportView) -> [GroupBaseTransformData] {
+        var seen: Set<Int> = []
+        var out: [GroupBaseTransformData] = []
+        for obj in vp.sceneManager.objects {
+            guard let gid = obj.groupID, !seen.contains(gid),
+                  let fileName = obj.sourceURL?.lastPathComponent
+            else { continue }
+            seen.insert(gid)
+            let gt = vp.sceneManager.groupTransforms[gid] ?? matrix_identity_float4x4
+            out.append(GroupBaseTransformData(
+                sourceFileName: fileName,
+                matrix:         encodeMatrix(gt)
+            ))
+        }
+        return out
+    }
 
     /// Encodes a column-major 4×4 matrix as 16 floats.
     private static func encodeMatrix(_ m: matrix_float4x4) -> [Float] {

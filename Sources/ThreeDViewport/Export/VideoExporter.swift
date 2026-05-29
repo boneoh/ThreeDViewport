@@ -817,14 +817,20 @@ final class VideoExporter {
 
             // Split into opaque + transparent, sort transparent back-to-front
             // from the camera so the over-compositing blend is correct.
-            // Mirrors the live Renderer's split so preview/export match.
+            // Mirrors the live Renderer's split so preview/export match —
+            // including the baseColorFactor.w check, otherwise materials with
+            // alpha baked into the GLB (e.g. the station's glass panes) would
+            // route into the opaque pipeline here and render solid.
+            func isTransparent(_ o: SceneObject) -> Bool {
+                o.material.opacity < 1.0 || o.material.baseColorFactor.w < 1.0
+            }
             let opaqueObjects:      [SceneObject]
             let transparentObjects: [SceneObject]
-            if visibleObjects.contains(where: { $0.material.opacity < 1.0 }) {
-                opaqueObjects = visibleObjects.filter { $0.material.opacity >= 1.0 }
+            if visibleObjects.contains(where: isTransparent) {
+                opaqueObjects = visibleObjects.filter { !isTransparent($0) }
                 let eye = camera.eyePosition
                 transparentObjects = visibleObjects
-                    .filter { $0.material.opacity < 1.0 }
+                    .filter(isTransparent)
                     .map { obj -> (SceneObject, Float) in
                         let m: matrix_float4x4
                         if let gid = obj.groupID, let gt = sceneManager.groupTransforms[gid] {

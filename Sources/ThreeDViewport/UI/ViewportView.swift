@@ -251,6 +251,24 @@ final class ViewportView: MTKView {
                   !track.keyframes.isEmpty else { return }
             self.addCameraKeyframeFromPanel()
         }
+        // POV sliders → reposition camera on the sphere around the followed target.
+        cameraPanelState.onPOVLivePreview = { [weak self] name, dist, azDeg, elDeg in
+            guard let self else { return }
+            self.positionCameraOnFollowSphere(followingObjectNamed: name,
+                                               distance: dist,
+                                               azimuthDeg: azDeg,
+                                               elevationDeg: elDeg)
+            self.onCameraEdited?()
+        }
+        // POV stamp button → POV-flavoured follow keyframe at current playhead.
+        cameraPanelState.onPOVStamp = { [weak self] name, dist, azDeg, elDeg in
+            guard let self else { return }
+            self.addPOVCameraKeyframeAtCurrentTime(followingObjectNamed: name,
+                                                    distance: dist,
+                                                    azimuthDeg: azDeg,
+                                                    elevationDeg: elDeg)
+            self.onCameraEdited?()
+        }
 
         // Sync renderSettings → renderer whenever toggles change
         colorModeCancellable = renderSettings.$colorMode.sink { [weak self] value in
@@ -1444,6 +1462,63 @@ final class ViewportView: MTKView {
         onKeyframeStamped?(.camera)
     }
 
+    /// Positions the camera on a sphere of `distance` around the followed
+    /// object's bounding centre.  Azimuth and elevation are angles in degrees
+    /// in the object's local frame — azimuth 0° = directly behind (+Z in glTF,
+    /// since −Z is forward), +90° = right side, ±180° = in front of the face;
+    /// elevation 0° = head height, +90° = directly above.  Live-preview for
+    /// the Camera Inspector POV sliders.  Returns false if the named object
+    /// can't be found in the scene.
+    @discardableResult
+    func positionCameraOnFollowSphere(followingObjectNamed name: String,
+                                       distance: Float,
+                                       azimuthDeg: Float,
+                                       elevationDeg: Float) -> Bool {
+        guard let anchor = sceneManager.worldOrbitAnchor(ofObjectNamed: name) else { return false }
+        let psi = azimuthDeg   * .pi / 180
+        let phi = elevationDeg * .pi / 180
+        // Local outward radial: ψ rotates around +Y, φ tilts up.
+        let localDir = SIMD3<Float>(sin(psi) * cos(phi),
+                                    sin(phi),
+                                    cos(psi) * cos(phi))
+        let worldDir = anchor.basis * localDir
+        // Camera looks AT the anchor, so forward = −worldDir.
+        camera.target   = anchor.pos
+        camera.distance = distance
+        camera.yaw      = atan2(worldDir.x, worldDir.z)
+        camera.pitch    = asin(max(-1, min(1, worldDir.y)))
+        needsDisplay    = true
+        return true
+    }
+
+    /// Stamps a POV-flavoured follow camera keyframe at the current playhead.
+    /// First positions the camera on the sphere around `targetName`, then
+    /// captures via the existing follow-stamp path with `followUpLocal =
+    /// (0, 1, 0)` so playback rolls the camera with the followed object.
+    func addPOVCameraKeyframeAtCurrentTime(followingObjectNamed targetName: String,
+                                            distance: Float,
+                                            azimuthDeg: Float,
+                                            elevationDeg: Float) {
+        guard positionCameraOnFollowSphere(followingObjectNamed: targetName,
+                                            distance: distance,
+                                            azimuthDeg: azimuthDeg,
+                                            elevationDeg: elevationDeg) else {
+            print("[DEBUG] ViewportView: addPOVCameraKeyframe — target '\(targetName)' not found")
+            return
+        }
+        // Reuse the existing capture pipeline so all the local-frame conversion
+        // math (targetOffset, followForwardLocal) stays in one place.  Then
+        // patch the freshly-added keyframe to carry followUpLocal = (0, 1, 0).
+        addFollowCameraKeyframeAtCurrentTime(followingObjectNamed: targetName)
+        if let track = camera.keyframeTrack,
+           let lastIdx = track.keyframes.indices.last {
+            track.keyframes[lastIdx].followUpLocal = SIMD3<Float>(0, 1, 0)
+            print("[DEBUG] ViewportView: tagged camera keyframe at t="
+                + String(format: "%.3f", track.keyframes[lastIdx].time)
+                + " with followUpLocal=(0,1,0) for POV roll-with-target")
+        }
+    }
+
     /// Stamps a camera keyframe using the Camera panel's sticky follow-target
     /// choice — nil = free camera, otherwise the named object.  Bypasses the
     /// scene-selection-driven menu path so the user can stamp many follow
@@ -2320,9 +2395,19 @@ final class ViewportView: MTKView {
                 return
 
             case KC.c:
-                controlMode = .camera
-                syncOverlayState()
-                onControlModeChanged?(.camera)
+                // C — Camera mode.  In Scene mode it toggles between the scene
+                // Camera and the Director POV (the second viewpoint that
+                // exists only in Scene mode).  Outside Scene mode it just
+                // sets Camera as before.  Director has no timeline lane, so
+                // onControlModeChanged is not broadcast for that branch.
+                if sceneModeActive && controlMode == .camera {
+                    controlMode = .director
+                    syncOverlayState()
+                } else {
+                    controlMode = .camera
+                    syncOverlayState()
+                    onControlModeChanged?(.camera)
+                }
                 return
 
             case KC.l:
@@ -2359,16 +2444,9 @@ final class ViewportView: MTKView {
                 }
                 return
 
-            case KC.d:
-                // D — Director navigation mode.  Only meaningful in Scene mode, but
-                // always consumed here so it never forwards to the Timeline Editor
-                // (where D deletes a keyframe).
-                if sceneModeActive {
-                    controlMode = .director
-                    syncOverlayState()
-                    // Director POV has no timeline lane — don't broadcast a selection.
-                }
-                return
+            // D is intentionally not handled here — it's reserved for "delete
+            // selected keyframe" in the Timeline Editor.  Director POV entry
+            // moved to C (it toggles with Camera while Scene mode is active).
 
             // Number row 1–6: snap the Director to a standard view of the selection
             // (Scene mode only).  Outside Scene mode they fall through unconsumed.

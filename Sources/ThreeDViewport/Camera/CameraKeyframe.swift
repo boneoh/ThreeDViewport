@@ -48,6 +48,14 @@ struct CameraKeyframe {
     /// is the world-space forward; yaw and pitch are derived from it.
     /// nil = use the legacy yaw/pitch-offset path (older keyframes).
     var followForwardLocal: SIMD3<Float>? = nil
+    /// When followTargetName is set, the camera's **up direction** at keyframe-
+    /// creation time, expressed in the followed object's local frame as a unit
+    /// vector.  At playback `state.basis * followUpLocal` is the world-space up
+    /// vector for the view matrix, so the camera rolls with the followed
+    /// object (POV / over-the-shoulder shots stay glued to the head's frame).
+    /// nil = use world Y up — matches the legacy behaviour of every keyframe
+    /// stamped before this field existed.
+    var followUpLocal: SIMD3<Float>? = nil
 
     init(time: Double, yaw: Float, pitch: Float,
          distance: Float, target: SIMD3<Float>,
@@ -56,7 +64,8 @@ struct CameraKeyframe {
          followYawOffset:    Float?  = nil,
          followPitchOffset:  Float?  = nil,
          targetOffset:       SIMD3<Float> = SIMD3<Float>(0, 0, 0),
-         followForwardLocal: SIMD3<Float>? = nil) {
+         followForwardLocal: SIMD3<Float>? = nil,
+         followUpLocal:      SIMD3<Float>? = nil) {
         self.time               = time
         self.yaw                = yaw
         self.pitch              = pitch
@@ -68,6 +77,7 @@ struct CameraKeyframe {
         self.followPitchOffset  = followPitchOffset
         self.targetOffset       = targetOffset
         self.followForwardLocal = followForwardLocal
+        self.followUpLocal      = followUpLocal
     }
 }
 
@@ -198,7 +208,7 @@ final class CameraKeyframeTrack {
     func resolveFollowCamera(
         at time: Double,
         getObjectState: (String) -> (pos: SIMD3<Float>, behindYaw: Float, behindPitch: Float, basis: matrix_float3x3)?
-    ) -> (target: SIMD3<Float>, yaw: Float?, pitch: Float?)? {
+    ) -> (target: SIMD3<Float>, yaw: Float?, pitch: Float?, worldUp: SIMD3<Float>?)? {
 
         guard !keyframes.isEmpty else { return nil }
 
@@ -208,7 +218,9 @@ final class CameraKeyframeTrack {
             guard let name = kf.followTargetName,
                   let state = getObjectState(name) else { return nil }
             let (yaw, pitch) = resolvedYawPitch(for: kf, state: state)
-            return (target: state.pos + state.basis * kf.targetOffset, yaw: yaw, pitch: pitch)
+            let up = kf.followUpLocal.map { state.basis * $0 }
+            return (target: state.pos + state.basis * kf.targetOffset,
+                    yaw: yaw, pitch: pitch, worldUp: up)
         }
 
         // ── After last keyframe ───────────────────────────────────────────────
@@ -217,7 +229,9 @@ final class CameraKeyframeTrack {
             guard let name = kf.followTargetName,
                   let state = getObjectState(name) else { return nil }
             let (yaw, pitch) = resolvedYawPitch(for: kf, state: state)
-            return (target: state.pos + state.basis * kf.targetOffset, yaw: yaw, pitch: pitch)
+            let up = kf.followUpLocal.map { state.basis * $0 }
+            return (target: state.pos + state.basis * kf.targetOffset,
+                    yaw: yaw, pitch: pitch, worldUp: up)
         }
 
         // ── Between two keyframes ─────────────────────────────────────────────
@@ -242,19 +256,24 @@ final class CameraKeyframeTrack {
                 let (bYaw, bPitch) = resolvedYawPitch(for: b, state: bState)
                 let blendedYaw:   Float? = bYaw  .map { lerpAngle(a.yaw,   $0, alpha) }
                 let blendedPitch: Float? = bPitch.map { lerpFloat(a.pitch, $0, alpha) }
-                return (target: blendedTarget, yaw: blendedYaw, pitch: blendedPitch)
+                // Free side has no up — only engage roll once we're past the
+                // halfway point of the segment, then snap to b's worldUp.
+                let up = (alpha >= 0.5) ? b.followUpLocal.map { bState.basis * $0 } : nil
+                return (target: blendedTarget, yaw: blendedYaw, pitch: blendedPitch, worldUp: up)
 
             case (.some(let aName), .none):
                 // follow → free: blend live a values toward stored b.target / b.yaw / b.pitch
                 guard let aState = getObjectState(aName) else {
-                    return (target: b.target, yaw: nil, pitch: nil)
+                    return (target: b.target, yaw: nil, pitch: nil, worldUp: nil)
                 }
                 let aTargetLive = aState.pos + aState.basis * a.targetOffset
                 let blendedTarget = aTargetLive + (b.target - aTargetLive) * alpha
                 let (aYaw, aPitch) = resolvedYawPitch(for: a, state: aState)
                 let blendedYaw:   Float? = aYaw  .map { lerpAngle($0, b.yaw,   alpha) }
                 let blendedPitch: Float? = aPitch.map { lerpFloat($0, b.pitch, alpha) }
-                return (target: blendedTarget, yaw: blendedYaw, pitch: blendedPitch)
+                // Hold a's worldUp until the halfway point, then release to world-Y.
+                let up = (alpha < 0.5) ? a.followUpLocal.map { aState.basis * $0 } : nil
+                return (target: blendedTarget, yaw: blendedYaw, pitch: blendedPitch, worldUp: up)
 
             case (.some(let aName), .some(let bName)):
                 // follow → follow
@@ -268,12 +287,28 @@ final class CameraKeyframeTrack {
                     let (bYaw, bPitch) = resolvedYawPitch(for: b, state: state)
                     let yaw   = blendOptionalAngle(aYaw, bYaw,   fallbackA: a.yaw,   fallbackB: b.yaw,   alpha: alpha)
                     let pitch = blendOptionalFloat(aPitch, bPitch, fallbackA: a.pitch, fallbackB: b.pitch, alpha: alpha)
-                    return (target: state.pos + state.basis * localOffset, yaw: yaw, pitch: pitch)
+                    // Up vector: blend in the object's local frame so the
+                    // result rolls with the head smoothly; only set if at
+                    // least one side has it.
+                    let up: SIMD3<Float>?
+                    switch (a.followUpLocal, b.followUpLocal) {
+                    case let (au?, bu?):
+                        let localBlend = au + (bu - au) * alpha
+                        up = state.basis * localBlend
+                    case let (au?, nil):
+                        up = (alpha < 0.5) ? state.basis * au : nil
+                    case let (nil, bu?):
+                        up = (alpha >= 0.5) ? state.basis * bu : nil
+                    case (nil, nil):
+                        up = nil
+                    }
+                    return (target: state.pos + state.basis * localOffset, yaw: yaw, pitch: pitch, worldUp: up)
                 } else {
                     // Different target: snap — use a's target throughout segment.
                     guard let state = getObjectState(aName) else { return nil }
                     let (yaw, pitch) = resolvedYawPitch(for: a, state: state)
-                    return (target: state.pos + state.basis * a.targetOffset, yaw: yaw, pitch: pitch)
+                    let up = a.followUpLocal.map { state.basis * $0 }
+                    return (target: state.pos + state.basis * a.targetOffset, yaw: yaw, pitch: pitch, worldUp: up)
                 }
             }
         }

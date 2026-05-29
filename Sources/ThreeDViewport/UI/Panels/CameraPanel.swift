@@ -26,10 +26,30 @@ final class CameraPanelState: ObservableObject {
     /// `fl = 12 / tan(fovY/2)`; editing writes back through `onFocalLengthEdited`.
     @Published var focalLength: Float    = 50
 
+    // ── POV positioning sliders ────────────────────────────────────────────────
+    // Camera-around-the-head sphere coordinates.  Dragging any of these in the
+    // panel fires `onPOVLivePreview`, which moves the camera in the viewport so
+    // the user can frame the shot.  Hitting the POV stamp button captures the
+    // current configuration as a follow keyframe with `followUpLocal = (0,1,0)`.
+    /// Sphere radius — distance from the followed object's bounding centre.
+    @Published var povDistance:  Float = 1.0
+    /// Rotation around the object's local +Y axis, in degrees.
+    /// 0° = directly behind, ±180° = in front of the face, +90° = right, −90° = left.
+    @Published var povAzimuth:   Float = 0
+    /// Elevation above/below the object's local equator, in degrees.
+    /// 0° = head height, +90° = directly above, −90° = below.
+    @Published var povElevation: Float = 15
+
     /// Propagate Position / Target / FOV edits back to the active camera (wired by ViewportView).
     var onPositionEdited:    ((SIMD3<Float>) -> Void)?
     var onTargetEdited:      ((SIMD3<Float>) -> Void)?
     var onFocalLengthEdited: ((Float) -> Void)?
+    /// Live preview for the POV sliders — repositions the camera on the sphere
+    /// each time `povDistance` / `povAzimuth` / `povElevation` changes.  Arguments
+    /// are (target object name, distance, azimuth deg, elevation deg).
+    var onPOVLivePreview: ((String, Float, Float, Float) -> Void)?
+    /// Stamps a POV-flavoured follow keyframe at the current playhead.
+    var onPOVStamp:       ((String, Float, Float, Float) -> Void)?
     /// Fires after a Paste or Z click on Position / Target.  AppDelegate wires it
     /// to conditionally stamp a camera keyframe at the current playhead (only
     /// when the camera track already has keyframes).
@@ -68,6 +88,23 @@ final class CameraPanelState: ObservableObject {
                 guard let self, !isUpdating else { return }
                 onFocalLengthEdited?(v)
             }.store(in: &cancellables)
+
+        // POV sliders → live preview.  All three fire the same callback so any
+        // slider drag re-positions the camera on the sphere immediately.
+        $povDistance.dropFirst()
+            .sink { [weak self] _ in self?.firePOVLivePreview() }
+            .store(in: &cancellables)
+        $povAzimuth.dropFirst()
+            .sink { [weak self] _ in self?.firePOVLivePreview() }
+            .store(in: &cancellables)
+        $povElevation.dropFirst()
+            .sink { [weak self] _ in self?.firePOVLivePreview() }
+            .store(in: &cancellables)
+    }
+
+    private func firePOVLivePreview() {
+        guard !isUpdating, let name = followTargetName else { return }
+        onPOVLivePreview?(name, povDistance, povAzimuth, povElevation)
     }
 }
 
@@ -133,6 +170,41 @@ struct CameraPanel: View {
                     .font(.caption2)
                     .foregroundColor(.secondary)
                     .padding(.top, 8)
+
+                Divider().padding(.vertical, 14)
+
+                // ── Follow POV (sphere positioner) ────────────────────────────
+                // Sliders move the camera around a sphere centred on the
+                // followed object's bounding centre.  Disabled when the picker
+                // is on "None — Free Camera" because there's no anchor to
+                // orbit.  The POV stamp button records a follow keyframe that
+                // rolls with the head (followUpLocal = local +Y).
+                let povEnabled = state.followTargetName != nil
+                Text("Follow POV").font(.headline).padding(.bottom, 4)
+                SliderRow(label: "Distance",  value: $state.povDistance,
+                          range: 0.05...5,   format: "%.2f")
+                SliderRow(label: "Azimuth",   value: $state.povAzimuth,
+                          range: -180...180, format: "%.1f")
+                SliderRow(label: "Elevation", value: $state.povElevation,
+                          range:  -90...90,  format: "%.1f")
+                Button(action: {
+                    guard let name = state.followTargetName else { return }
+                    state.onPOVStamp?(name, state.povDistance,
+                                      state.povAzimuth, state.povElevation)
+                }) {
+                    Label("Add Follow POV Keyframe", systemImage: "diamond.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+                .disabled(!povEnabled)
+                .padding(.top, 6)
+                Text(povEnabled
+                     ? "Sliders position the camera around '\(state.followTargetName ?? "")' — rolls with it on playback."
+                     : "Pick a Follow Target above to enable POV positioning.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .padding(.top, 4)
 
                 Divider().padding(.vertical, 14)
 

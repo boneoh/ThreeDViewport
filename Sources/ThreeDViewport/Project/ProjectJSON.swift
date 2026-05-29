@@ -62,6 +62,11 @@ struct ProjectData: Codable {
     var particleEmitters:        [ParticleEffectData] = []        // v24; multiple particle emitters.
     var particleEmitterKeyframes: [[AtmosphereKeyframeData]] = [] // v24; per-emitter animation.
     var probe:                   ProbeData = ProbeData()          // v29; bake probe position.
+    /// v31: per-group static gt snapshot.  Persists slider/Model-mode edits
+    /// to groupTransforms[gid] that aren't recorded as keyframes (e.g. setting
+    /// the station's scale once for the whole project).  Tracked groups still
+    /// save an entry but the track evaluator overwrites it on first frame.
+    var groupBaseTransforms:    [GroupBaseTransformData] = []
 
     // MARK: - Memberwise init (required because we define init(from:) below)
 
@@ -92,7 +97,8 @@ struct ProjectData: Codable {
          particleKeyframes:   [AtmosphereKeyframeData] = [],
          particleEmitters:    [ParticleEffectData]    = [],
          particleEmitterKeyframes: [[AtmosphereKeyframeData]] = [],
-         probe:               ProbeData               = ProbeData()) {
+         probe:               ProbeData               = ProbeData(),
+         groupBaseTransforms: [GroupBaseTransformData] = []) {
         self.version             = version
         self.modelPath           = modelPath
         self.modelPaths          = modelPaths
@@ -121,6 +127,7 @@ struct ProjectData: Codable {
         self.particleEmitters    = particleEmitters
         self.particleEmitterKeyframes = particleEmitterKeyframes
         self.probe               = probe
+        self.groupBaseTransforms = groupBaseTransforms
     }
 
     // MARK: - Custom decoder
@@ -163,6 +170,7 @@ struct ProjectData: Codable {
         particleEmitters         = (try? c.decode([ParticleEffectData].self,        forKey: .particleEmitters))         ?? []
         particleEmitterKeyframes = (try? c.decode([[AtmosphereKeyframeData]].self,  forKey: .particleEmitterKeyframes)) ?? []
         probe               = (try? c.decode(ProbeData.self,             forKey: .probe))               ?? ProbeData()
+        groupBaseTransforms = (try? c.decode([GroupBaseTransformData].self, forKey: .groupBaseTransforms)) ?? []
     }
 }
 
@@ -597,6 +605,11 @@ struct CameraKeyframeData: Codable {
     /// nil / absent in older project files — loader falls back to the
     /// yaw/pitch offsets and the keyframe still resolves.
     var followForwardLocal: [Float]? = nil
+    /// Camera's up direction (unit vector) in the followed object's local
+    /// frame at creation time.  Set by POV keyframes so the camera rolls with
+    /// the followed object on playback.  nil / absent in older project files
+    /// → renderer uses world Y as up (the previous behaviour).
+    var followUpLocal: [Float]? = nil
 
     // Custom decoder so files saved before camera-follow / FOV / pitch-follow fields decode cleanly.
     init(from decoder: Decoder) throws {
@@ -614,6 +627,7 @@ struct CameraKeyframeData: Codable {
         followPitchOffset  = try? c.decode(Float.self,   forKey: .followPitchOffset)
         targetOffset       = try? c.decode([Float].self, forKey: .targetOffset)
         followForwardLocal = try? c.decode([Float].self, forKey: .followForwardLocal)
+        followUpLocal      = try? c.decode([Float].self, forKey: .followUpLocal)
     }
 
     init(time: Double, yaw: Float, pitch: Float, distance: Float,
@@ -623,7 +637,8 @@ struct CameraKeyframeData: Codable {
          followYawOffset: Float? = nil,
          followPitchOffset: Float? = nil,
          targetOffset: [Float]? = nil,
-         followForwardLocal: [Float]? = nil) {
+         followForwardLocal: [Float]? = nil,
+         followUpLocal: [Float]? = nil) {
         self.time               = time
         self.yaw                = yaw
         self.pitch              = pitch
@@ -637,6 +652,7 @@ struct CameraKeyframeData: Codable {
         self.followPitchOffset  = followPitchOffset
         self.targetOffset       = targetOffset
         self.followForwardLocal = followForwardLocal
+        self.followUpLocal      = followUpLocal
     }
 }
 
@@ -691,4 +707,18 @@ struct GroupTrackData: Codable {
     var easingMode:     Int = 0
     /// The keyframe array for this group track.
     var keyframes:      [KeyframeData] = []
+}
+
+// Snapshot of `sceneManager.groupTransforms[gid]` for a group, keyed by the
+// model's source filename (gids are runtime ephemeral).  Preserves Position/
+// Rotation/Scale slider edits and Model-mode drags that wrote to `gt` but
+// were never recorded as a keyframe — without this, an untracked group's
+// `gt` is lost on save/load and the model snaps back to the auto-normalise
+// size on reopen.  Tracked groups: the value is also saved but gets
+// overwritten by track evaluation on the first frame, so it's a no-op there.
+// Absent in older project files → loader skips and leaves `gt` at identity
+// (the pre-fix behaviour).
+struct GroupBaseTransformData: Codable {
+    var sourceFileName: String
+    var matrix:         [Float]   // 16 floats, column-major
 }

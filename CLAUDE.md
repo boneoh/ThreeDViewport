@@ -9,6 +9,10 @@ Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-s
 When Pete says "quit," pause and check whether any lessons learned from the session belong in CLAUDE.md. Summarize the gist and ask before updating. If nothing is worth recording, say so.
 
 Never use the code sandbox. This is a pain in the ass. We will directly edit the code in my repo.
+
+## Build workflow
+
+After changing Swift code, run `./make_app.sh` to refresh `ThreeDViewport.app`. `swift build` alone only updates the loose binary under `.build/<config>/`; the .app bundle that Pete actually launches is built by the script. Skipping this step makes it look like a code change didn't take effect.
 ---
 
 ## 1. Think Before Coding

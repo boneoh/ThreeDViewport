@@ -205,6 +205,9 @@ Builds a stylized hexagonal space station as `station-{heavy}-{hydrogen}-{bond}-
 | `hydrogen` (child) | 6 outer pods (icospheres with face-cluster cutouts) |
 | `bonds` (child) | 6 radial C–H bonds + 6 ring-segment C–C bonds (open tubes) |
 | `glass` (child) | 36 spherical-cap window panes filling the window cutouts (translucent metallic) |
+| `heavy_inner` (child) | Inverted-winding copy of the 6 carbon hubs, slightly inset toward each atom's centre, ceramic-style material in the same colour as `heavy` |
+| `hydrogen_inner` (child) | Same idea for the 6 hydrogen pods |
+| `bonds_inner` (child) | Thinner inverted-winding copies of the bond tubes, ceramic-style material in the same colour as `bonds` |
 
 ### Hull cutouts
 
@@ -241,6 +244,17 @@ With `baseColorFactor.w < 1.0` baked in, the glass automatically routes to the t
 ### Bonds as open tubes
 
 `_open_bond(p0, p1, radius)` builds a cylinder between two points then strips the end-cap faces (faces whose normal aligns with the cylinder's axial direction). The endpoints are placed on the atom *surfaces*, not the atom centres — `p0 = atom_a_center + atom_a_radius × bond_dir`, `p1 = atom_b_center − atom_b_radius × bond_dir`. The result is an open tube that terminates at the matching doorway in each atom hull, and the visible bond is the *whole* cylinder, not just the small stub between the two atom surfaces.
+
+### Inner shells (ceramic-matched interior)
+
+The viewer's renderer has cull mode `.none` and the fragment shader uses the stored vertex normal directly — no flip for back-faces. That means the BACK of a polished-metal hull face is shaded with a normal pointing away from the camera, which sprays unhelpful strong HDRI reflections inside the station. To give the interior a soft, colour-matched look without changing the outside, every opaque part has an inner-shell counterpart:
+
+- Same geometry, **inverted face winding** (`mesh.invert()`) → normals now point inward.
+- Vertices scaled by `1 − 0.005` toward the part's local centre so the inner surface sits just inside the outer and there's no z-fighting.
+- Material fixed at `metallicFactor = 0.00`, `roughnessFactor = 0.85` (the "Matte Plastic" preset in `generate_models.py`).
+- Base colour copied from the matching outer mesh (`heavy_rgb`, `h_rgb`, `bond_rgb`).
+
+When the camera is outside and looks through a window cutout, the closest geometry past the window is the inner shell's near side — ceramic look wins. When the camera is inside an atom, the inner shell's front-faces are oriented correctly toward the camera and lighting computes normally. The outer shell's user-selected material (polished metal, brushed, matte, ceramic, rubber) still drives the exterior.
 
 ### `doubleSided` on all materials
 
