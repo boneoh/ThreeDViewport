@@ -1,23 +1,26 @@
 """
 generate_all.py  —  Batch-generate every colour × material combination.
 
-Shape output    : ~/Documents/ThreeDViewport/Models/<shape>/
-Robot output    : ~/Documents/ThreeDViewport/Models/robot/
-Station output  : ~/Documents/ThreeDViewport/Models/station/
+Shape output     : ~/Documents/ThreeDViewport/Models/<shape>/
+Robot output     : ~/Documents/ThreeDViewport/Models/robot/
+Station output   : ~/Documents/ThreeDViewport/Models/station/
+Emissive output  : ~/Documents/ThreeDViewport/Models/emissive/
 
 Filenames
-  shapes  : {shape}-{colour}-{material}.glb         (150 per shape)
-  robot   : robot-{colour}.glb                      (30 uniform-colour)
-            robot-{body-colour}-{head-colour}.glb   (900 two-tone, opt-in)
-  station : station-{colour}-{material}.glb         (150 — palette c1/c2 get
-            distinct heavy/hydrogen/bond colours via palette_molecule_colors)
+  shapes   : {shape}-{colour}-{material}.glb        (150 per shape)
+  robot    : robot-{colour}.glb                     (30 uniform-colour)
+             robot-{body-colour}-{head-colour}.glb  (900 two-tone, opt-in)
+  station  : station-{colour}-{material}.glb        (150 — palette c1/c2 get
+             distinct heavy/hydrogen/bond colours via palette_molecule_colors)
+  emissive : emissive-{shape}-{colour}.glb          (9 shapes × 30 colours)
 
 Usage:
-    python3 generate_all.py             # shapes + robots + stations
-    python3 generate_all.py --two-tone  # adds 900 two-tone robots
+    python3 generate_all.py              # shapes + robots + stations + emissives
+    python3 generate_all.py --two-tone   # adds 900 two-tone robots
     python3 generate_all.py --shapes-only
     python3 generate_all.py --robot-only
     python3 generate_all.py --station-only
+    python3 generate_all.py --emissive-only
 """
 
 import os
@@ -30,6 +33,9 @@ from generate_models import (
 )
 from generate_character import build_robot
 from generate_station   import build_station_scene, colorizer_to_rgb
+from generate_emissive  import (
+    EMISSIVE_SHAPES, DEFAULT_INTENSITY, build_emissive_shape,
+)
 
 MODELS_ROOT = os.path.expanduser("~/Documents/ThreeDViewport/Models")
 
@@ -144,15 +150,41 @@ def generate_station():
     print(f"\r  {done} station files written.{' ' * 60}")
 
 
-if __name__ == "__main__":
-    two_tone     = "--two-tone"     in sys.argv
-    shapes_only  = "--shapes-only"  in sys.argv
-    robot_only   = "--robot-only"   in sys.argv
-    station_only = "--station-only" in sys.argv
+def generate_emissive(intensity=DEFAULT_INTENSITY):
+    """Iterate (shape × colour) with a fixed emissive intensity.  Pure-emissive
+    material (no diffuse / metallic / specular) — see generate_emissive.py.
+    """
+    colors  = list(all_colors())
+    out_dir = os.path.join(MODELS_ROOT, "emissive")
+    os.makedirs(out_dir, exist_ok=True)
 
-    do_shapes  = not (robot_only  or station_only)
-    do_robot   = not (shapes_only or station_only)
-    do_station = not (shapes_only or robot_only)
+    total = len(EMISSIVE_SHAPES) * len(colors)
+    done  = 0
+    print(f"  emissive  ({total} files, intensity {intensity})")
+    for shape_name, builder in EMISSIVE_SHAPES:
+        for color_label, colorizer, *_ in colors:
+            rgb  = colorizer_to_rgb(colorizer)
+            stem = f"emissive-{shape_name}-{color_label}"
+            out  = os.path.join(out_dir, f"{stem}.glb")
+            mesh = build_emissive_shape(shape_name, builder, rgb, intensity)
+            mesh.export(out)
+            done += 1
+            print(f"\r    {done}/{total}  {stem}.glb", end="", flush=True)
+    print(f"\r  {done} emissive files written.{' ' * 60}")
+
+
+if __name__ == "__main__":
+    two_tone      = "--two-tone"      in sys.argv
+    shapes_only   = "--shapes-only"   in sys.argv
+    robot_only    = "--robot-only"    in sys.argv
+    station_only  = "--station-only"  in sys.argv
+    emissive_only = "--emissive-only" in sys.argv
+
+    any_only   = shapes_only or robot_only or station_only or emissive_only
+    do_shapes   = (not any_only) or shapes_only
+    do_robot    = (not any_only) or robot_only
+    do_station  = (not any_only) or station_only
+    do_emissive = (not any_only) or emissive_only
 
     if do_shapes:
         shape_total = len(list(all_colors())) * len(MATERIAL_PRESETS) * len(SHAPES)
@@ -168,5 +200,10 @@ if __name__ == "__main__":
         station_total = len(list(all_colors())) * len(MATERIAL_PRESETS)
         print(f"\nGenerating stations ({station_total} files)...")
         generate_station()
+
+    if do_emissive:
+        emissive_total = len(EMISSIVE_SHAPES) * len(list(all_colors()))
+        print(f"\nGenerating emissives ({emissive_total} files)...")
+        generate_emissive()
 
     print("\nDone.")

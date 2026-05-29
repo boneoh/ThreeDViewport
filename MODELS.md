@@ -262,32 +262,66 @@ All three materials (`heavy`, `hydrogen`, `bonds`) are exported with `doubleSide
 
 ### Renderer.swift transparency routing
 
-`Renderer.swift` was updated alongside this work so any material with `baseColorFactor.w < 1.0` *or* `opacity < 1.0` routes into the transparent pipeline. The station is fully opaque now, so this doesn't affect it directly — but the routing change remains useful for any future model that bakes alpha into a GLB.
+`Renderer.swift` was updated alongside this work so any material with `baseColorFactor.w < 1.0` *or* `opacity < 1.0` routes into the transparent pipeline. The station is fully opaque now, so this doesn't affect it directly — but the routing change remains useful for any future model that bakes alpha into a GLB. `VideoExporter.swift` mirrors the same routing so exported `.mov` frames match what the viewport renders.
+
+---
+
+## `generate_emissive.py`
+
+```bash
+/tmp/glb_env/bin/python3 generate_emissive.py     # interactive (prompts colour + intensity)
+/tmp/glb_env/bin/python3 generate_emissive.py -y  # default red, intensity 3
+```
+
+Builds the nine simple primitives — `cube`, `cylinder`, `pyramid`, `sphere`, `torus`, `tetrahedron`, `octahedron`, `hexprism`, `capsule` — as pure-emissive objects for use as glow markers and effect props (e.g. inside the station). Geometry comes straight from the existing primitive builders in `generate_models.py`; only the material differs.
+
+### Material
+
+| Field | Value | Effect |
+|-------|-------|--------|
+| `baseColorFactor` | `(0, 0, 0, 1)` | No diffuse colour — no shading contribution |
+| `metallicFactor`  | `0`           | No metallic / reflection |
+| `roughnessFactor` | `1`           | No specular highlight |
+| `emissiveFactor`  | `(r, g, b) × intensity` | Pure emission, intensity folded in |
+
+The intensity is **pre-multiplied into `emissiveFactor`** rather than being written through the `KHR_materials_emissive_strength` glTF extension. ThreeDViewport's `GLTFLoader.swift:352` collapses both forms into the same internal `mat.emissiveFactor`, and `Shaders.metal` adds it to the output colour without clamping, so the in-engine result is identical and the GLB doesn't depend on extension support in other tools.
+
+### Intensity
+
+Default is **3.0** (reads as a clearly lit object). Range clamped to `[0.1, 100.0]` so a typed value can't break the material. Values above ~5 will saturate without bloom but stay distinct against the HDRI background.
+
+Filenames carry the intensity so a single shape/colour can have several variants:
+
+```
+emissive-{shape}-{colour}-x{intensity}.glb
+```
 
 ---
 
 ## `generate_all.py`
 
 ```bash
-/tmp/glb_env/bin/python3 generate_all.py             # shapes + robots + stations
-/tmp/glb_env/bin/python3 generate_all.py --two-tone  # also generates 900 two-tone robots
+/tmp/glb_env/bin/python3 generate_all.py                # shapes + robots + stations + emissives
+/tmp/glb_env/bin/python3 generate_all.py --two-tone     # also generates 900 two-tone robots
 /tmp/glb_env/bin/python3 generate_all.py --shapes-only
 /tmp/glb_env/bin/python3 generate_all.py --robot-only
 /tmp/glb_env/bin/python3 generate_all.py --station-only
+/tmp/glb_env/bin/python3 generate_all.py --emissive-only
 ```
 
-Non-interactive. Iterates every (shape × colour × material), every (robot × colour), and every (station × colour × material) combination, writing into `~/Documents/ThreeDViewport/Models/`. Progress is printed on a single rewriting line per group so the output stays terse.
+Non-interactive. Iterates every (shape × colour × material), every (robot × colour), every (station × colour × material), and every (emissive shape × colour) combination, writing into `~/Documents/ThreeDViewport/Models/`. Progress is printed on a single rewriting line per group so the output stays terse.
 
 | Mode | File count |
 |------|------------|
-| Default (shapes + uniform robots + stations) | 3,150 + 30 + 150 = **3,330** |
+| Default (shapes + uniform robots + stations + emissives) | 3,150 + 30 + 150 + 270 = **3,600** |
 | `--shapes-only` | 21 × 30 × 5 = **3,150** |
 | `--robot-only` | **30** |
 | `--robot-only --two-tone` | 30 + 900 = **930** |
 | `--station-only` | 30 × 5 = **150** |
-| Default + `--two-tone` | 3,150 + 930 + 150 = **4,230** |
+| `--emissive-only` | 9 × 30 = **270** |
+| Default + `--two-tone` | 3,150 + 930 + 150 + 270 = **4,500** |
 
-Two-tone robots use body+legs as colour A and head+arms as colour B, named `robot-{A}-{B}.glb`. The station has its own 3-colour split via `palette_molecule_colors()` (same mechanism as benzene's c1/c2 variants), so there is no separate two-tone flag for it — `c1` and `c2` variants of the eight palette colours give the distinct heavy/hydrogen/bond colour combinations automatically.
+Two-tone robots use body+legs as colour A and head+arms as colour B, named `robot-{A}-{B}.glb`. The station has its own 3-colour split via `palette_molecule_colors()` (same mechanism as benzene's c1/c2 variants), so there is no separate two-tone flag for it — `c1` and `c2` variants of the eight palette colours give the distinct heavy/hydrogen/bond colour combinations automatically. Emissives use a fixed default intensity (3.0) for the batch — run `generate_emissive.py` interactively to dial in a different value for a single colour family.
 
 The shapes pass uses `palette_molecule_colors()` for molecule shapes when the palette is `c1` or `c2`, producing the multi-part atom/bond colour split described above. The station pass uses the same function for the same reason.
 
