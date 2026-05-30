@@ -239,15 +239,20 @@ final class Renderer: NSObject, MTKViewDelegate {
             print("[DEBUG] Renderer: scene pipeline failed — " + error.localizedDescription)
         }
 
-        // Holdout variant: same descriptor, color writes masked off (depth only).
-        pipelineDesc.colorAttachments[0].writeMask = []
+        // Holdout variant: same vertex transform, but a dedicated fragment that
+        // writes a transparent matte (RGB 0, alpha 0) with full colour writes and
+        // blending off — so the holdout silhouette overwrites the background
+        // skybox with a clean hole while still writing depth to occlude geometry
+        // behind it.
+        let holdoutFragmentFn = library.makeFunction(name: "holdout_fragment")
+        pipelineDesc.fragmentFunction = holdoutFragmentFn
         do {
             holdoutPipelineState = try device.makeRenderPipelineState(descriptor: pipelineDesc)
             print("[DEBUG] Renderer: holdout pipeline created")
         } catch {
             print("[DEBUG] Renderer: holdout pipeline failed — " + error.localizedDescription)
         }
-        pipelineDesc.colorAttachments[0].writeMask = .all   // restore for any later reuse
+        pipelineDesc.fragmentFunction = fragmentFn   // restore for any later reuse
 
         // Transparent variant: same shaders, alpha blending on for the color
         // channels (over-compositing), but alpha-channel write is configured
@@ -951,29 +956,12 @@ final class Renderer: NSObject, MTKViewDelegate {
         // the glass, which writes depth.
         drawParticleEffects(encoder: encoder, time: timeline.currentTime)
 
-        if !transparentObjects.isEmpty,
-           let tDS = transparentDepthState,
-           let tP  = transparentPipelineState {
-            SceneGeometryEncoder.encode(
-                into:            encoder,
-                objects:         transparentObjects,
-                groupTransforms: sceneManager.groupTransforms,
-                lightUniforms:   lightManager.buildLightUniforms(),
-                context: SceneGeometryEncoder.Context(
-                    viewProjection:    viewCamera.viewProjectionMatrix,
-                    eyePosition:       viewCamera.eyePosition,
-                    pipelineState:     tP,
-                    depthStencilState: tDS,
-                    colorMode:         colorMode,
-                    isWireframe:       isWireframe,
-                    exposure:          colorGradeSettings?.exposure ?? 1.0,
-                    ibl:               ibl,
-                    dummyUV:           dummyUVBuffer,
-                    dummyTangent:      dummyTangentBuffer,
-                    dummy2D:           dummyEquirect))
-        }
-
         // ── Laser hit detection + particle update ─────────────────────────────
+        // Beams/hits/sparks are drawn BEFORE transparent geometry (same reason as
+        // the weather particles above): the glass windows write depth, so a
+        // read-only beam fragment behind the glass would otherwise be
+        // depth-rejected and vanish.  Drawn here, opaque surfaces still occlude
+        // the beam and the translucent glass composites over it.
         let screenSize = SIMD2<Float>(Float(view.drawableSize.width),
                                       Float(view.drawableSize.height))
         let visibleForHits = sceneManager.objects.filter { $0.isVisible }
@@ -994,6 +982,28 @@ final class Renderer: NSObject, MTKViewDelegate {
             drawLaserHitsInEncoder(encoder, screenSize: screenSize,
                                    hitEffectTime: hitEffectTime, excludedOnly: true)
             drawSparksInEncoder(encoder, sparkGPUData: sparkGPUData)
+        }
+
+        if !transparentObjects.isEmpty,
+           let tDS = transparentDepthState,
+           let tP  = transparentPipelineState {
+            SceneGeometryEncoder.encode(
+                into:            encoder,
+                objects:         transparentObjects,
+                groupTransforms: sceneManager.groupTransforms,
+                lightUniforms:   lightManager.buildLightUniforms(),
+                context: SceneGeometryEncoder.Context(
+                    viewProjection:    viewCamera.viewProjectionMatrix,
+                    eyePosition:       viewCamera.eyePosition,
+                    pipelineState:     tP,
+                    depthStencilState: tDS,
+                    colorMode:         colorMode,
+                    isWireframe:       isWireframe,
+                    exposure:          colorGradeSettings?.exposure ?? 1.0,
+                    ibl:               ibl,
+                    dummyUV:           dummyUVBuffer,
+                    dummyTangent:      dummyTangentBuffer,
+                    dummy2D:           dummyEquirect))
         }
 
         // ── Scene-mode widgets (camera frustum + light gizmos) ────────────────

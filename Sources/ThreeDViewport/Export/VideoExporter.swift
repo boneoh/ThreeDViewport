@@ -882,6 +882,25 @@ final class VideoExporter {
             // ones (glass windows) — mirrors the live Renderer ordering.
             drawParticleEffects(encoder: encoder, time: Double(hitEffectTime))
 
+            // ── Laser beam visuals + hit effects ──────────────────────────────
+            // Drawn BEFORE transparent geometry (same reason as the particles):
+            // glass windows write depth, so a read-only beam fragment behind the
+            // glass would be depth-rejected.  Mirrors the live Renderer ordering.
+            let exportSize = SIMD2<Float>(Float(width), Float(height))
+            drawLaserBeamsInEncoder(encoder,
+                                    screenSize:   exportSize,
+                                    excludedOnly: false)
+            drawLaserHitsInEncoder(encoder, screenSize: exportSize,
+                                   hitEffectTime: hitEffectTime, excludedOnly: false)
+            if !feedbackActive {
+                drawLaserBeamsInEncoder(encoder,
+                                        screenSize:   exportSize,
+                                        excludedOnly: true)
+                drawLaserHitsInEncoder(encoder, screenSize: exportSize,
+                                       hitEffectTime: hitEffectTime, excludedOnly: true)
+                drawSparksInEncoder(encoder, sparkGPUData: sparkGPUData)
+            }
+
             if !transparentObjects.isEmpty,
                let tP  = transparentPipelineState,
                let tDS = transparentDepthState {
@@ -902,22 +921,6 @@ final class VideoExporter {
                         dummyUV:           dummyUVBuffer,
                         dummyTangent:      dummyTangentBuffer,
                         dummy2D:           dummyEquirect))
-            }
-
-            // ── Laser beam visuals + hit effects ──────────────────────────────
-            let exportSize = SIMD2<Float>(Float(width), Float(height))
-            drawLaserBeamsInEncoder(encoder,
-                                    screenSize:   exportSize,
-                                    excludedOnly: false)
-            drawLaserHitsInEncoder(encoder, screenSize: exportSize,
-                                   hitEffectTime: hitEffectTime, excludedOnly: false)
-            if !feedbackActive {
-                drawLaserBeamsInEncoder(encoder,
-                                        screenSize:   exportSize,
-                                        excludedOnly: true)
-                drawLaserHitsInEncoder(encoder, screenSize: exportSize,
-                                       hitEffectTime: hitEffectTime, excludedOnly: true)
-                drawSparksInEncoder(encoder, sparkGPUData: sparkGPUData)
             }
 
             encoder.endEncoding()

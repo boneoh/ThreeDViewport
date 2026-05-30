@@ -351,6 +351,15 @@ fragment float4 fragment_main(
     return float4(color, outAlpha);
 }
 
+// ── Holdout fragment ──────────────────────────────────────────────────────────
+// Reuses vertex_main for transform.  Writes depth (so holdout objects occlude
+// geometry behind them) AND overwrites colour with a transparent matte —
+// RGB black, alpha 0 — punching a clean hole through the background skybox so
+// the silhouette reads as empty background instead of showing the IBL.
+fragment float4 holdout_fragment(VertexOut in [[stage_in]]) {
+    return float4(0.0, 0.0, 0.0, 0.0);
+}
+
 // ── Background gradient ───────────────────────────────────────────────────────
 
 struct BgVertOut {
