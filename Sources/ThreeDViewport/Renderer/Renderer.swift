@@ -882,7 +882,8 @@ final class Renderer: NSObject, MTKViewDelegate {
                     exposure:          colorGradeSettings?.exposure ?? 1.0,
                     ibl:               ibl,
                     dummyUV:           dummyUVBuffer,
-                    dummyTangent:      dummyTangentBuffer))
+                    dummyTangent:      dummyTangentBuffer,
+                    dummy2D:           dummyEquirect))
         }
 
         // Split into opaque (opacity == 1) and transparent (< 1) draw lists.
@@ -938,7 +939,8 @@ final class Renderer: NSObject, MTKViewDelegate {
                     exposure:          colorGradeSettings?.exposure ?? 1.0,
                     ibl:               ibl,
                     dummyUV:           dummyUVBuffer,
-                    dummyTangent:      dummyTangentBuffer))
+                    dummyTangent:      dummyTangentBuffer,
+                    dummy2D:           dummyEquirect))
         }
 
         if !transparentObjects.isEmpty,
@@ -959,7 +961,8 @@ final class Renderer: NSObject, MTKViewDelegate {
                     exposure:          colorGradeSettings?.exposure ?? 1.0,
                     ibl:               ibl,
                     dummyUV:           dummyUVBuffer,
-                    dummyTangent:      dummyTangentBuffer))
+                    dummyTangent:      dummyTangentBuffer,
+                    dummy2D:           dummyEquirect))
         }
 
         // ── Weather particles (depth-tested against geometry, alpha-blended) ───

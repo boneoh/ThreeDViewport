@@ -186,6 +186,9 @@ final class ViewportView: MTKView {
 
         colorPixelFormat         = .bgra8Unorm
         depthStencilPixelFormat  = .depth32Float
+        // Color-grade post-process reads back drawable.texture via a blit copy,
+        // which Metal validation forbids on framebufferOnly textures.
+        framebufferOnly          = false
         clearColor               = MTLClearColor(red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0)
         preferredFramesPerSecond = 30
         isPaused                 = false

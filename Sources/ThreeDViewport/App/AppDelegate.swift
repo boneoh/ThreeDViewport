@@ -2031,10 +2031,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // Sort alphabetically (natural order so `head10` follows `head2`,
         // not `head1`).  "None — Free Camera" is rendered separately at
         // the top of the picker, so it isn't in this list.
+        // Dedupe — two robots both export "head" / "ankle_L" / etc.; SwiftUI
+        // Picker's id:\.self crashes warnings on duplicate strings, and a
+        // picker with two identical tags can't represent a stable selection.
+        var seen = Set<String>()
         viewport.cameraPanelState.availableObjectNames =
             viewport.sceneManager.objects
                 .map { $0.name }
                 .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+                .filter { seen.insert($0).inserted }
         // If the previously-chosen follow target no longer exists in the
         // scene (e.g. the model was removed or replaced), reset to free
         // camera so the picker shows a valid selection.

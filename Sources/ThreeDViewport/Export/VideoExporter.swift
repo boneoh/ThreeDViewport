@@ -579,8 +579,14 @@ final class VideoExporter {
                                               timescale: self.frameTimescale)
                 let t = Double(frameIndex) * Double(self.frameTicks) / Double(self.frameTimescale)
 
-                // Evaluate animation at this exact time — does NOT touch Timeline.currentTime
-                self.applyAnimation(at: t)
+                // Evaluate animation at this exact time — does NOT touch Timeline.currentTime.
+                // Hop to main: applyAnimation writes @Published properties on lightManager,
+                // camera, etc.  Doing that from this background queue triggers SwiftUI's
+                // "Publishing changes from background threads" runtime warning and can
+                // leak background-thread state into Combine sinks that drive the UI.
+                DispatchQueue.main.sync {
+                    self.applyAnimation(at: t)
+                }
 
                 // Laser hit detection + particle simulation (deterministic, uses frame time)
                 let frameDt     = Float(1.0 / self.frameRate)
@@ -810,7 +816,8 @@ final class VideoExporter {
                         exposure:          colorGradeSettings?.exposure ?? 1.0,
                         ibl:               ibl,
                         dummyUV:           dummyUVBuffer,
-                        dummyTangent:      dummyTangentBuffer))
+                        dummyTangent:      dummyTangentBuffer,
+                        dummy2D:           dummyEquirect))
             }
 
             let visibleObjects = sceneManager.objects.filter { $0.isVisible }
@@ -865,7 +872,8 @@ final class VideoExporter {
                         exposure:          colorGradeSettings?.exposure ?? 1.0,
                         ibl:               ibl,
                         dummyUV:           dummyUVBuffer,
-                        dummyTangent:      dummyTangentBuffer))
+                        dummyTangent:      dummyTangentBuffer,
+                        dummy2D:           dummyEquirect))
             }
 
             if !transparentObjects.isEmpty,
@@ -886,7 +894,8 @@ final class VideoExporter {
                         exposure:          colorGradeSettings?.exposure ?? 1.0,
                         ibl:               ibl,
                         dummyUV:           dummyUVBuffer,
-                        dummyTangent:      dummyTangentBuffer))
+                        dummyTangent:      dummyTangentBuffer,
+                        dummy2D:           dummyEquirect))
             }
 
             // ── Weather particles (hitEffectTime carries the frame time t) ─────

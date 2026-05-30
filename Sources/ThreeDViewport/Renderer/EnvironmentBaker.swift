@@ -168,7 +168,8 @@ enum EnvironmentBaker {
                     exposure:          1.0,      // raw linear radiance, no view grade
                     ibl:               ibl,
                     dummyUV:           dummyUVBuf,
-                    dummyTangent:      dummyTanBuf))
+                    dummyTangent:      dummyTanBuf,
+                    dummy2D:           dummyEq))
 
             enc.endEncoding()
         }

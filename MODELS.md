@@ -270,7 +270,7 @@ All three materials (`heavy`, `hydrogen`, `bonds`) are exported with `doubleSide
 
 ```bash
 /tmp/glb_env/bin/python3 generate_emissive.py     # interactive (prompts colour + intensity)
-/tmp/glb_env/bin/python3 generate_emissive.py -y  # default red, intensity 3
+/tmp/glb_env/bin/python3 generate_emissive.py -y  # default red, intensity 6
 ```
 
 Builds the nine simple primitives — `cube`, `cylinder`, `pyramid`, `sphere`, `torus`, `tetrahedron`, `octahedron`, `hexprism`, `capsule` — as pure-emissive objects for use as glow markers and effect props (e.g. inside the station). Geometry comes straight from the existing primitive builders in `generate_models.py`; only the material differs.
@@ -288,7 +288,7 @@ The intensity is **pre-multiplied into `emissiveFactor`** rather than being writ
 
 ### Intensity
 
-Default is **3.0** (reads as a clearly lit object). Range clamped to `[0.1, 100.0]` so a typed value can't break the material. Values above ~5 will saturate without bloom but stay distinct against the HDRI background.
+Default is **6.0** (reads as a clearly lit object against a dimmed scene). Range clamped to `[0.1, 100.0]` so a typed value can't break the material. Values above ~10 will saturate without bloom but stay distinct against the HDRI background; lower the Lights panel intensities and Atmosphere IBL intensity to make any emissive read more strongly relative to ambient.
 
 Filenames carry the intensity so a single shape/colour can have several variants:
 
@@ -321,7 +321,7 @@ Non-interactive. Iterates every (shape × colour × material), every (robot × c
 | `--emissive-only` | 9 × 30 = **270** |
 | Default + `--two-tone` | 3,150 + 930 + 150 + 270 = **4,500** |
 
-Two-tone robots use body+legs as colour A and head+arms as colour B, named `robot-{A}-{B}.glb`. The station has its own 3-colour split via `palette_molecule_colors()` (same mechanism as benzene's c1/c2 variants), so there is no separate two-tone flag for it — `c1` and `c2` variants of the eight palette colours give the distinct heavy/hydrogen/bond colour combinations automatically. Emissives use a fixed default intensity (3.0) for the batch — run `generate_emissive.py` interactively to dial in a different value for a single colour family.
+Two-tone robots use body+legs as colour A and head+arms as colour B, named `robot-{A}-{B}.glb`. The station has its own 3-colour split via `palette_molecule_colors()` (same mechanism as benzene's c1/c2 variants), so there is no separate two-tone flag for it — `c1` and `c2` variants of the eight palette colours give the distinct heavy/hydrogen/bond colour combinations automatically. Emissives use a fixed default intensity (6.0) for the batch and sample the variant-specific stop for `-c1` (comp1) and `-c2` (comp2b) so all three palette variants are visually distinct — run `generate_emissive.py` interactively to dial in a different intensity for a single colour family.
 
 The shapes pass uses `palette_molecule_colors()` for molecule shapes when the palette is `c1` or `c2`, producing the multi-part atom/bond colour split described above. The station pass uses the same function for the same reason.
 

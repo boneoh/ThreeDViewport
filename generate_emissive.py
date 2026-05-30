@@ -55,7 +55,7 @@ EMISSIVE_SHAPES = [
     ("capsule",     build_capsule),
 ]
 
-DEFAULT_INTENSITY = 3.0   # 1.0 = sticker-glow, ≥3 reads as "lit object"
+DEFAULT_INTENSITY = 6.0   # 1.0 = sticker-glow, ≥3 reads as "lit object"
 INTENSITY_RANGE   = (0.1, 100.0)   # clamp window for typed values
 
 

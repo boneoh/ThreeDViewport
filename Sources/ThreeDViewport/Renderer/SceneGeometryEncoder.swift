@@ -22,6 +22,10 @@ enum SceneGeometryEncoder {
         let ibl:               IBL?
         let dummyUV:           MTLBuffer?
         let dummyTangent:      MTLBuffer?
+        // 1×1 fallback bound to material slots 0–3 when an object has no
+        // baseColor/normal/MR/emissive texture, so the skybox cube (or a
+        // previous object's texture) can't linger and trip Metal validation.
+        let dummy2D:           MTLTexture?
     }
 
     // Encodes the given objects into `encoder` (the caller decides the set — e.g.
@@ -100,7 +104,8 @@ enum SceneGeometryEncoder {
                                      length: MemoryLayout<MaterialUniforms>.stride,
                                      index: 4)
 
-            bindMaterialTextures(encoder: encoder, material: object.material)
+            bindMaterialTextures(encoder: encoder, material: object.material,
+                                 fallback: context.dummy2D)
 
             encoder.drawIndexedPrimitives(type:              .triangle,
                                           indexCount:        object.indexCount,
@@ -137,7 +142,17 @@ enum SceneGeometryEncoder {
     }
 
     static func bindMaterialTextures(encoder: MTLRenderCommandEncoder,
-                                     material: PBRMaterial) {
+                                     material: PBRMaterial,
+                                     fallback: MTLTexture?) {
+        // Bind the 2D fallback first to all four material slots so neither the
+        // skybox cube (slot 0) nor a previous object's textures can linger as a
+        // wrong-type binding when this material has no texture in that slot.
+        if let f = fallback {
+            encoder.setFragmentTexture(f, index: 0)
+            encoder.setFragmentTexture(f, index: 1)
+            encoder.setFragmentTexture(f, index: 2)
+            encoder.setFragmentTexture(f, index: 3)
+        }
         if let t = material.baseColorTexture          { encoder.setFragmentTexture(t, index: 0) }
         if let t = material.normalTexture             { encoder.setFragmentTexture(t, index: 1) }
         if let t = material.metallicRoughnessTexture  { encoder.setFragmentTexture(t, index: 2) }

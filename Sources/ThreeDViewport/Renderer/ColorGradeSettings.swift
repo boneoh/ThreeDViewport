@@ -26,7 +26,14 @@ final class ColorGradeSettings: ObservableObject {
     /// True when the POST-PROCESS parameters are at identity — lets the renderer
     /// skip the color-grade pass.  Exposure is excluded on purpose: it's applied
     /// in the main scene shader, not in that pass.
-    var isIdentity: Bool { brightness == 0 && contrast == 1 && gamma == 1 }
+    var isIdentity: Bool {
+        // Small epsilon (~1/2048 step) so JSON round-trip drift on default sliders
+        // doesn't keep the post-pass active for an effectively no-op grade.
+        let eps: Float = 0.001
+        return abs(brightness)     < eps
+            && abs(contrast - 1)   < eps
+            && abs(gamma    - 1)   < eps
+    }
 
     func reset() {
         exposure   = 1

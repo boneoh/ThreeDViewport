@@ -161,9 +161,18 @@ def generate_emissive(intensity=DEFAULT_INTENSITY):
     total = len(EMISSIVE_SHAPES) * len(colors)
     done  = 0
     print(f"  emissive  ({total} files, intensity {intensity})")
+    # c1/c2 share the bright palette stop with the base variant, so sampling
+    # at the default brightness (220) makes all three look identical.  Sample
+    # the variant-specific stop instead: c1's comp1 lives at 0; c2's comp2b
+    # lives at 96.  Base palette + greyscale keep the default bright sample.
     for shape_name, builder in EMISSIVE_SHAPES:
-        for color_label, colorizer, *_ in colors:
-            rgb  = colorizer_to_rgb(colorizer)
+        for color_label, colorizer, _palette_key, variant in colors:
+            if variant == "c1":
+                rgb = colorizer_to_rgb(colorizer, brightness=0)
+            elif variant == "c2":
+                rgb = colorizer_to_rgb(colorizer, brightness=96)
+            else:
+                rgb = colorizer_to_rgb(colorizer)
             stem = f"emissive-{shape_name}-{color_label}"
             out  = os.path.join(out_dir, f"{stem}.glb")
             mesh = build_emissive_shape(shape_name, builder, rgb, intensity)
