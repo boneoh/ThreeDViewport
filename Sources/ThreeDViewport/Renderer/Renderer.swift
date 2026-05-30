@@ -943,6 +943,14 @@ final class Renderer: NSObject, MTKViewDelegate {
                     dummy2D:           dummyEquirect))
         }
 
+        // ── Weather particles (depth-tested against geometry, alpha-blended) ───
+        // Drawn AFTER opaque but BEFORE transparent geometry: opaque surfaces
+        // (e.g. the station hull) correctly occlude the smoke, while translucent
+        // surfaces (glass windows) draw over it and composite — so the smoke
+        // stays visible through the windows instead of being depth-rejected by
+        // the glass, which writes depth.
+        drawParticleEffects(encoder: encoder, time: timeline.currentTime)
+
         if !transparentObjects.isEmpty,
            let tDS = transparentDepthState,
            let tP  = transparentPipelineState {
@@ -964,9 +972,6 @@ final class Renderer: NSObject, MTKViewDelegate {
                     dummyTangent:      dummyTangentBuffer,
                     dummy2D:           dummyEquirect))
         }
-
-        // ── Weather particles (depth-tested against geometry, alpha-blended) ───
-        drawParticleEffects(encoder: encoder, time: timeline.currentTime)
 
         // ── Laser hit detection + particle update ─────────────────────────────
         let screenSize = SIMD2<Float>(Float(view.drawableSize.width),

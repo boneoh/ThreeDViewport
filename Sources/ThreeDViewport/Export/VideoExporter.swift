@@ -876,6 +876,12 @@ final class VideoExporter {
                         dummy2D:           dummyEquirect))
             }
 
+            // ── Weather particles (hitEffectTime carries the frame time t) ─────
+            // Drawn AFTER opaque but BEFORE transparent geometry so the smoke is
+            // occluded by opaque surfaces yet stays visible through translucent
+            // ones (glass windows) — mirrors the live Renderer ordering.
+            drawParticleEffects(encoder: encoder, time: Double(hitEffectTime))
+
             if !transparentObjects.isEmpty,
                let tP  = transparentPipelineState,
                let tDS = transparentDepthState {
@@ -897,9 +903,6 @@ final class VideoExporter {
                         dummyTangent:      dummyTangentBuffer,
                         dummy2D:           dummyEquirect))
             }
-
-            // ── Weather particles (hitEffectTime carries the frame time t) ─────
-            drawParticleEffects(encoder: encoder, time: Double(hitEffectTime))
 
             // ── Laser beam visuals + hit effects ──────────────────────────────
             let exportSize = SIMD2<Float>(Float(width), Float(height))
