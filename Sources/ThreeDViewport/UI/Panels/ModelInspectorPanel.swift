@@ -35,7 +35,7 @@ struct ModelInspectorPanel: View {
                 .frame(maxWidth: .infinity)
             }
         }
-        .frame(width: 280)
+        .frame(width: 336)
         .background(Color(NSColor.windowBackgroundColor))
         // Keep Position + Rotation fields tracking viewport moves of the selection.
         .onReceive(Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()) { _ in
@@ -184,6 +184,22 @@ struct ModelInspectorPanel: View {
             .environment(\.controlActiveState, .active)
             .help("When hidden, this object still blocks objects behind it — cutting "
                 + "a hole in the matte without drawing itself. Only takes effect while hidden.")
+
+            HStack(spacing: 6) {
+                Text("Class")
+                    .frame(width: 64, alignment: .leading)
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+                Picker("", selection: $state.objectClass) {
+                    ForEach(ObjectClass.allCases, id: \.self) { cls in
+                        Text(cls.displayName).tag(cls)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+            .help("Production role used by File ▸ Export All to decide which passes "
+                + "show vs hold out this object.")
 
             HStack(spacing: 6) {
                 Text("Normals")

@@ -133,6 +133,24 @@ final class Renderer: NSObject, MTKViewDelegate {
     private var hitEffectTime:    Float             = 0
     private var lastDrawWallTime: CFAbsoluteTime    = 0
 
+    // Non-published render copy of the lights.  During PLAYBACK, applyAnimation
+    // writes animated light values here (not to the @Published lightManager.lights)
+    // so the Lights inspector doesn't re-render every frame.  While paused, it
+    // mirrors lightManager.lights so inspector edits show immediately.  All of the
+    // renderer's GPU/laser/widget light reads use this.
+    private var animatedLights:   [LightConfig]     = []
+
+    // MARK: - Performance instrumentation
+    // Flip to `true` to log a rolling 1-second average of per-frame CPU encode
+    // time (top of draw → commit), GPU frame time (gpuEndTime − gpuStartTime),
+    // and achieved FPS to the console.  Leave `false` for normal use.
+    static let perfLoggingEnabled = false
+    private let perfLock        = NSLock()
+    private var perfWindowStart: CFAbsoluteTime = 0
+    private var perfFrameCount  = 0
+    private var perfCPUAccum:    Double = 0   // ms
+    private var perfGPUAccum:    Double = 0   // ms
+
     private var lastAnimatedTime: Double = -1.0
     /// Last playhead time the atmosphere panels were synced to while paused, so
     /// scrubbing makes the Fog/Weather panel + paused render follow the playhead
@@ -619,7 +637,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         pass.colorAttachments[0].storeAction = .store
         guard let enc = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
         var u = makeFogVolumeUniforms(fog,
-            at:             timeline.currentTime,
+            at:             timeline.renderTime,
             playing:        timeline.isPlaying,
             viewProjection: viewCamera.viewProjectionMatrix,
             cameraPos:      viewCamera.eyePosition,
@@ -638,7 +656,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// (so live slider edits at a held frame aren't clobbered).
     private func syncAtmosphereToPlayhead() {
         guard !timeline.isPlaying else { return }
-        let t = timeline.currentTime
+        let t = timeline.renderTime
         guard t != lastAtmoSyncTime else { return }
         lastAtmoSyncTime = t
         fogSettings?.syncToPlayhead(at: t)
@@ -693,28 +711,41 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
 
     func draw(in view: MTKView) {
+        let perfDrawStart = Renderer.perfLoggingEnabled ? CFAbsoluteTimeGetCurrent() : 0
+
         // Wall-clock dt for hit effect animation (independent of timeline)
         let now = CFAbsoluteTimeGetCurrent()
         let dt  = lastDrawWallTime > 0 ? Float(now - lastDrawWallTime) : (1.0 / 60.0)
         lastDrawWallTime = now
         hitEffectTime += dt
 
-        timeline.tick()
+        // Advance the playhead by real elapsed time (clamped so a hitch doesn't
+        // jump the animation), decoupling playback speed from the draw rate.
+        timeline.tick(dt: min(Double(dt), 1.0 / 15.0))
 
         // Reset feedback only when the user manually scrubs while already paused.
         // "Just stopped" (isPlaying flipped to false this frame) must NOT reset —
         // that would wipe the last feedback frame at the natural end of playback.
         let justStopped = lastWasPlaying && !timeline.isPlaying
-        if !timeline.isPlaying && !justStopped && timeline.currentTime != lastRenderedTime {
+        if !timeline.isPlaying && !justStopped && timeline.renderTime != lastRenderedTime {
             feedbackProcessor?.reset()
         }
-        lastWasPlaying   = timeline.isPlaying
-        lastRenderedTime = timeline.currentTime
-
-        if timeline.currentTime != lastAnimatedTime {
-            applyAnimation()
-            lastAnimatedTime = timeline.currentTime
+        // On the play→pause/stop transition, publish the final animated light
+        // values once so the (frozen-during-playback) inspector lands correctly.
+        if justStopped, animatedLights.count == lightManager.lights.count {
+            lightManager.lights = animatedLights
         }
+        lastWasPlaying   = timeline.isPlaying
+        lastRenderedTime = timeline.renderTime
+
+        if timeline.renderTime != lastAnimatedTime {
+            applyAnimation()
+            lastAnimatedTime = timeline.renderTime
+        }
+        // While not playing, keep the render-facing light copy in sync with the
+        // editor copy every frame so inspector edits show immediately.  (During
+        // playback applyAnimation maintains animatedLights instead.)
+        if !timeline.isPlaying { animatedLights = lightManager.lights }
         // FK hierarchy: recompute world transforms for all hierarchical parts
         // every frame, not just when time changes, so interactive manipulation
         // of a parent (e.g. rotating an upper arm) propagates to children
@@ -876,7 +907,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                 into:            encoder,
                 objects:         holdoutObjects,
                 groupTransforms: sceneManager.groupTransforms,
-                lightUniforms:   lightManager.buildLightUniforms(),
+                lightUniforms:   lightManager.buildLightUniforms(from: animatedLights),
                 context: SceneGeometryEncoder.Context(
                     viewProjection:    viewCamera.viewProjectionMatrix,
                     eyePosition:       viewCamera.eyePosition,
@@ -933,7 +964,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                 into:            encoder,
                 objects:         opaqueObjects,
                 groupTransforms: sceneManager.groupTransforms,
-                lightUniforms:   lightManager.buildLightUniforms(),
+                lightUniforms:   lightManager.buildLightUniforms(from: animatedLights),
                 context: SceneGeometryEncoder.Context(
                     viewProjection:    viewCamera.viewProjectionMatrix,
                     eyePosition:       viewCamera.eyePosition,
@@ -954,7 +985,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         // surfaces (glass windows) draw over it and composite — so the smoke
         // stays visible through the windows instead of being depth-rejected by
         // the glass, which writes depth.
-        drawParticleEffects(encoder: encoder, time: timeline.currentTime)
+        drawParticleEffects(encoder: encoder, time: timeline.renderTime)
 
         // ── Laser hit detection + particle update ─────────────────────────────
         // Beams/hits/sparks are drawn BEFORE transparent geometry (same reason as
@@ -965,7 +996,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         let screenSize = SIMD2<Float>(Float(view.drawableSize.width),
                                       Float(view.drawableSize.height))
         let visibleForHits = sceneManager.objects.filter { $0.isVisible }
-        laserHitSystem.updateHits(lights: lightManager.lights, objects: visibleForHits)
+        laserHitSystem.updateHits(lights: animatedLights, objects: visibleForHits)
         laserHitSystem.updateParticles(dt: dt)
         let sparkGPUData = laserHitSystem.buildSparkGPUData()
 
@@ -991,7 +1022,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                 into:            encoder,
                 objects:         transparentObjects,
                 groupTransforms: sceneManager.groupTransforms,
-                lightUniforms:   lightManager.buildLightUniforms(),
+                lightUniforms:   lightManager.buildLightUniforms(from: animatedLights),
                 context: SceneGeometryEncoder.Context(
                     viewProjection:    viewCamera.viewProjectionMatrix,
                     eyePosition:       viewCamera.eyePosition,
@@ -1080,8 +1111,37 @@ final class Renderer: NSObject, MTKViewDelegate {
             }
         }
 
+        if Renderer.perfLoggingEnabled {
+            // CPU = main-thread frame build (animation + encode) up to commit.
+            let cpuMs = (CFAbsoluteTimeGetCurrent() - perfDrawStart) * 1000.0
+            commandBuffer.addCompletedHandler { [weak self] cb in
+                let gpuMs = (cb.gpuEndTime - cb.gpuStartTime) * 1000.0
+                self?.recordPerf(cpuMs: cpuMs, gpuMs: gpuMs)
+            }
+        }
+
         commandBuffer.present(drawable)
         commandBuffer.commit()
+    }
+
+    /// Accumulates per-frame CPU/GPU timings and prints a rolling 1-second average.
+    /// Called from the command buffer's completion handler (a Metal thread), so a
+    /// lock guards the accumulators.
+    private func recordPerf(cpuMs: Double, gpuMs: Double) {
+        perfLock.lock()
+        defer { perfLock.unlock() }
+        let now = CFAbsoluteTimeGetCurrent()
+        if perfWindowStart == 0 { perfWindowStart = now }
+        perfCPUAccum   += cpuMs
+        perfGPUAccum   += gpuMs
+        perfFrameCount += 1
+        let elapsed = now - perfWindowStart
+        if elapsed >= 1.0, perfFrameCount > 0 {
+            let n = Double(perfFrameCount)
+            print(String(format: "[PERF] CPU %.1fms | GPU %.1fms | %.0f fps (%d frames)",
+                         perfCPUAccum / n, perfGPUAccum / n, n / elapsed, perfFrameCount))
+            perfCPUAccum = 0; perfGPUAccum = 0; perfFrameCount = 0; perfWindowStart = now
+        }
     }
 
     // MARK: - Color grade helper
@@ -1193,7 +1253,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         guard let pipeline = laserBeamPipelineState else { return }
 
         // Collect (index, light) pairs so we can look up hit distances by slot.
-        let indexedBeams = lightManager.lights.enumerated().filter {
+        let indexedBeams = animatedLights.enumerated().filter {
             $0.element.type == .laser && $0.element.isEnabled &&
             $0.element.excludeBeamFromFeedback == excludedOnly
         }
@@ -1233,7 +1293,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                                          screenSize:    SIMD2<Float>,
                                          hitEffectTime: Float,
                                          sparkGPUData:  [SparkParticleGPU]) {
-        let excludedBeams = lightManager.lights.enumerated().filter {
+        let excludedBeams = animatedLights.enumerated().filter {
             $0.element.type == .laser && $0.element.isEnabled && $0.element.excludeBeamFromFeedback
         }
         let hasBeams  = !excludedBeams.isEmpty
@@ -1297,7 +1357,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         let vp = viewCamera.viewProjectionMatrix
         var pipelineSet = false
 
-        for (i, laser) in lightManager.lights.enumerated() {
+        for (i, laser) in animatedLights.enumerated() {
             guard laser.type == .laser, laser.isEnabled,
                   laser.excludeBeamFromFeedback == excludedOnly,
                   let hit = laserHitSystem.hits[i] else { continue }
@@ -1386,7 +1446,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         // Each light renders in its own configured colour so the user can map
         // the widget back to a light in the inspector.  Per-type shape so even
         // colour-blind users can distinguish types at a glance.
-        for light in lightManager.lights where light.isEnabled {
+        for light in animatedLights where light.isEnabled {
             let color = SIMD4<Float>(light.color, 1.0)
 
             switch light.type {
@@ -1518,7 +1578,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         for object in sceneManager.objects {
             guard let track = object.keyframeTrack,
                   !track.keyframes.isEmpty else { continue }
-            if let delta = track.evaluate(at: timeline.currentTime) {
+            if let delta = track.evaluate(at: timeline.renderTime) {
                 if object.parentIndex != nil {
                     // Hierarchical part: baseTransform is a LOCAL transform, so
                     // the animated result goes into localTransform.
@@ -1533,7 +1593,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             // animated value reaches the renderer through material.opacity.
             // No track keyframes ⇒ no write, so the Inspector slider's static
             // value is preserved on un-animated objects.
-            if let op = track.evaluateOpacity(at: timeline.currentTime) {
+            if let op = track.evaluateOpacity(at: timeline.renderTime) {
                 object.material.opacity = op
             }
         }
@@ -1543,7 +1603,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         // sceneManager.groupTransforms so the render loop can apply it.
         for (gid, track) in sceneManager.groupKeyframeTracks {
             guard !track.keyframes.isEmpty else { continue }
-            if let delta = track.evaluate(at: timeline.currentTime) {
+            if let delta = track.evaluate(at: timeline.renderTime) {
                 sceneManager.groupTransforms[gid] = delta
             }
         }
@@ -1552,7 +1612,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         // The follow override is applied separately in applyCameraFollow(), called
         // after applyHierarchy() so sub-part world transforms are fully up-to-date.
         if let camTrack = camera.keyframeTrack, !camTrack.keyframes.isEmpty {
-            if let state = camTrack.evaluate(at: timeline.currentTime) {
+            if let state = camTrack.evaluate(at: timeline.renderTime) {
                 camera.yaw         = state.yaw
                 camera.pitch       = state.pitch
                 camera.distance    = state.distance
@@ -1562,11 +1622,35 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
 
         // ── Lights ────────────────────────────────────────────────────────────
-        for i in 0..<lightManager.lights.count {
-            guard i < lightManager.keyframeTracks.count,
-                  let track = lightManager.keyframeTracks[i],
-                  !track.keyframes.isEmpty else { continue }
-            if let state = track.evaluate(at: timeline.currentTime) {
+        // While PLAYING, evaluate into the non-published `animatedLights` copy so
+        // the Lights inspector (heavy SwiftUI panel) doesn't re-render every frame.
+        // While paused/scrubbing, write @Published lightManager.lights so the
+        // inspector follows the playhead.  (draw() mirrors lightManager.lights into
+        // animatedLights every paused frame, and publishes the final state on the
+        // play→pause transition.)
+        if timeline.isPlaying {
+            if animatedLights.count != lightManager.lights.count {
+                animatedLights = lightManager.lights
+            }
+            for i in 0..<lightManager.lights.count {
+                animatedLights[i] = lightManager.lights[i]   // base = editor values
+                guard i < lightManager.keyframeTracks.count,
+                      let track = lightManager.keyframeTracks[i],
+                      !track.keyframes.isEmpty,
+                      let state = track.evaluate(at: timeline.renderTime) else { continue }
+                animatedLights[i].intensity     = state.intensity
+                animatedLights[i].color         = state.color
+                animatedLights[i].position      = state.position
+                animatedLights[i].target        = state.target
+                animatedLights[i].range         = state.range
+                animatedLights[i].beamThickness = state.beamThickness
+            }
+        } else {
+            for i in 0..<lightManager.lights.count {
+                guard i < lightManager.keyframeTracks.count,
+                      let track = lightManager.keyframeTracks[i],
+                      !track.keyframes.isEmpty,
+                      let state = track.evaluate(at: timeline.renderTime) else { continue }
                 lightManager.lights[i].intensity     = state.intensity
                 lightManager.lights[i].color         = state.color
                 lightManager.lights[i].position      = state.position
@@ -1613,7 +1697,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         guard let camTrack = camera.keyframeTrack,
               !camTrack.keyframes.isEmpty else { return }
         if let follow = camTrack.resolveFollowCamera(
-            at:             timeline.currentTime,
+            at:             timeline.renderTime,
             getObjectState: { [weak self] name in
                 self?.sceneManager.worldOrbitAnchor(ofObjectNamed: name)
             }

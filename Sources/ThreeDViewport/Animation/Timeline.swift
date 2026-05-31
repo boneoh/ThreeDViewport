@@ -6,7 +6,29 @@ import Combine
 // tick() is called once per render frame (main thread, via MTKView display link).
 final class Timeline: ObservableObject {
 
-    @Published var currentTime: Double = 0.0
+    /// Precise playhead the *renderer* reads every frame.  During playback this
+    /// advances each tick; `currentTime` below is only a throttled UI mirror so
+    /// SwiftUI panels (transport bar, inspectors) don't re-render every single
+    /// frame and starve the MTKView's display-link callback.  `private(set)` so
+    /// only the timeline (tick / seek sync) writes it.
+    private(set) var renderTime: Double = 0.0
+
+    /// UI-facing playhead bound by SwiftUI.  Mirrors `renderTime`, but throttled
+    /// to ~`uiUpdateInterval` during playback.  When the user scrubs/seeks or
+    /// playback is paused it stays exactly in sync with `renderTime`.
+    @Published var currentTime: Double = 0.0 {
+        didSet {
+            // A change from the UI/seek (not our own throttled mirror) snaps the
+            // render clock to it so scrubbing is immediate.
+            if !mirroringToUI { renderTime = currentTime }
+        }
+    }
+
+    /// How often `currentTime` is refreshed for the UI during playback (~15 Hz).
+    private let uiUpdateInterval: Double = 1.0 / 15.0
+    private var lastUIMirror: Double = 0.0
+    private var mirroringToUI = false
+
     @Published var isPlaying: Bool = false
     @Published var duration: Double = 10.0
     @Published var isLooping: Bool = false
@@ -58,25 +80,40 @@ final class Timeline: ObservableObject {
     // MARK: - Frame tick
 
     // Called once per rendered frame from Renderer.draw(in:).
-    // Advances currentTime by one frame interval; stops at duration.
-    // Returns true when time actually advanced (caller should re-evaluate keyframes).
+    // Advances renderTime by the real wall-clock time `dt` (seconds) elapsed since
+    // the previous frame, so playback runs at real-time speed regardless of the
+    // draw rate (e.g. a 100 Hz display drawing at 50 fps still plays 1× speed).
+    // `dt` is clamped by the caller to avoid a large jump after a hitch.
+    // Returns true when time actually advanced (caller re-evaluates keyframes).
+    // NOTE: export does NOT use this — it steps its own deterministic frame clock.
     @discardableResult
-    func tick() -> Bool {
+    func tick(dt: Double) -> Bool {
         guard isPlaying else { return false }
 
-        let dt = 1.0 / frameRate
-        currentTime += dt
+        renderTime += dt
 
-        if currentTime >= duration {
+        var landUI = false   // force a UI mirror this tick (end / loop wrap)
+        if renderTime >= duration {
             if isLooping {
-                currentTime = 0.0
+                renderTime = 0.0
                 loopRevolution += 1
+                landUI = true
                 print("[DEBUG] Timeline: looped back to t=0 (revolution=\(loopRevolution))")
             } else {
-                currentTime = duration
+                renderTime = duration
                 isPlaying = false
-                print("[DEBUG] Timeline: reached end at t=" + String(format: "%.3f", currentTime))
+                landUI = true
+                print("[DEBUG] Timeline: reached end at t=" + String(format: "%.3f", renderTime))
             }
+        }
+
+        // Throttle the UI mirror so SwiftUI panels re-render ~15×/s, not every
+        // frame.  Always mirror on the end/loop frame so the scrubber lands exactly.
+        if landUI || abs(renderTime - lastUIMirror) >= uiUpdateInterval {
+            lastUIMirror = renderTime
+            mirroringToUI = true          // suppress didSet → renderTime feedback
+            currentTime = renderTime
+            mirroringToUI = false
         }
 
         return true

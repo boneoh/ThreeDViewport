@@ -14,6 +14,8 @@ final class ModelInspectorState: ObservableObject {
     @Published var partCount:       Int             = 0
     @Published var isVisible:       Bool            = true
     @Published var occludeWhenHidden: Bool          = false
+    /// Production class for the "Export All" cycle (Actor / Background / MacGuffin).
+    @Published var objectClass:       ObjectClass    = .background
     @Published var normalMode:      NormalMode      = .auto
     @Published var metallicFactor:  Float           = 0
     @Published var roughnessFactor: Float           = 0.5
@@ -38,6 +40,10 @@ final class ModelInspectorState: ObservableObject {
     // ── Callbacks wired by AppDelegate ───────────────────────────────────────
     var onRebuildNormals: ((NormalMode, [SceneObject]) -> Void)?
     var onRedraw:         (() -> Void)?
+    /// Returns true while the timeline is playing.  When playing, the 10 Hz
+    /// live-readout poll (`refresh()`) is skipped so an animating selection doesn't
+    /// re-render this panel every tick and starve the render loop.
+    var isPlaying:        (() -> Bool)?
     var onDirty:          (() -> Void)?
     var onRevealInFinder: (() -> Void)?
     /// Live world-space position of an object as the renderer draws it (group
@@ -91,6 +97,7 @@ final class ModelInspectorState: ObservableObject {
         partCount       = newTargets.count
         isVisible       = newTargets.allSatisfy { $0.isVisible }
         occludeWhenHidden = newTargets.allSatisfy { $0.occludeWhenHidden }
+        objectClass     = first.objectClass
         normalMode      = first.normalMode
         metallicFactor  = first.material.metallicFactor
         roughnessFactor = first.material.roughnessFactor
@@ -144,6 +151,7 @@ final class ModelInspectorState: ObservableObject {
     /// value driven by the timeline today — without this, the slider would lag
     /// when the playhead moves through an opacity-bearing keyframe track.
     func refresh() {
+        guard !(isPlaying?() ?? false) else { return }
         guard hasSelection, let obj = anchor else { return }
         let p = worldPos(of: obj)
         if p != position {
@@ -185,6 +193,14 @@ final class ModelInspectorState: ObservableObject {
                 guard let self, !isUpdating else { return }
                 targets.forEach { $0.occludeWhenHidden = v }
                 onRedraw?(); onDirty?()
+            }.store(in: &cancellables)
+
+        // Class drives only the Export All cycle — no live redraw, just mark dirty.
+        $objectClass.dropFirst()
+            .sink { [weak self] v in
+                guard let self, !isUpdating else { return }
+                targets.forEach { $0.objectClass = v }
+                onDirty?()
             }.store(in: &cancellables)
 
         $normalMode.dropFirst()

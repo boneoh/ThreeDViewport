@@ -675,6 +675,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         exportItem.target = self
         fileMenu.addItem(exportItem)
 
+        let exportAllItem = NSMenuItem(
+            title: "Export All Passes...",
+            action: #selector(exportAll(_:)),
+            keyEquivalent: "e"
+        )
+        exportAllItem.keyEquivalentModifierMask = [.command, .shift]
+        exportAllItem.target = self
+        fileMenu.addItem(exportAllItem)
+
         // ── Edit menu ─────────────────────────────────────────────────────────
         let editItem = NSMenuItem()
         mainMenu.addItem(editItem)
@@ -983,6 +992,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             if let n = Int(middle), n > highest { highest = n }
         }
         return String(format: "%@.%02d.mov", projectName, highest + 1)
+    }
+
+    /// Next cycle/take number for "Export All": scans `dir` for any
+    /// `<projectName>.NN[.PassName].mov` and returns the highest NN + 1.  Shares the
+    /// numbering sequence with single exports so cycles never collide with them.
+    private func nextCycleNumber(projectName: String, in dir: URL) -> Int {
+        let names  = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        let prefix = projectName + "."
+        var highest = 0
+        for name in names {
+            guard name.hasPrefix(prefix), name.hasSuffix(".mov") else { continue }
+            let nnPart = name.dropFirst(prefix.count).prefix { $0.isNumber }
+            if let n = Int(nnPart), n > highest { highest = n }
+        }
+        return highest + 1
     }
 
     /// Returns the next available `<base>.NN.<ext>` filename in `dir` (NN ≥ 01,
@@ -2278,6 +2302,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // Wire callbacks.
         state.onRedraw = { [weak viewport] in viewport?.needsDisplay = true }
         state.onDirty  = { [weak self] in self?.markDirty() }
+        state.isPlaying = { [weak viewport] in viewport?.timeline.isPlaying ?? false }
         state.onRebuildNormals = { [weak viewport] mode, targets in
             viewport?.applyNormalMode(mode, toTargets: targets)
         }
@@ -2287,7 +2312,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
 
         let panel = KeyForwardingPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 296, height: 440),
+            contentRect: NSRect(x: 0, y: 0, width: 352, height: 440),
             styleMask:   [.titled, .closable, .miniaturizable, .resizable, .utilityWindow, .nonactivatingPanel],
             backing:     .buffered,
             defer:       false
@@ -2863,6 +2888,78 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     // MARK: - Export Video
+
+    @objc private func exportAll(_ sender: Any) {
+        guard let window = window else { return }
+        guard viewportView?.sceneManager.primaryObject != nil else {
+            let alert = NSAlert()
+            alert.messageText     = "No Model Loaded"
+            alert.informativeText = "Open a .glb or .gltf model before exporting."
+            alert.alertStyle      = .warning
+            alert.beginSheetModal(for: window)
+            return
+        }
+        guard let projectURL = currentProjectURL else {
+            let alert = NSAlert()
+            alert.messageText     = "Save the Project First"
+            alert.informativeText = "Export All files passes under Movies/<project name>/ \u{2014} save the project so it has a name."
+            alert.alertStyle      = .warning
+            alert.beginSheetModal(for: window)
+            return
+        }
+
+        let projectName     = projectURL.deletingPathExtension().lastPathComponent
+        let projectMovieDir = defaultDirectory(for: "Movies").appendingPathComponent(projectName)
+        try? FileManager.default.createDirectory(at: projectMovieDir, withIntermediateDirectories: true)
+
+        let (accessory, codecPopup, resPopup, fpsPopup) = makeExportAccessoryView()
+        let alert = NSAlert()
+        alert.messageText     = "Export All Passes"
+        alert.informativeText = "Renders the full pass set (Full, Actor/MacGuffin Solo + Matte, Scene) into Movies/\(projectName)/ using one codec. The project is saved first and reloaded when the cycle finishes."
+        alert.accessoryView   = accessory
+        alert.addButton(withTitle: "Export All")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn, let self = self else { return }
+
+            let codec: ExportCodec = codecPopup.indexOfSelectedItem == 0 ? .proRes4444 : .proRes422HQ
+            let res = ExportResolution.presets[max(0, resPopup.indexOfSelectedItem)]
+            let fps = ExportFrameRate.presets[max(0, fpsPopup.indexOfSelectedItem)]
+
+            AppSettings.shared.exportWidth   = res.width
+            AppSettings.shared.exportHeight  = res.height
+            AppSettings.shared.exportCodecID = (codec == .proRes422HQ) ? "proRes422HQ" : "proRes4444"
+            AppSettings.shared.save()
+            if let tl = self.viewportView?.timeline, abs(tl.frameRate - fps.value) > 1e-9 {
+                tl.frameRate = fps.value
+            }
+
+            // Checkpoint: save current state so the cycle can reload it afterward.
+            self.saveProject(sender)
+
+            let cycle = self.nextCycleNumber(projectName: projectName, in: projectMovieDir)
+            print("[DEBUG] AppDelegate: Export All cycle \(cycle) codec=\(codec.displayName)"
+                + " res=\(res.width)x\(res.height) fps=\(fps.display)")
+
+            self.viewportView?.startExportAll(
+                folder: projectMovieDir, projectName: projectName, cycleNumber: cycle,
+                codec: codec, fps: fps, exportState: self.exportState
+            ) { [weak self] error in
+                guard let self = self else { return }
+                // Restore exact pre-cycle state by reloading the checkpoint project.
+                self.loadProject(from: projectURL)
+                if let error = error {
+                    self.showErrorAlert(message: "Export All failed", detail: error.localizedDescription)
+                } else {
+                    let done = NSAlert()
+                    done.messageText     = "Export All Completed"
+                    done.informativeText = "Saved \(projectName).\(String(format: "%02d", cycle)).<pass>.mov in Movies/\(projectName)/."
+                    done.alertStyle      = .informational
+                    done.runModal()
+                }
+            }
+        }
+    }
 
     @objc private func exportVideo(_ sender: Any) {
         showExportPanel()

@@ -171,6 +171,14 @@ final class LightManager: ObservableObject {
 
     // Builds the LightUniforms block that the fragment shader reads from buffer(3).
     func buildLightUniforms() -> LightUniforms {
+        buildLightUniforms(from: lights)
+    }
+
+    /// Builds uniforms from an explicit light list rather than `self.lights`.
+    /// The exporter passes its own non-published working copy so per-frame
+    /// animation never mutates the `@Published lights` array (which would churn
+    /// the SwiftUI inspector and force a main-thread hop during export).
+    func buildLightUniforms(from lights: [LightConfig]) -> LightUniforms {
         var u = LightUniforms()
         u.ambientColor = SIMD4<Float>(ambientColor, 0)
 

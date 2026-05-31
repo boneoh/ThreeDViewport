@@ -15,6 +15,23 @@ enum NormalMode: Int, CaseIterable {
     }
 }
 
+// Production role of an object, used by the one-click "Export All" cycle to decide
+// which passes show vs hold out each object.  Default `.background` so unclassified
+// geometry behaves as set dressing (visible in Full/Scene, held out in solos).
+enum ObjectClass: String, CaseIterable {
+    case background
+    case actor
+    case macguffin
+
+    var displayName: String {
+        switch self {
+        case .background: return "Background"
+        case .actor:      return "Actor"
+        case .macguffin:  return "MacGuffin"
+        }
+    }
+}
+
 // Represents one loaded GLTF mesh node with its GPU buffers.
 // Phase 2 adds keyframe animation via keyframeTrack.
 // Phase 6 adds sourceURL and per-object visibility toggle.
@@ -73,7 +90,12 @@ final class SceneObject {
     // Holdout: when the object is hidden (isVisible == false) but this is true, it
     // is still rendered depth-only — occluding objects behind it without drawing
     // itself.  Used to "bite holes" out of mattes for later compositing.
-    var occludeWhenHidden: Bool = false
+    // Defaults ON for new objects (no effect until hidden); saved per-object so
+    // existing projects keep their stored value and old pre-v17 files stay off.
+    var occludeWhenHidden: Bool = true
+
+    // Production role for the "Export All" multi-pass cycle (Model Inspector).
+    var objectClass: ObjectClass = .background
 
     // Normal shading mode — set by the Model Inspector.
     // cpuPositions, cpuIndices, and originalNormals are kept so the GPU normal

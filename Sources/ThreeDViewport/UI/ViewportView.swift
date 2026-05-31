@@ -190,7 +190,11 @@ final class ViewportView: MTKView {
         // which Metal validation forbids on framebufferOnly textures.
         framebufferOnly          = false
         clearColor               = MTLClearColor(red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0)
-        preferredFramesPerSecond = 30
+        // 50 paces cleanly on common refresh rates (100 Hz → 50 fps, 60 Hz → 30,
+        // 120 Hz → 40) — always ≥ 30.  Playback speed is decoupled from this via
+        // Timeline.tick(dt:)'s wall-clock advance, so a higher draw rate just means
+        // smoother real-time preview, not faster playback.
+        preferredFramesPerSecond = 50
         isPaused                 = false
         enableSetNeedsDisplay    = false
 
@@ -1547,6 +1551,11 @@ final class ViewportView: MTKView {
     /// timer in CameraPanel while the panel is visible, so the read-only Position
     /// and editable Target track viewport moves.
     func refreshCameraPanelState() {
+        // Skip the 10 Hz live-readout poll during playback: the camera may be
+        // animating, and refreshing @Published panel fields every tick re-renders
+        // the Camera panel and starves the render loop.  (Values resync when the
+        // panel next polls after playback stops.)
+        guard !timeline.isPlaying else { return }
         let fl = 12.0 / tan(camera.fovYRadians / 2)
         cameraPanelState.refresh(position:    camera.eyePosition,
                                  target:      camera.target,
@@ -1556,7 +1565,7 @@ final class ViewportView: MTKView {
     // MARK: - Video Export
 
     func startExport(to url: URL, codec: ExportCodec, fps: ExportFrameRate,
-                     exportState: ExportState,
+                     exportState: ExportState, includeFX: Bool = true,
                      onCompletion: ((Error?) -> Void)? = nil) {
         guard let dev = device else {
             print("[DEBUG] ViewportView: startExport — Metal device is nil")
@@ -1593,8 +1602,12 @@ final class ViewportView: MTKView {
         exporter.showAxesGizmo      = renderSettings.showAxesGizmo
         exporter.feedbackSettings   = feedbackSettings
         exporter.colorGradeSettings = colorGradeSettings
-        exporter.fogSettings        = fogSettings
-        exporter.particleManager    = particleManager
+        // FX (fog + weather particles) belong to the Background class: include them
+        // only in passes that show Background (Full, Scene).  Solo/Matte passes pass
+        // includeFX=false so the actor/macguffin matte stays clean.
+        exporter.fogSettings        = includeFX ? fogSettings : nil
+        exporter.particleManager    = includeFX ? particleManager : nil
+        exporter.includeLaserFX     = includeFX
         exporter.ibl                = renderer?.ibl   // share IBL so exports match preview
         exporter.backgroundEquirect = renderer?.backgroundEquirect   // dedicated bg HDR (if any)
         feedbackProcessor.reset()   // clear live queue; exporter has its own processor
@@ -1622,6 +1635,85 @@ final class ViewportView: MTKView {
             }
             onCompletion?(error)
         })
+    }
+
+    // MARK: - Export All (multi-pass cycle)
+
+    private struct ExportPass {
+        let name:    String          // used in the filename
+        let visible: Set<ObjectClass>// shown; EVERY other class is hidden + holdout
+        let matte:   Bool            // true → Black+White matte colour mode
+        let blackBg: Bool            // true → solid-black background override
+    }
+
+    /// Runs the full multi-pass export cycle sequentially, writing
+    /// `<projectName>.<NN>.<PassName>.mov` into `folder`.  Passes are chained on
+    /// each export's completion (one VideoExporter run per pass).  `onAllComplete`
+    /// fires once after the last pass, or on the first error.  The caller restores
+    /// scene state afterward (by reloading the just-saved project).
+    func startExportAll(folder: URL, projectName: String, cycleNumber: Int,
+                        codec: ExportCodec, fps: ExportFrameRate,
+                        exportState: ExportState,
+                        onAllComplete: @escaping (Error?) -> Void) {
+        let present = Set(sceneManager.objects.map { $0.objectClass })
+        var passes: [ExportPass] = [
+            ExportPass(name: "Full", visible: [.background, .actor, .macguffin],
+                       matte: false, blackBg: false)
+        ]
+        if present.contains(.actor) {
+            passes.append(ExportPass(name: "Actor Solo",  visible: [.actor], matte: false, blackBg: true))
+            passes.append(ExportPass(name: "Actor Matte", visible: [.actor], matte: true,  blackBg: true))
+        }
+        passes.append(ExportPass(name: "Scene", visible: [.background], matte: false, blackBg: false))
+        if present.contains(.macguffin) {
+            passes.append(ExportPass(name: "MacGuffin Solo",  visible: [.macguffin], matte: false, blackBg: true))
+            passes.append(ExportPass(name: "MacGuffin Matte", visible: [.macguffin], matte: true,  blackBg: true))
+        }
+
+        // Background fields to restore for the project-background passes (Full/Scene).
+        let origMode  = backgroundConfig.mode
+        let origSolid = backgroundConfig.solidColor
+        let nn        = String(format: "%02d", cycleNumber)
+        let total     = passes.count
+
+        func runPass(_ i: Int) {
+            guard i < passes.count else { onAllComplete(nil); return }
+            let pass = passes[i]
+            applyExportPass(pass, origMode: origMode, origSolid: origSolid)
+            exportState.lastMessage = "Exporting pass \(i + 1)/\(total): \(pass.name)"
+            let url = folder.appendingPathComponent("\(projectName).\(nn).\(pass.name).mov")
+            // FX live with the Background class — only render them when this pass shows it.
+            let includeFX = pass.visible.contains(.background)
+            startExport(to: url, codec: codec, fps: fps, exportState: exportState,
+                        includeFX: includeFX) { error in
+                if let error = error { onAllComplete(error); return }
+                runPass(i + 1)   // startExport's completion is delivered on the main thread
+            }
+        }
+        runPass(0)
+    }
+
+    /// Sets per-pass scene state: object visibility/holdout by class, colour mode,
+    /// and background.  Classes not in `pass.visible` are hidden AND set to occlude
+    /// (holdout), so they cut correct holes for compositing.
+    private func applyExportPass(_ pass: ExportPass,
+                                 origMode: BackgroundMode, origSolid: SIMD3<Float>) {
+        for obj in sceneManager.objects {
+            if pass.visible.contains(obj.objectClass) {
+                obj.isVisible = true
+            } else {
+                obj.isVisible         = false
+                obj.occludeWhenHidden = true
+            }
+        }
+        renderSettings.colorMode = pass.matte ? .blackWhite : .color
+        if pass.blackBg {
+            backgroundConfig.mode       = .solid
+            backgroundConfig.solidColor = SIMD3<Float>(0, 0, 0)
+        } else {
+            backgroundConfig.mode       = origMode
+            backgroundConfig.solidColor = origSolid
+        }
     }
 
     // MARK: - First Responder

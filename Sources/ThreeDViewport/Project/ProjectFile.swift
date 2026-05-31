@@ -153,6 +153,7 @@ final class ProjectFile {
                 easingMode:          (obj.keyframeTrack?.easingMode ?? .linear).rawValue,
                 isVisible:           obj.isVisible,
                 occludeWhenHidden:   obj.occludeWhenHidden,
+                objectClass:         obj.objectClass.rawValue,
                 normalMode:          obj.normalMode.rawValue,
                 metallicFactor:      obj.material.metallicFactor,
                 roughnessFactor:     obj.material.roughnessFactor,
@@ -699,6 +700,7 @@ final class ProjectFile {
             // ── v15: restore Model Inspector state ───────────────────────────────
             obj.isVisible = saved.isVisible
             obj.occludeWhenHidden = saved.occludeWhenHidden   // v17
+            obj.objectClass = ObjectClass(rawValue: saved.objectClass) ?? .background
             if let mode = NormalMode(rawValue: saved.normalMode), mode != .auto {
                 vp.applyNormalMode(mode, toTargets: [obj])
                 obj.normalMode = mode

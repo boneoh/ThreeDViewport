@@ -86,9 +86,6 @@ enum ExportCodec {
         }
     }
 
-    /// True only for 4444 — the luma-alpha CPU pass is skipped for 422.
-    var needsLumaAlpha: Bool { self == .proRes4444 }
-
     /// Stable string identifier for settings persistence.
     var id: String {
         switch self {
@@ -116,6 +113,10 @@ final class VideoExporter {
     private let sceneManager:      SceneManager
     private let camera:            CameraController
     private let lightManager:      LightManager
+    // Non-published working copy of the lights, snapshotted at export start.
+    // Per-frame animation writes here instead of the @Published lightManager.lights,
+    // so the SwiftUI inspector doesn't churn and no main-thread hop is needed.
+    private var exportLights:      [LightConfig] = []
     private let backgroundConfig:  BackgroundConfig
     private let pipelineState:     MTLRenderPipelineState
     private let depthStencilState: MTLDepthStencilState
@@ -160,6 +161,11 @@ final class VideoExporter {
     var particleManager: ParticleManager?
     private var particleFXPipelineState: MTLRenderPipelineState?
     private var particleSeedBuffer:      MTLBuffer?
+
+    // When false, laser beams / hits / sparks are skipped.  Export All's Solo/Matte
+    // passes set this so the actor/macguffin matte has no laser FX (fog + weather
+    // particles are gated separately by nil-ing fogSettings/particleManager).
+    var includeLaserFX: Bool = true
 
     // Phase C: image-based lighting — shared with the live Renderer so exports
     // match the viewport.  Set by ViewportView after construction.
@@ -461,22 +467,29 @@ final class VideoExporter {
         print("[DEBUG] VideoExporter: export start — "
             + String(totalFrames) + " frames → " + url.lastPathComponent)
 
-        // ── Create offscreen Metal textures ───────────────────────────────────
-        guard let colorTex   = makeColorTexture(),
-              let stagingTex = makeStagingTexture(),
-              let depthTex   = makeDepthTexture() else {
-            DispatchQueue.main.async { completion(ExportError.textureCreationFailed) }
-            return
+        // ── Offscreen render-target pool ──────────────────────────────────────
+        // Two slots lets the GPU render frame N while the CPU reads back and
+        // encodes frame N-1 (pipelined).  Feedback forces a single slot: its
+        // queue reuses shared textures across frames and must stay strictly
+        // serial.  gradeTex is the per-slot blit intermediate for Color Grade.
+        let pipelineDepth = (feedbackSettings?.isEnabled == true) ? 1 : 2
+        let needGrade     = (colorGradeSettings.map { !$0.isIdentity } ?? false)
+        var slots: [(color: MTLTexture, staging: MTLTexture,
+                     depth: MTLTexture, grade: MTLTexture?)] = []
+        for _ in 0..<pipelineDepth {
+            guard let c = makeColorTexture(),
+                  let s = makeStagingTexture(),
+                  let d = makeDepthTexture() else {
+                DispatchQueue.main.async { completion(ExportError.textureCreationFailed) }
+                return
+            }
+            let g = needGrade ? makeGradeTexture() : nil
+            if needGrade && g == nil {
+                DispatchQueue.main.async { completion(ExportError.textureCreationFailed) }
+                return
+            }
+            slots.append((color: c, staging: s, depth: d, grade: g))
         }
-        // Grade intermediate — same size as colorTex; only allocated when needed
-        let gradeTex: MTLTexture? = {
-            guard let settings = colorGradeSettings, !settings.isIdentity else { return nil }
-            let desc = MTLTextureDescriptor.texture2DDescriptor(
-                pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
-            desc.usage       = [.shaderRead, .renderTarget]
-            desc.storageMode = .private
-            return device.makeTexture(descriptor: desc)
-        }()
 
         // ── Feedback processor (independent of the live viewport) ─────────────
         // Created here so export feedback is isolated; always resets from scratch.
@@ -560,6 +573,10 @@ final class VideoExporter {
         // VideoExporter is short-lived (no back-references), so there is no retain cycle.
         exportQ.async { [self] in
 
+            // Snapshot the lights once; animation evaluates into this copy so the
+            // published lightManager.lights (and the UI bound to it) stays put.
+            self.exportLights = self.lightManager.lights
+
             writer.startWriting()
 
             // Fail fast: if startWriting put the writer into .failed state, surface the error now.
@@ -573,73 +590,69 @@ final class VideoExporter {
             writer.startSession(atSourceTime: .zero)
             print("[DEBUG] VideoExporter: writer started, status=" + String(writer.status.rawValue))
 
+            // In-flight frames: each holds the committed GPU buffer plus the slot
+            // staging texture to read back once it finishes.  Drained FIFO so frames
+            // are appended in order (single queue ⇒ buffers complete in commit order).
+            var pending: [(cb: MTLCommandBuffer, staging: MTLTexture,
+                           frameIndex: Int, pts: CMTime)] = []
+
+            func drainOldest() {
+                let p = pending.removeFirst()
+                p.cb.waitUntilCompleted()   // usually already done — GPU ran while we worked
+                self.appendFrame(staging:          p.staging,
+                                 frameIndex:       p.frameIndex,
+                                 presentationTime: p.pts,
+                                 adaptor:          adaptor,
+                                 writerInput:      writerInput,
+                                 totalFrames:      totalFrames,
+                                 progress:         progress)
+            }
+
             for frameIndex in 0..<totalFrames {
                 // Rational timing — exact for NTSC rates (e.g. 30000/1001).
                 let presentationTime = CMTime(value: CMTimeValue(frameIndex) * CMTimeValue(self.frameTicks),
                                               timescale: self.frameTimescale)
                 let t = Double(frameIndex) * Double(self.frameTicks) / Double(self.frameTimescale)
 
+                // Free the slot we're about to reuse (drains the GPU/readback of an
+                // earlier frame).  At depth 2 this is frame N-2, leaving N-1 in flight.
+                while pending.count >= pipelineDepth { drainOldest() }
+
                 // Evaluate animation at this exact time — does NOT touch Timeline.currentTime.
-                // Hop to main: applyAnimation writes @Published properties on lightManager,
-                // camera, etc.  Doing that from this background queue triggers SwiftUI's
-                // "Publishing changes from background threads" runtime warning and can
-                // leak background-thread state into Combine sinks that drive the UI.
-                DispatchQueue.main.sync {
-                    self.applyAnimation(at: t)
-                }
+                // Runs on the export queue (no main-thread hop): the MTKView is paused
+                // so there's no concurrent reader, and the only @Published target (lights)
+                // is now written to the non-published exportLights copy instead.
+                self.applyAnimation(at: t)
 
                 // Laser hit detection + particle simulation (deterministic, uses frame time)
                 let frameDt     = Float(1.0 / self.frameRate)
                 let frameHitTime = Float(t)
                 let visibleObjs  = self.sceneManager.objects.filter { $0.isVisible }
-                self.laserHitSystem.updateHits(lights: self.lightManager.lights,
+                self.laserHitSystem.updateHits(lights: self.exportLights,
                                                objects: visibleObjs)
                 self.laserHitSystem.updateParticles(dt: frameDt)
                 let sparkGPUData = self.laserHitSystem.buildSparkGPUData()
 
-                // Render to offscreen texture (via feedback if enabled) and blit to staging
-                self.renderFrame(colorTex:        colorTex,
-                                 stagingTex:       stagingTex,
-                                 depthTex:         depthTex,
-                                 gradeTex:         gradeTex,
-                                 feedbackProc:     exportFeedback,
-                                 feedbackSettings: self.feedbackSettings,
-                                 hitEffectTime:    frameHitTime,
-                                 sparkGPUData:     sparkGPUData)
-
-                // Copy staging texture → CVPixelBuffer (luma-alpha applied for 4444)
-                guard let pb = self.pixelBufferFrom(stagingTex,
-                                                    pool: adaptor.pixelBufferPool,
-                                                    applyLumaAlpha: codec.needsLumaAlpha) else {
+                // Render into this frame's slot and commit (no wait — pipelined).
+                let slot = slots[frameIndex % pipelineDepth]
+                guard let cb = self.renderFrame(colorTex:        slot.color,
+                                                stagingTex:       slot.staging,
+                                                depthTex:         slot.depth,
+                                                gradeTex:         slot.grade,
+                                                feedbackProc:     exportFeedback,
+                                                feedbackSettings: self.feedbackSettings,
+                                                hitEffectTime:    frameHitTime,
+                                                sparkGPUData:     sparkGPUData) else {
                     print("[DEBUG] VideoExporter: frame " + String(frameIndex)
-                        + " — pixel buffer creation failed, skipping")
+                        + " — renderFrame failed, skipping")
                     continue
                 }
-
-                // Wait until AVAssetWriterInput is ready (should be near-instant)
-                var waitCount = 0
-                while !writerInput.isReadyForMoreMediaData {
-                    Thread.sleep(forTimeInterval: 0.002)
-                    waitCount += 1
-                    if waitCount > 500 {
-                        print("[DEBUG] VideoExporter: frame " + String(frameIndex)
-                            + " — input not ready after 1s, skipping")
-                        break
-                    }
-                }
-
-                if writerInput.isReadyForMoreMediaData {
-                    adaptor.append(pb, withPresentationTime: presentationTime)
-                }
-
-                let done = Float(frameIndex + 1) / Float(totalFrames)
-                DispatchQueue.main.async { progress(done) }
-
-                if (frameIndex + 1) % Int(self.frameRate) == 0 {
-                    print("[DEBUG] VideoExporter: " + String(frameIndex + 1)
-                        + "/" + String(totalFrames) + " frames written")
-                }
+                pending.append((cb: cb, staging: slot.staging,
+                                frameIndex: frameIndex, pts: presentationTime))
             }
+
+            // Drain the frames still in flight, in order.
+            while !pending.isEmpty { drainOldest() }
 
             writerInput.markAsFinished()
             writer.finishWriting {
@@ -717,6 +730,16 @@ final class VideoExporter {
         return t
     }
 
+    private func makeGradeTexture() -> MTLTexture? {
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
+        desc.usage       = [.shaderRead, .renderTarget]
+        desc.storageMode = .private
+        let t = device.makeTexture(descriptor: desc)
+        if t == nil { print("[DEBUG] VideoExporter: makeGradeTexture returned nil") }
+        return t
+    }
+
     // MARK: - Offscreen render
 
     private func renderFrame(colorTex:        MTLTexture,
@@ -726,10 +749,10 @@ final class VideoExporter {
                              feedbackProc:     FeedbackProcessor? = nil,
                              feedbackSettings: FeedbackSettings?  = nil,
                              hitEffectTime:    Float              = 0,
-                             sparkGPUData:     [SparkParticleGPU] = []) {
+                             sparkGPUData:     [SparkParticleGPU] = []) -> MTLCommandBuffer? {
         guard let commandBuffer = commandQueue.makeCommandBuffer() else {
             print("[DEBUG] VideoExporter: renderFrame — makeCommandBuffer nil")
-            return
+            return nil
         }
 
         // When feedback is active, render the scene into the processor's intermediate
@@ -744,12 +767,13 @@ final class VideoExporter {
         passDesc.colorAttachments[0].texture     = renderTarget
         passDesc.colorAttachments[0].loadAction  = .clear
         passDesc.colorAttachments[0].storeAction = .store
-        // alpha=0 for background pixels when feedback is active (content mask).
-        // When feedback is inactive renderTarget == colorTex so alpha is irrelevant.
+        // Clear alpha = 0 so background pixels read as a transparent coverage matte
+        // in the ProRes 4444 alpha channel (geometry fragments write alpha = 1,
+        // background/skybox shaders and holdout write 0).  Also the content mask
+        // the feedback compositor uses.  RGB clear stays the background colour.
         let bc = backgroundConfig.clearColor
-        passDesc.colorAttachments[0].clearColor  = feedbackActive
-            ? MTLClearColor(red: bc.red, green: bc.green, blue: bc.blue, alpha: 0.0)
-            : bc
+        passDesc.colorAttachments[0].clearColor  =
+            MTLClearColor(red: bc.red, green: bc.green, blue: bc.blue, alpha: 0.0)
         passDesc.depthAttachment.texture          = renderDepth
         passDesc.depthAttachment.loadAction       = .clear
         passDesc.depthAttachment.storeAction      = .store   // preserved for excluded-laser post-pass
@@ -805,7 +829,7 @@ final class VideoExporter {
                     into:            encoder,
                     objects:         holdoutObjects,
                     groupTransforms: sceneManager.groupTransforms,
-                    lightUniforms:   lightManager.buildLightUniforms(),
+                    lightUniforms:   lightManager.buildLightUniforms(from: exportLights),
                     context: SceneGeometryEncoder.Context(
                         viewProjection:    camera.viewProjectionMatrix,
                         eyePosition:       camera.eyePosition,
@@ -861,7 +885,7 @@ final class VideoExporter {
                     into:            encoder,
                     objects:         opaqueObjects,
                     groupTransforms: sceneManager.groupTransforms,
-                    lightUniforms:   lightManager.buildLightUniforms(),
+                    lightUniforms:   lightManager.buildLightUniforms(from: exportLights),
                     context: SceneGeometryEncoder.Context(
                         viewProjection:    camera.viewProjectionMatrix,
                         eyePosition:       camera.eyePosition,
@@ -887,18 +911,20 @@ final class VideoExporter {
             // glass windows write depth, so a read-only beam fragment behind the
             // glass would be depth-rejected.  Mirrors the live Renderer ordering.
             let exportSize = SIMD2<Float>(Float(width), Float(height))
-            drawLaserBeamsInEncoder(encoder,
-                                    screenSize:   exportSize,
-                                    excludedOnly: false)
-            drawLaserHitsInEncoder(encoder, screenSize: exportSize,
-                                   hitEffectTime: hitEffectTime, excludedOnly: false)
-            if !feedbackActive {
+            if includeLaserFX {
                 drawLaserBeamsInEncoder(encoder,
                                         screenSize:   exportSize,
-                                        excludedOnly: true)
+                                        excludedOnly: false)
                 drawLaserHitsInEncoder(encoder, screenSize: exportSize,
-                                       hitEffectTime: hitEffectTime, excludedOnly: true)
-                drawSparksInEncoder(encoder, sparkGPUData: sparkGPUData)
+                                       hitEffectTime: hitEffectTime, excludedOnly: false)
+                if !feedbackActive {
+                    drawLaserBeamsInEncoder(encoder,
+                                            screenSize:   exportSize,
+                                            excludedOnly: true)
+                    drawLaserHitsInEncoder(encoder, screenSize: exportSize,
+                                           hitEffectTime: hitEffectTime, excludedOnly: true)
+                    drawSparksInEncoder(encoder, sparkGPUData: sparkGPUData)
+                }
             }
 
             if !transparentObjects.isEmpty,
@@ -908,7 +934,7 @@ final class VideoExporter {
                     into:            encoder,
                     objects:         transparentObjects,
                     groupTransforms: sceneManager.groupTransforms,
-                    lightUniforms:   lightManager.buildLightUniforms(),
+                    lightUniforms:   lightManager.buildLightUniforms(from: exportLights),
                     context: SceneGeometryEncoder.Context(
                         viewProjection:    camera.viewProjectionMatrix,
                         eyePosition:       camera.eyePosition,
@@ -932,7 +958,7 @@ final class VideoExporter {
         }
 
         // ── Excluded beams + hit effects + all sparks (after feedback, no trails) ──
-        if feedbackActive, let fp = feedbackProc, let depthTex = fp.depthTexture {
+        if includeLaserFX, feedbackActive, let fp = feedbackProc, let depthTex = fp.depthTexture {
             let exportSize = SIMD2<Float>(Float(width), Float(height))
             drawExcludedLaserBeams(commandBuffer: commandBuffer,
                                    dest:          colorTex,
@@ -981,6 +1007,8 @@ final class VideoExporter {
         }
 
         // ── Blit color → staging; synchronize if needed for CPU readback ──────
+        // The blit copies RGBA, so the coverage alpha already in colorTex (geometry
+        // = 1, background/holdout = 0) carries through to the ProRes 4444 matte.
         if let blit = commandBuffer.makeBlitCommandEncoder() {
             blit.copy(from: colorTex, to: stagingTex)
             if !device.hasUnifiedMemory {
@@ -989,8 +1017,55 @@ final class VideoExporter {
             blit.endEncoding()
         }
 
+        // Committed but NOT waited on here — the caller pipelines: it waits on the
+        // returned buffer one frame later, after the GPU has had time to finish,
+        // then does the getBytes readback.  The staging blit (+ synchronize for
+        // managed memory) above guarantees the pixels are ready once it completes.
         commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()  // must finish before getBytes
+        return commandBuffer
+    }
+
+    /// Reads back a finished frame's staging texture and appends it to the writer.
+    /// Called in FIFO order so presentation times stay monotonic.  The caller must
+    /// have waited on the frame's command buffer before calling this.
+    private func appendFrame(staging:          MTLTexture,
+                             frameIndex:       Int,
+                             presentationTime: CMTime,
+                             adaptor:          AVAssetWriterInputPixelBufferAdaptor,
+                             writerInput:      AVAssetWriterInput,
+                             totalFrames:      Int,
+                             progress:         @escaping (Float) -> Void) {
+        // Copy staging texture → CVPixelBuffer (alpha already holds the coverage matte)
+        guard let pb = pixelBufferFrom(staging,
+                                       pool: adaptor.pixelBufferPool) else {
+            print("[DEBUG] VideoExporter: frame " + String(frameIndex)
+                + " — pixel buffer creation failed, skipping")
+            return
+        }
+
+        // Wait until AVAssetWriterInput is ready (should be near-instant)
+        var waitCount = 0
+        while !writerInput.isReadyForMoreMediaData {
+            Thread.sleep(forTimeInterval: 0.002)
+            waitCount += 1
+            if waitCount > 500 {
+                print("[DEBUG] VideoExporter: frame " + String(frameIndex)
+                    + " — input not ready after 1s, skipping")
+                break
+            }
+        }
+
+        if writerInput.isReadyForMoreMediaData {
+            adaptor.append(pb, withPresentationTime: presentationTime)
+        }
+
+        let done = Float(frameIndex + 1) / Float(totalFrames)
+        DispatchQueue.main.async { progress(done) }
+
+        if (frameIndex + 1) % Int(self.frameRate) == 0 {
+            print("[DEBUG] VideoExporter: " + String(frameIndex + 1)
+                + "/" + String(totalFrames) + " frames written")
+        }
     }
 
     // MARK: - Laser beam draw helpers (mirror Renderer's implementations)
@@ -999,7 +1074,7 @@ final class VideoExporter {
                                           screenSize:   SIMD2<Float>,
                                           excludedOnly: Bool) {
         guard let pipeline = laserBeamPipelineState else { return }
-        let indexedBeams = lightManager.lights.enumerated().filter {
+        let indexedBeams = exportLights.enumerated().filter {
             $0.element.type == .laser && $0.element.isEnabled &&
             $0.element.excludeBeamFromFeedback == excludedOnly
         }
@@ -1036,10 +1111,10 @@ final class VideoExporter {
                                           screenSize:    SIMD2<Float>,
                                           hitEffectTime: Float,
                                           sparkGPUData:  [SparkParticleGPU]) {
-        let hasBeams  = lightManager.lights.contains {
+        let hasBeams  = exportLights.contains {
             $0.type == .laser && $0.isEnabled && $0.excludeBeamFromFeedback
         }
-        let hasHits   = lightManager.lights.enumerated().contains {
+        let hasHits   = exportLights.enumerated().contains {
             $0.element.type == .laser && $0.element.isEnabled
                 && $0.element.excludeBeamFromFeedback
                 && laserHitSystem.hits[$0.offset] != nil
@@ -1062,7 +1137,7 @@ final class VideoExporter {
             if let ds = laserBeamDepthState { enc.setDepthStencilState(ds) }
             enc.setCullMode(.none)
             let vp = camera.viewProjectionMatrix
-            let indexedExcluded = lightManager.lights.enumerated().filter {
+            let indexedExcluded = exportLights.enumerated().filter {
                 $0.element.type == .laser && $0.element.isEnabled
                     && $0.element.excludeBeamFromFeedback
             }
@@ -1101,7 +1176,7 @@ final class VideoExporter {
         let vp = camera.viewProjectionMatrix
         var pipelineSet = false
 
-        for (i, laser) in lightManager.lights.enumerated() {
+        for (i, laser) in exportLights.enumerated() {
             guard laser.type == .laser, laser.isEnabled,
                   laser.excludeBeamFromFeedback == excludedOnly,
                   let hit = laserHitSystem.hits[i] else { continue }
@@ -1247,8 +1322,7 @@ final class VideoExporter {
     // MARK: - Pixel buffer readback
 
     private func pixelBufferFrom(_ texture: MTLTexture,
-                                  pool: CVPixelBufferPool?,
-                                  applyLumaAlpha: Bool) -> CVPixelBuffer? {
+                                  pool: CVPixelBufferPool?) -> CVPixelBuffer? {
         var pb: CVPixelBuffer?
 
         if let pool = pool {
@@ -1285,26 +1359,8 @@ final class VideoExporter {
                          from: MTLRegion(origin: MTLOrigin(x: 0, y: 0, z: 0),
                                          size:   MTLSize(width: width, height: height, depth: 1)),
                          mipmapLevel: 0)
-
-        // ── Alpha = Luma (Rec.709) — ProRes 4444 only ─────────────────────────
-        // Pixel layout for kCVPixelFormatType_32BGRA: [B, G, R, A] per pixel.
-        // Set A = 0.2126·R + 0.7152·G + 0.0722·B
-        // Black background → A=0 (transparent); bright areas → A→255 (opaque).
-        if applyLumaAlpha {
-            let pixels = base.assumingMemoryBound(to: UInt8.self)
-            for row in 0..<height {
-                var offset = row * bytesPerRow
-                for _ in 0..<width {
-                    let b = Float(pixels[offset])
-                    let g = Float(pixels[offset + 1])
-                    let r = Float(pixels[offset + 2])
-                    let luma: Float = 0.2126 * r + 0.7152 * g + 0.0722 * b
-                    pixels[offset + 3] = UInt8(min(255.0, luma + 0.5))
-                    offset += 4
-                }
-            }
-        }
-
+        // Alpha already carries the coverage matte (geometry = 1, background/holdout
+        // = 0) straight from the render target — no per-pixel CPU pass needed.
         return buffer
     }
 
@@ -1385,21 +1441,22 @@ final class VideoExporter {
         }
 
         // ── Lights ────────────────────────────────────────────────────────────
-        // During export the MTKView is paused and all rendering happens on the
-        // dedicated export serial queue, so writing lightManager.lights here is
-        // safe — there is no concurrent reader and Combine notifications fired
-        // from this queue will be ignored (no UI is observing during export).
-        for i in 0..<lightManager.lights.count {
+        // Evaluate into the non-published exportLights copy (not the @Published
+        // lightManager.lights), so the SwiftUI inspector doesn't churn and this
+        // runs on the export queue without a main-thread hop.  keyframeTracks is
+        // a plain array, safe to read here; the MTKView is paused so there is no
+        // concurrent reader of exportLights.
+        for i in 0..<exportLights.count {
             guard i < lightManager.keyframeTracks.count,
                   let track = lightManager.keyframeTracks[i],
                   !track.keyframes.isEmpty else { continue }
             if let state = track.evaluate(at: time) {
-                lightManager.lights[i].intensity     = state.intensity
-                lightManager.lights[i].color         = state.color
-                lightManager.lights[i].position      = state.position
-                lightManager.lights[i].target        = state.target
-                lightManager.lights[i].range         = state.range
-                lightManager.lights[i].beamThickness = state.beamThickness
+                exportLights[i].intensity     = state.intensity
+                exportLights[i].color         = state.color
+                exportLights[i].position      = state.position
+                exportLights[i].target        = state.target
+                exportLights[i].range         = state.range
+                exportLights[i].beamThickness = state.beamThickness
             }
         }
     }
