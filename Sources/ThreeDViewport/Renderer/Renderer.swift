@@ -63,12 +63,12 @@ final class Renderer: NSObject, MTKViewDelegate {
     var sceneSoloHideOthers:    Bool = false
     var sceneSoloOccludeOthers: Bool = false
 
-    /// True when the viewport's controlMode is `.camera`.  Used (together with
-    /// `timeline.isPlaying`) to decide whether `applyCameraFollow` should yield
-    /// the camera to the user: in camera mode while paused, follow stops
-    /// overwriting target / yaw so manual input (arrows, drag, scroll) sticks.
-    /// `ViewportView` keeps this in sync via `controlMode`'s `didSet`.
-    var cameraModeActive: Bool = false
+    /// Which selected entity's keyframe motion path the 'V' overlay traces.
+    enum MotionVectorTarget { case none, camera, light, object }
+    /// Toggled by the 'V' key (set from ViewportView).  When != .none, the live
+    /// viewport draws a red dot at each keyframe of the selected entity joined by
+    /// a light-grey path.  Editor-only — never exported.
+    var motionVectorTarget: MotionVectorTarget = .none
 
     /// The camera whose `viewMatrix` / `viewProjectionMatrix` / `eyePosition`
     /// the renderer should sample this frame.  Centralises the "scene mode swap"
@@ -1054,6 +1054,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             drawSceneWidgets(encoder: encoder)
         }
         drawProbeGizmo(encoder: encoder)   // editor-only; not gated by scene mode, never exported
+        drawMotionVectors(encoder: encoder) // editor-only 'V' overlay; never exported
 
         encoder.endEncoding()
 
@@ -1554,6 +1555,89 @@ final class Renderer: NSObject, MTKViewDelegate {
                         color: SIMD4<Float>(1.0, 1.0, 1.0, 1.0))
     }
 
+    /// Draws the keyframe motion path for the selected entity (the 'V' overlay):
+    /// a light-grey poly-line through the keyframe world positions in time order,
+    /// with a small red cross marking each keyframe.  Editor-only; never exported.
+    private func drawMotionVectors(encoder: MTLRenderCommandEncoder) {
+        guard motionVectorTarget != .none,
+              let pipeline = widgetPipelineState else { return }
+
+        let points = motionVectorPoints()
+        guard points.count >= 1 else { return }
+
+        encoder.setRenderPipelineState(pipeline)
+        if let ds = laserBeamDepthState { encoder.setDepthStencilState(ds) }
+        encoder.setCullMode(.none)
+        let vp = viewCamera.viewProjectionMatrix
+
+        // Connecting path (light grey) — needs at least two points.
+        if points.count >= 2 {
+            var path: [SIMD3<Float>] = []
+            for i in 0..<(points.count - 1) {
+                path.append(points[i]); path.append(points[i + 1])
+            }
+            drawWidgetLines(encoder: encoder, vertices: &path, viewProjection: vp,
+                            color: SIMD4<Float>(0.75, 0.75, 0.75, 1.0))
+        }
+
+        // Red cross marker at each keyframe, sized for on-screen readability.
+        let s = max(0.05, min(camera.distance * 0.02, 0.4))
+        var marks: [SIMD3<Float>] = []
+        for p in points {
+            marks.append(p - SIMD3<Float>(s, 0, 0)); marks.append(p + SIMD3<Float>(s, 0, 0))
+            marks.append(p - SIMD3<Float>(0, s, 0)); marks.append(p + SIMD3<Float>(0, s, 0))
+            marks.append(p - SIMD3<Float>(0, 0, s)); marks.append(p + SIMD3<Float>(0, 0, s))
+        }
+        drawWidgetLines(encoder: encoder, vertices: &marks, viewProjection: vp,
+                        color: SIMD4<Float>(1.0, 0.2, 0.2, 1.0))
+    }
+
+    /// World-space keyframe positions for the current `motionVectorTarget`,
+    /// sorted in time order.
+    private func motionVectorPoints() -> [SIMD3<Float>] {
+        switch motionVectorTarget {
+        case .none:
+            return []
+
+        case .camera:
+            guard let track = camera.keyframeTrack, !track.keyframes.isEmpty else { return [] }
+            // Eye position = target + spherical offset from yaw/pitch/distance.
+            return track.keyframes.sorted { $0.time < $1.time }.map { kf in
+                SIMD3<Float>(
+                    kf.target.x + kf.distance * cos(kf.pitch) * sin(kf.yaw),
+                    kf.target.y + kf.distance * sin(kf.pitch),
+                    kf.target.z + kf.distance * cos(kf.pitch) * cos(kf.yaw))
+            }
+
+        case .light:
+            let idx = lightManager.selectedIndex
+            guard idx < lightManager.keyframeTracks.count,
+                  let track = lightManager.keyframeTracks[idx],
+                  !track.keyframes.isEmpty else { return [] }
+            return track.keyframes.sorted { $0.time < $1.time }.map { $0.position }
+
+        case .object:
+            guard let obj = sceneManager.selectedObject else { return [] }
+            // Group-animated model: the group track drives world motion.
+            if let gid = obj.groupID, let gTrack = sceneManager.groupKeyframeTracks[gid],
+               !gTrack.keyframes.isEmpty {
+                return gTrack.keyframes.sorted { $0.time < $1.time }.map { kf in
+                    let m = gTrack.evaluate(at: kf.time) ?? matrix_identity_float4x4
+                    return SIMD3<Float>(m.columns.3.x, m.columns.3.y, m.columns.3.z)
+                }
+            }
+            // Per-object track: world point = (group? × baseTransform × delta).t
+            guard let track = obj.keyframeTrack, !track.keyframes.isEmpty else { return [] }
+            let groupMat: matrix_float4x4 = obj.groupID
+                .flatMap { sceneManager.groupTransforms[$0] } ?? matrix_identity_float4x4
+            return track.keyframes.sorted { $0.time < $1.time }.map { kf in
+                let delta = track.evaluate(at: kf.time) ?? matrix_identity_float4x4
+                let world = groupMat * obj.baseTransform * delta
+                return SIMD3<Float>(world.columns.3.x, world.columns.3.y, world.columns.3.z)
+            }
+        }
+    }
+
     /// Helper: uploads a line-segment vertex list (every pair = one segment)
     /// and uniform colour, then issues a single line-list draw call.
     /// Vertex data uses setVertexBytes (small, regenerated each frame).
@@ -1692,18 +1776,14 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// applyHierarchy() — NOT inside applyAnimation() — so that sub-part
     /// transforms (e.g. a head bone) are fully propagated before they are read.
     private func applyCameraFollow() {
-        // Suspended during edit mode for camera-follow keyframes so the user's
-        // live adjustments to target/yaw aren't overwritten each frame.
+        // Suspended only while actively editing a camera-follow keyframe (set by
+        // AppDelegate on edit entry, cleared on commit/cancel) so the user's live
+        // adjustments to target/yaw aren't overwritten each frame.  Otherwise follow
+        // stays live in every mode — including camera mode while paused — so
+        // SCRUBBING accurately previews where the follow camera will be at each
+        // frame, matching playback.  (A broad camera-mode-and-paused guard used to
+        // live here too, but it also blocked plain scrubbing in camera mode.)
         guard !camera.followSuspended else { return }
-        // Suspended whenever the user is in camera mode with the timeline
-        // paused — that's the "I'm setting up follow keyframes" workflow and
-        // input needs to win.  This also covers the Scene-mode case where
-        // the user wants to arrange the scene camera wedge from the
-        // Director's POV: switch into camera mode to take control.  Object /
-        // Light / Model / non-camera modes keep follow live even while paused
-        // so scrubbing accurately previews where the camera will be at each
-        // frame.  Playback always engages follow, regardless of mode.
-        if cameraModeActive && !timeline.isPlaying { return }
         guard let camTrack = camera.keyframeTrack,
               !camTrack.keyframes.isEmpty else { return }
         if let follow = camTrack.resolveFollowCamera(

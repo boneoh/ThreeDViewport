@@ -22,6 +22,8 @@ struct AtmosphereKeyframe {
 final class AtmosphereKeyframeTrack {
 
     var keyframes: [AtmosphereKeyframe] = []
+    /// Per-track interpolation mode (linear or spline tiers).  Default linear.
+    var easingMode: EasingMode = .linear
 
     // MARK: - Mutation
 
@@ -90,6 +92,28 @@ final class AtmosphereKeyframeTrack {
             if span < 0.0001 { return b }
 
             let t = Float((time - a.time) / span)
+
+            // Spline easing: Catmull-Rom through neighbours (end-point mirrored),
+            // matching the object/camera/light tracks.  Linear → plain lerp.
+            if let tension = easingMode.splinePosTension {
+                let prev = i > 0 ? keyframes[i - 1] : mirror(b, around: a)
+                let next = i + 2 < keyframes.count ? keyframes[i + 2] : mirror(a, around: b)
+                func cr(_ p0: Float, _ p1: Float, _ p2: Float, _ p3: Float) -> Float {
+                    EasingMode.catmullRomTensioned(p0, p1, p2, p3, t: t, tension: tension)
+                }
+                func crv(_ p0: SIMD3<Float>, _ p1: SIMD3<Float>, _ p2: SIMD3<Float>, _ p3: SIMD3<Float>) -> SIMD3<Float> {
+                    EasingMode.catmullRomTensioned(p0, p1, p2, p3, t: t, tension: tension)
+                }
+                return AtmosphereKeyframe(
+                    time:     time,
+                    position: crv(prev.position, a.position, b.position, next.position),
+                    size:     crv(prev.size, a.size, b.size, next.size),
+                    density:  cr(prev.density, a.density, b.density, next.density),
+                    variance: cr(prev.variance, a.variance, b.variance, next.variance),
+                    color:    crv(prev.color, a.color, b.color, next.color)
+                )
+            }
+
             return AtmosphereKeyframe(
                 time:     time,
                 position: a.position + (b.position - a.position) * t,
@@ -100,5 +124,16 @@ final class AtmosphereKeyframeTrack {
             )
         }
         return keyframes.last!
+    }
+
+    /// Reflects keyframe `k` across `pivot` to synthesise a phantom end neighbour.
+    private func mirror(_ k: AtmosphereKeyframe, around pivot: AtmosphereKeyframe) -> AtmosphereKeyframe {
+        AtmosphereKeyframe(
+            time:     2 * pivot.time - k.time,
+            position: 2 * pivot.position - k.position,
+            size:     2 * pivot.size - k.size,
+            density:  2 * pivot.density - k.density,
+            variance: 2 * pivot.variance - k.variance,
+            color:    2 * pivot.color - k.color)
     }
 }

@@ -62,6 +62,12 @@ struct ProjectData: Codable {
     var particleEmitters:        [ParticleEffectData] = []        // v24; multiple particle emitters.
     var particleEmitterKeyframes: [[AtmosphereKeyframeData]] = [] // v24; per-emitter animation.
     var probe:                   ProbeData = ProbeData()          // v29; bake probe position.
+    // v32: per-track easing (EasingMode.rawValue) for the non-object tracks.
+    // Default 0 (.linear) so older project files animate exactly as before.
+    var cameraEasingMode:        Int   = 0
+    var lightEasingModes:        [Int] = []   // parallel to lightKeyframeTracks
+    var fogEasingMode:           Int   = 0
+    var particleEmitterEasingModes: [Int] = []   // parallel to particleEmitterKeyframes
     /// v31: per-group static gt snapshot.  Persists slider/Model-mode edits
     /// to groupTransforms[gid] that aren't recorded as keyframes (e.g. setting
     /// the station's scale once for the whole project).  Tracked groups still
@@ -98,7 +104,11 @@ struct ProjectData: Codable {
          particleEmitters:    [ParticleEffectData]    = [],
          particleEmitterKeyframes: [[AtmosphereKeyframeData]] = [],
          probe:               ProbeData               = ProbeData(),
-         groupBaseTransforms: [GroupBaseTransformData] = []) {
+         groupBaseTransforms: [GroupBaseTransformData] = [],
+         cameraEasingMode:    Int                     = 0,
+         lightEasingModes:    [Int]                   = [],
+         fogEasingMode:       Int                     = 0,
+         particleEmitterEasingModes: [Int]            = []) {
         self.version             = version
         self.modelPath           = modelPath
         self.modelPaths          = modelPaths
@@ -128,6 +138,10 @@ struct ProjectData: Codable {
         self.particleEmitterKeyframes = particleEmitterKeyframes
         self.probe               = probe
         self.groupBaseTransforms = groupBaseTransforms
+        self.cameraEasingMode    = cameraEasingMode
+        self.lightEasingModes    = lightEasingModes
+        self.fogEasingMode       = fogEasingMode
+        self.particleEmitterEasingModes = particleEmitterEasingModes
     }
 
     // MARK: - Custom decoder
@@ -171,6 +185,10 @@ struct ProjectData: Codable {
         particleEmitterKeyframes = (try? c.decode([[AtmosphereKeyframeData]].self,  forKey: .particleEmitterKeyframes)) ?? []
         probe               = (try? c.decode(ProbeData.self,             forKey: .probe))               ?? ProbeData()
         groupBaseTransforms = (try? c.decode([GroupBaseTransformData].self, forKey: .groupBaseTransforms)) ?? []
+        cameraEasingMode    = (try? c.decode(Int.self,   forKey: .cameraEasingMode))    ?? 0
+        lightEasingModes    = (try? c.decode([Int].self, forKey: .lightEasingModes))    ?? []
+        fogEasingMode       = (try? c.decode(Int.self,   forKey: .fogEasingMode))       ?? 0
+        particleEmitterEasingModes = (try? c.decode([Int].self, forKey: .particleEmitterEasingModes)) ?? []
     }
 }
 

@@ -71,6 +71,32 @@ extension EasingMode {
              + (   t3 -   t2    ) * m2
     }
 
+    // ── Catmull-Rom for Float (camera/light/effect scalar channels) ──────────
+    // Same Hermite form as the SIMD3 version, for scalar tracks (yaw, pitch,
+    // distance, fov, intensity, range, density, …).
+    static func catmullRomTensioned(_ p0: Float, _ p1: Float, _ p2: Float, _ p3: Float,
+                                     t: Float, tension: Float) -> Float {
+        let t2 = t * t
+        let t3 = t2 * t
+        let m1 = tension * (p2 - p0)
+        let m2 = tension * (p3 - p1)
+        return ( 2*t3 - 3*t2 + 1) * p1
+             + (   t3 - 2*t2 + t) * m1
+             + (-2*t3 + 3*t2    ) * p2
+             + (   t3 -   t2    ) * m2
+    }
+
+    /// Position tension for a spline easing mode (matches the object track tiers).
+    /// nil = not a spline mode (caller should lerp linearly).
+    var splinePosTension: Float? {
+        switch self {
+        case .linear:  return nil
+        case .splineS: return 0.25
+        case .smooth, .splineM: return 0.5
+        case .splineL: return 1.0
+        }
+    }
+
     // ── Quaternion helpers for squadTensioned ─────────────────────────────────
 
     /// Logarithm of a unit quaternion → pure imaginary 3-vector (θ·n).

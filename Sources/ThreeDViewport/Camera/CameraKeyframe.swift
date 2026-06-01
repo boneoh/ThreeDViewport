@@ -87,6 +87,9 @@ struct CameraKeyframe {
 final class CameraKeyframeTrack {
 
     var keyframes: [CameraKeyframe] = []
+    /// Per-track interpolation mode (linear or spline tiers).  Default linear so
+    /// existing projects animate exactly as before.
+    var easingMode: EasingMode = .linear
 
     init() {
         print("[DEBUG] CameraKeyframeTrack: initialized")
@@ -164,6 +167,30 @@ final class CameraKeyframeTrack {
 
             let t = Float((time - a.time) / span)
 
+            // Spline easing: Catmull-Rom through the neighbouring keyframes (with
+            // end-point mirroring), matching the object tracks.  Linear → plain lerp.
+            if let tension = easingMode.splinePosTension {
+                let prev = i > 0 ? keyframes[i - 1] : mirror(b, around: a)
+                let next = i + 2 < keyframes.count ? keyframes[i + 2] : mirror(a, around: b)
+                func cr(_ p0: Float, _ p1: Float, _ p2: Float, _ p3: Float) -> Float {
+                    EasingMode.catmullRomTensioned(p0, p1, p2, p3, t: t, tension: tension)
+                }
+                // Yaw stays shortest-path: unwrap neighbours relative to a.yaw.
+                let yPrev = unwrap(prev.yaw, near: a.yaw)
+                let yA    = a.yaw
+                let yB    = unwrap(b.yaw, near: a.yaw)
+                let yNext = unwrap(next.yaw, near: yB)
+                return CameraKeyframe(
+                    time:     time,
+                    yaw:      cr(yPrev, yA, yB, yNext),
+                    pitch:    cr(prev.pitch, a.pitch, b.pitch, next.pitch),
+                    distance: cr(prev.distance, a.distance, b.distance, next.distance),
+                    target:   EasingMode.catmullRomTensioned(prev.target, a.target, b.target, next.target,
+                                                             t: t, tension: tension),
+                    fov:      cr(prev.fov, a.fov, b.fov, next.fov)
+                )
+            }
+
             return CameraKeyframe(
                 time:     time,
                 yaw:      lerpAngle(a.yaw,      b.yaw,      t),
@@ -174,6 +201,27 @@ final class CameraKeyframeTrack {
             )
         }
         return keyframes.last!
+    }
+
+    /// Reflects keyframe `k`'s interpolated fields across `pivot` to synthesise a
+    /// phantom neighbour at the ends of the track (so Catmull-Rom has 4 points).
+    private func mirror(_ k: CameraKeyframe, around pivot: CameraKeyframe) -> CameraKeyframe {
+        CameraKeyframe(
+            time:     2 * pivot.time - k.time,
+            yaw:      2 * pivot.yaw - k.yaw,
+            pitch:    2 * pivot.pitch - k.pitch,
+            distance: 2 * pivot.distance - k.distance,
+            target:   2 * pivot.target - k.target,
+            fov:      2 * pivot.fov - k.fov)
+    }
+
+    /// Returns `angle` shifted by ±2π so it lies within π of `ref` (shortest path).
+    private func unwrap(_ angle: Float, near ref: Float) -> Float {
+        let twoPi: Float = 2.0 * Float.pi
+        var a = angle
+        while a - ref >  Float.pi { a -= twoPi }
+        while a - ref < -Float.pi { a += twoPi }
+        return a
     }
 
     // MARK: - Follow camera resolution
@@ -287,21 +335,13 @@ final class CameraKeyframeTrack {
                     let (bYaw, bPitch) = resolvedYawPitch(for: b, state: state)
                     let yaw   = blendOptionalAngle(aYaw, bYaw,   fallbackA: a.yaw,   fallbackB: b.yaw,   alpha: alpha)
                     let pitch = blendOptionalFloat(aPitch, bPitch, fallbackA: a.pitch, fallbackB: b.pitch, alpha: alpha)
-                    // Up vector: blend in the object's local frame so the
-                    // result rolls with the head smoothly; only set if at
-                    // least one side has it.
-                    let up: SIMD3<Float>?
-                    switch (a.followUpLocal, b.followUpLocal) {
-                    case let (au?, bu?):
-                        let localBlend = au + (bu - au) * alpha
-                        up = state.basis * localBlend
-                    case let (au?, nil):
-                        up = (alpha < 0.5) ? state.basis * au : nil
-                    case let (nil, bu?):
-                        up = (alpha >= 0.5) ? state.basis * bu : nil
-                    case (nil, nil):
-                        up = nil
-                    }
+                    // Up vector: blend in the object's local frame so the result
+                    // rolls with the head smoothly.  A side without followUpLocal is
+                    // treated as world-Y (not snapped at the midpoint), so a POV
+                    // keyframe next to a non-POV one eases its roll across the whole
+                    // segment instead of flipping in a single frame.
+                    let up = blendedWorldUp(a.followUpLocal, b.followUpLocal,
+                                            basis: state.basis, alpha: alpha)
                     return (target: state.pos + state.basis * localOffset, yaw: yaw, pitch: pitch, worldUp: up)
                 } else {
                     // Different target: snap — use a's target throughout segment.
@@ -313,6 +353,25 @@ final class CameraKeyframeTrack {
             }
         }
         return nil
+    }
+
+    /// Smoothly blends the segment's world-space up vector for the same-target
+    /// follow case, avoiding the hard snap at alpha = 0.5 that rolled the frame in
+    /// a single tick.  A side without `followUpLocal` is treated as plain world-Y
+    /// (expressed in the object's local frame as `basisᵀ · worldY`), so the result
+    /// is continuous across the whole segment AND continuous with neighbouring
+    /// world-Y segments.  Returns nil only when BOTH sides are world-Y (no roll).
+    private func blendedWorldUp(_ aUp: SIMD3<Float>?, _ bUp: SIMD3<Float>?,
+                                basis: matrix_float3x3, alpha: Float) -> SIMD3<Float>? {
+        guard aUp != nil || bUp != nil else { return nil }
+        // World-Y in the object's local frame (basis is orthonormal → transpose = inverse).
+        let worldYLocal = basis.transpose * SIMD3<Float>(0, 1, 0)
+        let aLocal = aUp ?? worldYLocal
+        let bLocal = bUp ?? worldYLocal
+        let blended = aLocal + (bLocal - aLocal) * alpha
+        let world = basis * blended
+        let len = simd_length(world)
+        return len > 1e-5 ? world / len : nil
     }
 
     // MARK: - Per-keyframe yaw/pitch resolution

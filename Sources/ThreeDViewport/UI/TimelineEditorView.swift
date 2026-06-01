@@ -1173,7 +1173,7 @@ final class TimelineEditorView: NSView {
         case 53:        // Escape
             handleEscapeKey()
 
-        case 2, 51, 117: // D / Backspace / Forward Delete → remove selected diamond
+        case 51, 117: // Backspace / Forward Delete → remove selected diamond
             guard !isEditingKeyframe else { return }
             deleteSelectedKeyframe(tracks: tracks)
 
@@ -1820,15 +1820,26 @@ final class TimelineEditorView: NSView {
         if !multiClipboard.isEmpty {
             let baseT = timeline?.currentTime ?? 0
             let maxT  = timeline?.duration ?? Double.infinity
+
+            // If every copied diamond came from the SAME source track, retarget the
+            // whole group to the currently selected lane (matching single-paste).
+            // This is what lets you copy several keyframes off one row and paste
+            // them onto a different row.  When the copy spanned multiple tracks,
+            // keep each entry's original ref (time-shift-a-selection in place).
+            let sameSource = multiClipboard.dropFirst().allSatisfy { $0.ref == multiClipboard[0].ref }
+            let targetRef: TrackRef? = (sameSource ? selectedTrackIndex.map { tracks[$0].ref } : nil)
+
             for entry in multiClipboard {
-                let t = max(0, min(maxT, baseT + entry.timeOffset))
-                pasteClip(entry.clip, to: entry.ref, at: t)
+                let t   = max(0, min(maxT, baseT + entry.timeOffset))
+                let dst = targetRef ?? entry.ref
+                pasteClip(entry.clip, to: dst, at: t)
             }
             selectedKFIndex = nil
             needsDisplay    = true
             onKeyframePasted?()
             print("[DEBUG] TimelineEditorView: Cmd+V — pasted \(multiClipboard.count)"
-                + " diamonds (multi-clipboard)")
+                + " diamonds (multi-clipboard)"
+                + (targetRef != nil ? " → selected lane" : " → original lanes"))
             return
         }
 
@@ -2013,16 +2024,7 @@ final class TimelineEditorView: NSView {
         } else {
             // Lightweight pass: keep each popup's selection synced with its track.
             for b in easingPopups {
-                let mode: EasingMode
-                switch b.ref {
-                case .object(let i):
-                    guard i < sm.objects.count else { continue }
-                    mode = sm.objects[i].keyframeTrack?.easingMode ?? .linear
-                case .group(let gid):
-                    mode = sm.groupKeyframeTracks[gid]?.easingMode ?? .linear
-                default:
-                    continue
-                }
+                let mode = easingMode(for: b.ref) ?? .linear
                 if b.popup.selectedItem?.tag != mode.rawValue {
                     b.popup.selectItem(withTag: mode.rawValue)
                 }
@@ -2053,6 +2055,10 @@ final class TimelineEditorView: NSView {
             let popupY = laneTop(trackIndex) + (laneHeight - popupH) / 2
 
             // Decide whether this row gets a popup, and what its initial easing is.
+            // Object/group rows keep their dedicated handlers (tag encodes index/gid);
+            // camera/light/fog/particle rows use the unified handler that resolves
+            // the track from the binding's `ref`.  A row only gets a popup if its
+            // track currently exists (has keyframes), matching the object behaviour.
             let action:    Selector
             let tag:       Int
             let current:   EasingMode
@@ -2066,8 +2072,11 @@ final class TimelineEditorView: NSView {
                 action  = #selector(easingPopupGroupChanged(_:))
                 tag     = gid
                 current = sm.groupKeyframeTracks[gid]?.easingMode ?? .linear
-            default:
-                continue
+            case .camera, .light, .fog, .particles:
+                guard let mode = easingMode(for: row.ref) else { continue }
+                action  = #selector(easingPopupTrackChanged(_:))
+                tag     = 0
+                current = mode
             }
 
             let popup = NSPopUpButton(frame: NSRect(x: popupX, y: popupY,
@@ -2110,5 +2119,39 @@ final class TimelineEditorView: NSView {
               let obj  = sceneManager?.objects[safe: objectIndex] else { return }
         obj.keyframeTrack?.easingMode = mode
         print("[DEBUG] TimelineEditorView: object \(objectIndex) easing → \(mode.displayName)")
+    }
+
+    /// Easing for the non-object tracks (camera / light / fog / particles).  The
+    /// binding's `ref` is matched by popup identity so the index/gid travels with it.
+    @objc private func easingPopupTrackChanged(_ sender: NSPopUpButton) {
+        guard let mode = EasingMode(rawValue: sender.selectedItem?.tag ?? 0),
+              let ref  = easingPopups.first(where: { $0.popup === sender })?.ref else { return }
+        setEasing(mode, for: ref)
+        print("[DEBUG] TimelineEditorView: \(ref) easing → \(mode.displayName)")
+        needsDisplay = true
+    }
+
+    /// Reads the current easing mode for a track row (nil if the row has no track).
+    private func easingMode(for ref: TrackRef) -> EasingMode? {
+        switch ref {
+        case .object(let i):    return sceneManager?.objects[safe: i]?.keyframeTrack?.easingMode
+        case .group(let gid):   return sceneManager?.groupKeyframeTracks[gid]?.easingMode
+        case .camera:           return camera?.keyframeTrack?.easingMode
+        case .light(let i):     return lightManager?.keyframeTracks[safe: i]??.easingMode
+        case .fog:              return fogSettings?.keyframeTrack?.easingMode
+        case .particles(let i): return particleManager?.emitters[safe: i]?.keyframeTrack?.easingMode
+        }
+    }
+
+    /// Writes the easing mode onto the track backing a row (no-op if no track yet).
+    private func setEasing(_ mode: EasingMode, for ref: TrackRef) {
+        switch ref {
+        case .object(let i):    sceneManager?.objects[safe: i]?.keyframeTrack?.easingMode = mode
+        case .group(let gid):   sceneManager?.groupKeyframeTracks[gid]?.easingMode = mode
+        case .camera:           camera?.keyframeTrack?.easingMode = mode
+        case .light(let i):     lightManager?.keyframeTracks[safe: i]??.easingMode = mode
+        case .fog:              fogSettings?.keyframeTrack?.easingMode = mode
+        case .particles(let i): particleManager?.emitters[safe: i]?.keyframeTrack?.easingMode = mode
+        }
     }
 }

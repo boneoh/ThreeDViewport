@@ -94,14 +94,25 @@ final class ViewportView: MTKView {
 
     // Active control mode: camera / light / object.
     // Writing updates the HUD automatically.
+    /// True while the 'V' keyframe motion-path overlay is on.  The actual path
+    /// (camera / light / object) follows the current controlMode + selection.
+    private var showMotionVectors = false
+
     private var controlMode: ControlMode = .camera {
         didSet {
             overlayState.controlMode = controlMode
-            // Camera-mode awareness — lets the renderer suspend the camera-follow
-            // override while the user is editing the camera with the timeline
-            // paused.  See Renderer.applyCameraFollow.
-            renderer?.cameraModeActive = (controlMode == .camera)
+            updateMotionVectorTarget()   // overlay tracks the active entity
             print("[DEBUG] ViewportView: controlMode = " + controlMode.displayName)
+        }
+    }
+
+    /// Maps the on/off flag + controlMode to the renderer's motion-vector target.
+    private func updateMotionVectorTarget() {
+        guard showMotionVectors else { renderer?.motionVectorTarget = .none; return }
+        switch controlMode {
+        case .camera, .director: renderer?.motionVectorTarget = .camera
+        case .light:             renderer?.motionVectorTarget = .light
+        case .object, .model:    renderer?.motionVectorTarget = .object
         }
     }
 
@@ -207,10 +218,6 @@ final class ViewportView: MTKView {
             backgroundConfig: backgroundConfig,
             timeline:         timeline
         )
-        // Seed cameraModeActive — controlMode's didSet only fires on changes,
-        // not on initial assignment, so the flag would otherwise stay false
-        // until the user pressed C / O / L / M for the first time.
-        renderer?.cameraModeActive = (controlMode == .camera)
 
         if renderer == nil {
             print("[DEBUG] ViewportView: Renderer init returned nil")
@@ -1661,14 +1668,14 @@ final class ViewportView: MTKView {
         let fxPresent = particleManager.emitters.contains { $0.isEnabled }
                      || fogSettings.isEnabled
         var passes: [ExportPass] = [
-            ExportPass(name: "Full", visible: [.background, .actor, .macguffin],
+            ExportPass(name: "Scene", visible: [.background, .actor, .macguffin],
                        matte: false, blackBg: false, fx: true)
         ]
         if present.contains(.actor) {
             passes.append(ExportPass(name: "Actor Solo",  visible: [.actor], matte: false, blackBg: true, fx: false))
             passes.append(ExportPass(name: "Actor Matte", visible: [.actor], matte: true,  blackBg: true, fx: false))
         }
-        passes.append(ExportPass(name: "Scene", visible: [.background], matte: false, blackBg: false, fx: true))
+        passes.append(ExportPass(name: "Background", visible: [.background], matte: false, blackBg: false, fx: false))
         if present.contains(.macguffin) {
             passes.append(ExportPass(name: "MacGuffin Solo",  visible: [.macguffin], matte: false, blackBg: true, fx: false))
             passes.append(ExportPass(name: "MacGuffin Matte", visible: [.macguffin], matte: true,  blackBg: true, fx: false))
@@ -2333,6 +2340,7 @@ final class ViewportView: MTKView {
         static let r:        UInt16 = 15   // reset object orientation to base
         static let s:        UInt16 = 1    // toggle Scene mode (Director view)
         static let d:        UInt16 = 2    // Director mode (Scene mode only)
+        static let v:        UInt16 = 9    // toggle keyframe motion-path vectors
         // Number row 1–6 — Director standard views (Scene mode only)
         static let num1:     UInt16 = 18   // Front
         static let num2:     UInt16 = 19   // Left
@@ -2496,6 +2504,14 @@ final class ViewportView: MTKView {
                 renderSettings.colorMode = renderSettings.colorMode.next
                 return
 
+            case KC.v:
+                // Toggle the keyframe motion-path overlay for the selected entity.
+                showMotionVectors.toggle()
+                updateMotionVectorTarget()
+                needsDisplay = true
+                print("[DEBUG] ViewportView: motion vectors = " + String(showMotionVectors))
+                return
+
             case KC.c:
                 // C — Camera mode.  In Scene mode it toggles between the scene
                 // Camera and the Director POV (the second viewpoint that
@@ -2536,7 +2552,12 @@ final class ViewportView: MTKView {
                 return
 
             case KC.m:
-                // M — switch to Model mode (move all parts of a group as one).
+                // M — Model mode (move all parts of a group as one).  Like O, a
+                // second press while already in Model mode cycles to the next model
+                // (alphabetical, one entry per root object/group).
+                if controlMode == .model {
+                    sceneManager.cycleSelection()
+                }
                 controlMode = .model
                 syncOverlayState()
                 if let gid = sceneManager.selectedGroupID {

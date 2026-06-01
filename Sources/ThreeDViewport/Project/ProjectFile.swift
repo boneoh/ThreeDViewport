@@ -292,7 +292,7 @@ final class ProjectFile {
         }
 
         return ProjectData(
-            version:             30,   // v30: environment horizon (backdrop vertical shift)
+            version:             32,   // v32: per-track easing for camera/light/fog/particle tracks
             modelPath:           nil,           // v3+ uses modelPaths instead
             modelPaths:          modelPaths,
             timeline:            timelineData,
@@ -332,7 +332,11 @@ final class ProjectFile {
             probe:               ProbeData(px: vp.probeConfig.position.x,
                                            py: vp.probeConfig.position.y,
                                            pz: vp.probeConfig.position.z),
-            groupBaseTransforms: captureGroupBaseTransforms(from: vp)
+            groupBaseTransforms: captureGroupBaseTransforms(from: vp),
+            cameraEasingMode:    (cam.keyframeTrack?.easingMode ?? .linear).rawValue,
+            lightEasingModes:    lm.keyframeTracks.map { ($0?.easingMode ?? .linear).rawValue },
+            fogEasingMode:       (vp.fogSettings.keyframeTrack?.easingMode ?? .linear).rawValue,
+            particleEmitterEasingModes: vp.particleManager.emitters.map { ($0.keyframeTrack?.easingMode ?? .linear).rawValue }
         )
     }
 
@@ -361,9 +365,11 @@ final class ProjectFile {
     }
 
     /// Rebuilds an atmosphere keyframe track from Codable data, or nil if empty.
-    private static func applyAtmosphereKeyframes(_ data: [AtmosphereKeyframeData]) -> AtmosphereKeyframeTrack? {
+    private static func applyAtmosphereKeyframes(_ data: [AtmosphereKeyframeData],
+                                                 easingMode: Int = 0) -> AtmosphereKeyframeTrack? {
         guard !data.isEmpty else { return nil }
         let track = AtmosphereKeyframeTrack()
+        track.easingMode = EasingMode(rawValue: easingMode) ?? .linear
         for kf in data {
             track.addKeyframe(AtmosphereKeyframe(
                 time:     kf.time,
@@ -380,6 +386,7 @@ final class ProjectFile {
     /// (mutated in place so existing references — e.g. an open panel — stay valid).
     private static func applyParticleEmitter(_ pd: ParticleEffectData,
                                              keyframes: [AtmosphereKeyframeData],
+                                             easingMode: Int = 0,
                                              into fx: ParticleEffect) {
         fx.isEnabled = pd.isEnabled
         fx.type      = ParticleType(rawValue: pd.type) ?? .rain
@@ -397,7 +404,7 @@ final class ProjectFile {
         if let v = pd.lifetime     { fx.lifetime = v }
         if let v = pd.growth       { fx.growth = v }
         if let v = pd.baseAlpha    { fx.baseAlpha = v }
-        fx.keyframeTrack = applyAtmosphereKeyframes(keyframes)
+        fx.keyframeTrack = applyAtmosphereKeyframes(keyframes, easingMode: easingMode)
     }
 
     // MARK: - Apply ProjectData → live state
@@ -453,6 +460,7 @@ final class ProjectFile {
                     followUpLocal:      upLocal
                 ))
             }
+            camTrack.easingMode = EasingMode(rawValue: data.cameraEasingMode) ?? .linear
             vp.camera.keyframeTrack = camTrack
             print("[DEBUG] ProjectFile: restored " + String(data.cameraKeyframes.count)
                 + " camera keyframes")
@@ -588,7 +596,7 @@ final class ProjectFile {
             + " fov="   + String(format: "%.3f", effectiveStaticFov))
 
         // ── Light keyframe tracks (v6) ────────────────────────────────────────
-        applyLightKeyframes(data.lightKeyframeTracks, to: vp)
+        applyLightKeyframes(data.lightKeyframeTracks, easingModes: data.lightEasingModes, to: vp)
 
         // ── Group keyframe tracks (v14 / Phase 2) ─────────────────────────────
         applyGroupKeyframes(data.groupKeyframeTracks, to: vp,
@@ -638,7 +646,8 @@ final class ProjectFile {
         print("[DEBUG] ProjectFile: fog enabled=\(data.fog.isEnabled) density=\(data.fog.density)")
 
         // ── Fog keyframe track (v23) ──────────────────────────────────────────
-        vp.fogSettings.keyframeTrack = applyAtmosphereKeyframes(data.fogKeyframes)
+        vp.fogSettings.keyframeTrack = applyAtmosphereKeyframes(data.fogKeyframes,
+                                                                easingMode: data.fogEasingMode)
 
         // ── Weather particle emitters (v21 single → v24 multiple) ─────────────
         let emitterData: [ParticleEffectData]
@@ -659,7 +668,8 @@ final class ProjectFile {
         for i in 0..<targetCount {
             let pd  = i < emitterData.count ? emitterData[i] : ParticleEffectData()
             let kfs = i < emitterKfs.count  ? emitterKfs[i]  : []
-            applyParticleEmitter(pd, keyframes: kfs, into: mgr.emitters[i])
+            let em  = i < data.particleEmitterEasingModes.count ? data.particleEmitterEasingModes[i] : 0
+            applyParticleEmitter(pd, keyframes: kfs, easingMode: em, into: mgr.emitters[i])
         }
         mgr.selectedIndex = 0
         print("[DEBUG] ProjectFile: particle emitters=\(mgr.emitters.count)"
@@ -757,6 +767,7 @@ final class ProjectFile {
     // MARK: - Apply light keyframe tracks (v6)
 
     private static func applyLightKeyframes(_ tracksData: [[LightKeyframeData]],
+                                             easingModes: [Int] = [],
                                              to vp: ViewportView) {
         let lm = vp.lightManager
 
@@ -774,6 +785,7 @@ final class ProjectFile {
             guard i < lm.lights.count else { continue }
 
             let track = LightKeyframeTrack()
+            track.easingMode = EasingMode(rawValue: i < easingModes.count ? easingModes[i] : 0) ?? .linear
             for kf in kfDataArray {
                 track.addKeyframe(LightKeyframe(
                     time:          kf.time,

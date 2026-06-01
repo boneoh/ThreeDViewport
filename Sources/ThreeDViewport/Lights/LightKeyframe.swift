@@ -25,6 +25,8 @@ struct LightKeyframe {
 final class LightKeyframeTrack {
 
     var keyframes: [LightKeyframe] = []
+    /// Per-track interpolation mode (linear or spline tiers).  Default linear.
+    var easingMode: EasingMode = .linear
 
     // MARK: - Mutation
 
@@ -96,6 +98,28 @@ final class LightKeyframeTrack {
 
             let t = Float((time - a.time) / span)
 
+            // Spline easing: Catmull-Rom through neighbours (end-point mirrored),
+            // matching the object/camera tracks.  Linear → plain lerp.
+            if let tension = easingMode.splinePosTension {
+                let prev = i > 0 ? keyframes[i - 1] : mirror(b, around: a)
+                let next = i + 2 < keyframes.count ? keyframes[i + 2] : mirror(a, around: b)
+                func cr(_ p0: Float, _ p1: Float, _ p2: Float, _ p3: Float) -> Float {
+                    EasingMode.catmullRomTensioned(p0, p1, p2, p3, t: t, tension: tension)
+                }
+                func crv(_ p0: SIMD3<Float>, _ p1: SIMD3<Float>, _ p2: SIMD3<Float>, _ p3: SIMD3<Float>) -> SIMD3<Float> {
+                    EasingMode.catmullRomTensioned(p0, p1, p2, p3, t: t, tension: tension)
+                }
+                return LightKeyframe(
+                    time:          time,
+                    intensity:     cr(prev.intensity, a.intensity, b.intensity, next.intensity),
+                    color:         crv(prev.color, a.color, b.color, next.color),
+                    target:        crv(prev.target, a.target, b.target, next.target),
+                    position:      crv(prev.position, a.position, b.position, next.position),
+                    range:         cr(prev.range, a.range, b.range, next.range),
+                    beamThickness: cr(prev.beamThickness, a.beamThickness, b.beamThickness, next.beamThickness)
+                )
+            }
+
             return LightKeyframe(
                 time:          time,
                 intensity:     a.intensity     + (b.intensity     - a.intensity)     * t,
@@ -107,5 +131,17 @@ final class LightKeyframeTrack {
             )
         }
         return keyframes.last!
+    }
+
+    /// Reflects keyframe `k` across `pivot` to synthesise a phantom end neighbour.
+    private func mirror(_ k: LightKeyframe, around pivot: LightKeyframe) -> LightKeyframe {
+        LightKeyframe(
+            time:          2 * pivot.time - k.time,
+            intensity:     2 * pivot.intensity - k.intensity,
+            color:         2 * pivot.color - k.color,
+            target:        2 * pivot.target - k.target,
+            position:      2 * pivot.position - k.position,
+            range:         2 * pivot.range - k.range,
+            beamThickness: 2 * pivot.beamThickness - k.beamThickness)
     }
 }
