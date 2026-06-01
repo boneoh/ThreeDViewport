@@ -55,9 +55,8 @@ fragment float4 fogvolume_fragment(FogVOut in [[stage_in]],
                                    constant FogVolumeUniforms &u [[buffer(0)]],
                                    texture2d<float> sceneDepth   [[texture(0)]])
 {
-    // Black + White matte: leave the silhouette solid white (no fog).
-    if (u.colorMode == 2u) discard_fragment();
-
+    // Black + White matte: fog renders as solid white below (for FX mattes), so
+    // no early discard here — the colour branch handles the white output.
     constexpr sampler depthSampler(filter::nearest, address::clamp_to_edge);
 
     // Scene depth at this pixel (uv origin top-left, y down).  Nearest sampling
@@ -101,7 +100,9 @@ fragment float4 fogvolume_fragment(FogVOut in [[stage_in]],
     if (alpha < 0.003) discard_fragment();
 
     float3 col = u.color.xyz;
-    if (u.colorMode == 0u) {                 // greyscale: match the desaturated scene
+    if (u.colorMode == 2u) {                 // black+white matte: solid white fog
+        col = float3(1.0);
+    } else if (u.colorMode == 0u) {          // greyscale: match the desaturated scene
         col = float3(dot(col, float3(0.2126, 0.7152, 0.0722)));
     }
     return float4(col, alpha);   // straight alpha → source-over blend

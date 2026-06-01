@@ -884,11 +884,18 @@ final class Renderer: NSObject, MTKViewDelegate {
         // object isVisible; it's purely a view override for the live preview.
         let visibleObjects: [SceneObject]
         let holdoutObjects: [SceneObject]
+        // Transparent parts (e.g. glass windows) must NOT act as holdout occluders:
+        // they don't block weather/fog when visible, so a depth-only holdout of the
+        // glass would wrongly hide the FX behind it.  Only solid geometry holds out.
+        func isTransparentMat(_ o: SceneObject) -> Bool {
+            o.material.opacity < 1.0 || o.material.baseColorFactor.w < 1.0
+        }
         let soloKept = (sceneModeActive && sceneSoloHideOthers)
             ? soloKeptGroup() : nil
         if let kept = soloKept {
             visibleObjects = kept.filter { $0.isVisible }
             holdoutObjects = sceneManager.objects.filter { obj in
+                if isTransparentMat(obj) { return false }
                 if kept.contains(where: { $0 === obj }) {
                     return !obj.isVisible && obj.occludeWhenHidden     // normal rule, kept group
                 } else {
@@ -899,7 +906,9 @@ final class Renderer: NSObject, MTKViewDelegate {
             visibleObjects = sceneManager.objects.filter { $0.isVisible }
             // Holdout objects: hidden but flagged to occlude.  Drawn depth-only BEFORE
             // visible geometry so visible fragments behind them are cut to background.
-            holdoutObjects = sceneManager.objects.filter { !$0.isVisible && $0.occludeWhenHidden }
+            holdoutObjects = sceneManager.objects.filter {
+                !$0.isVisible && $0.occludeWhenHidden && !isTransparentMat($0)
+            }
         }
 
         if !holdoutObjects.isEmpty, let ds = depthStencilState, let holdout = holdoutPipelineState {
@@ -1275,7 +1284,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                 viewProjectionMatrix: vp,
                 startWorld: SIMD4<Float>(start, 1),
                 endWorld:   SIMD4<Float>(end,   1),
-                color:      SIMD4<Float>(laser.color, 1),
+                color:      SIMD4<Float>(colorMode == .blackWhite ? SIMD3<Float>(repeating: 1) : laser.color, 1),
                 screenSize: screenSize,
                 thickness:  max(1.0, laser.beamThickness),
                 pad:        0
@@ -1327,7 +1336,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                     viewProjectionMatrix: vp,
                     startWorld: SIMD4<Float>(start, 1),
                     endWorld:   SIMD4<Float>(end,   1),
-                    color:      SIMD4<Float>(laser.color, 1),
+                    color:      SIMD4<Float>(colorMode == .blackWhite ? SIMD3<Float>(repeating: 1) : laser.color, 1),
                     screenSize: screenSize,
                     thickness:  max(1.0, laser.beamThickness),
                     pad:        0
@@ -1372,7 +1381,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             var u = LaserHitUniforms(
                 viewProjectionMatrix: vp,
                 hitPoint:   SIMD4<Float>(hit.point, 1),
-                color:      SIMD4<Float>(hit.color,  1),
+                color:      SIMD4<Float>(colorMode == .blackWhite ? SIMD3<Float>(repeating: 1) : hit.color,  1),
                 screenSize: screenSize,
                 hitRadius:  60.0,
                 time:       hitEffectTime
@@ -1401,7 +1410,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         var su = SparkUniforms(
             viewProjectionMatrix: viewCamera.viewProjectionMatrix,
             cameraRight: SIMD4<Float>(viewCamera.rightVector, 0),
-            cameraUp:    SIMD4<Float>(viewCamera.upVector,    0)
+            cameraUp:    SIMD4<Float>(viewCamera.upVector,    0),
+            colorMode:   UInt32(colorMode.rawValue)
         )
         encoder.setVertexBuffer(sparkBuf, offset: 0, index: 0)
         encoder.setVertexBytes(&su, length: MemoryLayout<SparkUniforms>.stride, index: 1)

@@ -1644,6 +1644,7 @@ final class ViewportView: MTKView {
         let visible: Set<ObjectClass>// shown; EVERY other class is hidden + holdout
         let matte:   Bool            // true → Black+White matte colour mode
         let blackBg: Bool            // true → solid-black background override
+        let fx:      Bool            // true → render fog + particles + lasers
     }
 
     /// Runs the full multi-pass export cycle sequentially, writing
@@ -1656,18 +1657,26 @@ final class ViewportView: MTKView {
                         exportState: ExportState,
                         onAllComplete: @escaping (Error?) -> Void) {
         let present = Set(sceneManager.objects.map { $0.objectClass })
+        // FX present if any weather emitter is enabled or fog is on (lasers ride along).
+        let fxPresent = particleManager.emitters.contains { $0.isEnabled }
+                     || fogSettings.isEnabled
         var passes: [ExportPass] = [
             ExportPass(name: "Full", visible: [.background, .actor, .macguffin],
-                       matte: false, blackBg: false)
+                       matte: false, blackBg: false, fx: true)
         ]
         if present.contains(.actor) {
-            passes.append(ExportPass(name: "Actor Solo",  visible: [.actor], matte: false, blackBg: true))
-            passes.append(ExportPass(name: "Actor Matte", visible: [.actor], matte: true,  blackBg: true))
+            passes.append(ExportPass(name: "Actor Solo",  visible: [.actor], matte: false, blackBg: true, fx: false))
+            passes.append(ExportPass(name: "Actor Matte", visible: [.actor], matte: true,  blackBg: true, fx: false))
         }
-        passes.append(ExportPass(name: "Scene", visible: [.background], matte: false, blackBg: false))
+        passes.append(ExportPass(name: "Scene", visible: [.background], matte: false, blackBg: false, fx: true))
         if present.contains(.macguffin) {
-            passes.append(ExportPass(name: "MacGuffin Solo",  visible: [.macguffin], matte: false, blackBg: true))
-            passes.append(ExportPass(name: "MacGuffin Matte", visible: [.macguffin], matte: true,  blackBg: true))
+            passes.append(ExportPass(name: "MacGuffin Solo",  visible: [.macguffin], matte: false, blackBg: true, fx: false))
+            passes.append(ExportPass(name: "MacGuffin Matte", visible: [.macguffin], matte: true,  blackBg: true, fx: false))
+        }
+        if fxPresent {
+            // FX-only: all geometry held out, FX on, black background.
+            passes.append(ExportPass(name: "FX Solo",  visible: [], matte: false, blackBg: true, fx: true))
+            passes.append(ExportPass(name: "FX Matte", visible: [], matte: true,  blackBg: true, fx: true))
         }
 
         // Background fields to restore for the project-background passes (Full/Scene).
@@ -1682,10 +1691,8 @@ final class ViewportView: MTKView {
             applyExportPass(pass, origMode: origMode, origSolid: origSolid)
             exportState.lastMessage = "Exporting pass \(i + 1)/\(total): \(pass.name)"
             let url = folder.appendingPathComponent("\(projectName).\(nn).\(pass.name).mov")
-            // FX live with the Background class — only render them when this pass shows it.
-            let includeFX = pass.visible.contains(.background)
             startExport(to: url, codec: codec, fps: fps, exportState: exportState,
-                        includeFX: includeFX) { error in
+                        includeFX: pass.fx) { error in
                 if let error = error { onAllComplete(error); return }
                 runPass(i + 1)   // startExport's completion is delivered on the main thread
             }

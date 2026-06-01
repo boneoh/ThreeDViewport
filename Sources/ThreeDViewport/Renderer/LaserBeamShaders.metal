@@ -200,7 +200,9 @@ struct SparkUniforms {
     float4x4 viewProjectionMatrix;   // 64
     float4   cameraRight;            // 16
     float4   cameraUp;               // 16
-};  // total: 96
+    uint     colorMode;              //  4  (2 = black+white matte → force white)
+    uint     _pad0; uint _pad1; uint _pad2;  // 12 → 16-byte alignment
+};  // total: 112
 
 struct SparkVOut {
     float4 position [[position]];
@@ -228,7 +230,7 @@ vertex SparkVOut spark_vertex(
     SparkVOut out;
     out.position = u.viewProjectionMatrix * float4(worldPos, 1.0f);
     out.uv       = corner;
-    out.color    = p.color.rgb;
+    out.color    = (u.colorMode == 2u) ? float3(1.0f) : p.color.rgb;
     out.alpha    = p.alpha;
     return out;
 }

@@ -238,6 +238,8 @@ struct SparkUniforms {
     var viewProjectionMatrix: matrix_float4x4
     var cameraRight: SIMD4<Float>
     var cameraUp:    SIMD4<Float>
+    var colorMode:   UInt32 = 1          // 2 = black+white matte → force white
+    var _pad0: UInt32 = 0; var _pad1: UInt32 = 0; var _pad2: UInt32 = 0
 }
 
 // ── Scene-mode widget uniforms (buffer index 1 in widget pass) ───────────────

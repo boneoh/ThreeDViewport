@@ -823,7 +823,12 @@ final class VideoExporter {
             // flat-normal, and IBL handling stay identical between preview/export.
             // Holdout objects (hidden but occluding) are drawn depth-only first so
             // visible geometry behind them is cut to background — matches preview.
-            let holdoutObjects = sceneManager.objects.filter { !$0.isVisible && $0.occludeWhenHidden }
+            // Transparent parts (glass) are excluded: they don't block weather/fog
+            // when visible, so they must not occlude FX as depth-only holdouts.
+            let holdoutObjects = sceneManager.objects.filter {
+                !$0.isVisible && $0.occludeWhenHidden
+                    && !($0.material.opacity < 1.0 || $0.material.baseColorFactor.w < 1.0)
+            }
             if !holdoutObjects.isEmpty, let holdout = holdoutPipelineState {
                 SceneGeometryEncoder.encode(
                     into:            encoder,
@@ -1095,7 +1100,7 @@ final class VideoExporter {
                 viewProjectionMatrix: vp,
                 startWorld: SIMD4<Float>(start, 1),
                 endWorld:   SIMD4<Float>(end,   1),
-                color:      SIMD4<Float>(laser.color, 1),
+                color:      SIMD4<Float>(colorMode == .blackWhite ? SIMD3<Float>(repeating: 1) : laser.color, 1),
                 screenSize: screenSize,
                 thickness:  max(1.0, laser.beamThickness),
                 pad:        0
@@ -1151,7 +1156,7 @@ final class VideoExporter {
                     viewProjectionMatrix: vp,
                     startWorld: SIMD4<Float>(start, 1),
                     endWorld:   SIMD4<Float>(end,   1),
-                    color:      SIMD4<Float>(laser.color, 1),
+                    color:      SIMD4<Float>(colorMode == .blackWhite ? SIMD3<Float>(repeating: 1) : laser.color, 1),
                     screenSize: screenSize,
                     thickness:  max(1.0, laser.beamThickness),
                     pad:        0
@@ -1191,7 +1196,7 @@ final class VideoExporter {
             var u = LaserHitUniforms(
                 viewProjectionMatrix: vp,
                 hitPoint:   SIMD4<Float>(hit.point, 1),
-                color:      SIMD4<Float>(hit.color,  1),
+                color:      SIMD4<Float>(colorMode == .blackWhite ? SIMD3<Float>(repeating: 1) : hit.color,  1),
                 screenSize: screenSize,
                 hitRadius:  60.0,
                 time:       hitEffectTime
@@ -1217,7 +1222,8 @@ final class VideoExporter {
         var su = SparkUniforms(
             viewProjectionMatrix: camera.viewProjectionMatrix,
             cameraRight: SIMD4<Float>(camera.rightVector, 0),
-            cameraUp:    SIMD4<Float>(camera.upVector,    0)
+            cameraUp:    SIMD4<Float>(camera.upVector,    0),
+            colorMode:   UInt32(colorMode.rawValue)
         )
         encoder.setVertexBuffer(sparkBuf, offset: 0, index: 0)
         encoder.setVertexBytes(&su, length: MemoryLayout<SparkUniforms>.stride, index: 1)
