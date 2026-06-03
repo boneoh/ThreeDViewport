@@ -1362,11 +1362,12 @@ final class ViewportView: MTKView {
             let obj = sceneManager.objects[i]
             if obj.keyframeTrack == nil { obj.keyframeTrack = KeyframeTrack() }
             obj.keyframeTrack?.keyframes.removeAll { $0.time >= lo && $0.time <= hi }
-            let baseInv = simd_inverse(obj.baseTransform)   // delta = inverse(base) · world
-            let opacity = obj.material.opacity
+            let baseInv  = simd_inverse(obj.baseTransform)   // delta = inverse(base) · world
+            let opacity  = obj.material.opacity
+            let objScale = TransformMath.scale(of: obj.transform)   // preserve current size
             for s in samples {
                 let worldRot = PathGenerator.lookAtRotation(from: s.position, to: s.axisPoint)
-                let world    = PathGenerator.makeTransform(translation: s.position, rotation: worldRot)
+                let world    = PathGenerator.makeTransform(translation: s.position, rotation: worldRot, scale: objScale)
                 let (t, r, sc) = PathGenerator.decompose(baseInv * world)
                 obj.keyframeTrack?.addKeyframe(TransformKeyframe(
                     time: s.time, translation: t, rotation: r, scale: sc, opacity: opacity))
@@ -1428,12 +1429,13 @@ final class ViewportView: MTKView {
             obj.keyframeTrack?.keyframes.removeAll { $0.time >= lo && $0.time <= hi }
             let baseInv  = simd_inverse(obj.baseTransform)
             let opacity  = obj.material.opacity
+            let objScale = TransformMath.scale(of: obj.transform)   // preserve current size
             let canAim   = simd_length(travelDir) > 1e-6
             for s in samples {
                 let worldRot = canAim
                     ? PathGenerator.lookAtRotation(from: s.position, to: s.position + travelDir)
                     : simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
-                let world    = PathGenerator.makeTransform(translation: s.position, rotation: worldRot)
+                let world    = PathGenerator.makeTransform(translation: s.position, rotation: worldRot, scale: objScale)
                 let (t, r, sc) = PathGenerator.decompose(baseInv * world)
                 obj.keyframeTrack?.addKeyframe(TransformKeyframe(
                     time: s.time, translation: t, rotation: r, scale: sc, opacity: opacity))

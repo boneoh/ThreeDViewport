@@ -95,10 +95,17 @@ enum PathGenerator {
         return simd_quatf(rotM)
     }
 
-    /// Composes a translation + rotation into a 4×4 (no scale).
-    static func makeTransform(translation: SIMD3<Float>, rotation: simd_quatf) -> matrix_float4x4 {
+    /// Composes a translation + rotation + (optional) per-axis scale into a 4×4
+    /// as T · R · S.  Scale defaults to 1; pass the object's current scale so a
+    /// generated path preserves its size instead of resetting it to unit scale.
+    static func makeTransform(translation: SIMD3<Float>,
+                              rotation: simd_quatf,
+                              scale: SIMD3<Float> = SIMD3<Float>(repeating: 1)) -> matrix_float4x4 {
         var m = matrix_float4x4(rotation)
-        m.columns.3 = SIMD4<Float>(translation, 1)
+        m.columns.0 *= scale.x
+        m.columns.1 *= scale.y
+        m.columns.2 *= scale.z
+        m.columns.3  = SIMD4<Float>(translation, 1)
         return m
     }
 
