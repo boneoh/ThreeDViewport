@@ -30,6 +30,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // Bake probe inspector panel.
     private var probeInspectorPanel: NSPanel?
 
+    // Rotation Path Animator helper panel.
+    private var rotationPathPanel: NSPanel?
+
     // Global settings panel.
     private var settingsPanel: NSPanel?
 
@@ -855,6 +858,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         )
         probeInspectorItem.target = self
         windowMenu.addItem(probeInspectorItem)
+
+        let pathAnimatorItem = NSMenuItem(title: "Path Animator", action: nil, keyEquivalent: "")
+        let pathSubmenu = NSMenu(title: "Path Animator")
+        let rotationPathItem = NSMenuItem(
+            title: "Rotation…",
+            action: #selector(showRotationPathAnimator(_:)),
+            keyEquivalent: ""
+        )
+        rotationPathItem.target = self
+        pathSubmenu.addItem(rotationPathItem)
+        // "Linear…" submenu item added when the Linear Path Animator is built.
+        pathAnimatorItem.submenu = pathSubmenu
+        windowMenu.addItem(pathAnimatorItem)
 
         let timelineEditorItem = NSMenuItem(
             title: "Timeline Editor",
@@ -2404,6 +2420,133 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         probeInspectorPanel = panel
         panel.makeKeyAndOrderFront(nil)
         print("[DEBUG] AppDelegate: probe inspector panel opened")
+    }
+
+    // MARK: - Rotation Path Animator
+
+    @objc private func showRotationPathAnimator(_ sender: Any) {
+        if let panel = rotationPathPanel {
+            panel.isVisible ? panel.orderOut(nil) : panel.makeKeyAndOrderFront(nil)
+            return
+        }
+        guard let viewport = viewportView else { return }
+        let state = viewport.rotationPathState
+
+        let panel = KeyForwardingPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 300, height: 560),
+            styleMask:   [.titled, .closable, .miniaturizable, .resizable, .utilityWindow, .nonactivatingPanel],
+            backing:     .buffered,
+            defer:       false
+        )
+        panel.title                  = "Rotation Path Animator"
+        panel.isFloatingPanel        = true
+        panel.becomesKeyOnlyIfNeeded = false
+        panel.forwardTarget          = viewport
+        panel.level                  = .normal
+        panel.hidesOnDeactivate      = false
+
+        panel.contentView = FirstClickHostingView(rootView: RotationPathAnimatorPanel(
+            state: state,
+            clipboard: viewport.coordinateClipboard,
+            captureAxisStart: { [weak viewport] in
+                state.axisStart = viewport?.probeConfig.position
+                state.status = "Captured axis start."
+            },
+            captureAxisEnd: { [weak viewport] in
+                state.axisEnd = viewport?.probeConfig.position
+                state.status = "Captured axis end."
+            },
+            captureStart: { [weak self] in self?.rotationPathCaptureStart() },
+            captureEnd:   { [weak self] in self?.rotationPathCaptureEnd() },
+            create:       { [weak self] in self?.rotationPathCreate() }
+        ))
+
+        if let win = window {
+            let f = win.frame
+            panel.setFrameOrigin(NSPoint(x: f.minX + 20, y: f.maxY - panel.frame.height - 40))
+        } else {
+            panel.center()
+        }
+
+        rotationPathPanel = panel
+        panel.makeKeyAndOrderFront(nil)
+        print("[DEBUG] AppDelegate: rotation path animator panel opened")
+    }
+
+    /// Human-readable label for a captured track.
+    private func pathAnimatorTrackLabel(_ ref: TrackRef) -> String {
+        switch ref {
+        case .camera:        return "Camera"
+        case .light(let i):  return "Light \(i + 1)"
+        case .object(let i):
+            if let objs = viewportView?.sceneManager.objects, i >= 0, i < objs.count {
+                return objs[i].name
+            }
+            return "Object \(i + 1)"
+        default:             return "Unsupported"
+        }
+    }
+
+    private func rotationPathCaptureStart() {
+        guard let viewport = viewportView,
+              let editor = timelineEditorWC?.editorView else { return }
+        let state = viewport.rotationPathState
+        guard let ref = editor.selectedTrackRef else {
+            state.status = "Select a camera, light, or object track in the Timeline first."
+            return
+        }
+        switch ref {
+        case .camera, .light, .object:
+            state.capturedRef = ref
+            state.trackLabel  = pathAnimatorTrackLabel(ref)
+            state.startTime   = viewport.timeline.currentTime
+            state.status      = "Captured start time."
+        default:
+            state.status = "Path Animator supports camera, light, and object tracks only."
+        }
+    }
+
+    private func rotationPathCaptureEnd() {
+        guard let viewport = viewportView else { return }
+        let state = viewport.rotationPathState
+        state.endTime = viewport.timeline.currentTime
+        state.status  = "Captured end time."
+    }
+
+    private func rotationPathCreate() {
+        guard let viewport = viewportView else { return }
+        let state = viewport.rotationPathState
+
+        guard let a = state.axisStart, let b = state.axisEnd else {
+            state.status = "Capture both axis points first."; return
+        }
+        guard let ref = state.capturedRef, let t0 = state.startTime, let t1 = state.endTime else {
+            state.status = "Capture the track and start/end times first."; return
+        }
+        guard abs(t1 - t0) > 1e-4 else {
+            state.status = "Start and end times must differ."; return
+        }
+        guard let radius = Float(state.radius),
+              let startA = Float(state.startAngle),
+              let endA   = Float(state.endAngle),
+              let revs   = Float(state.revolutions),
+              let perRev = Float(state.perRev), perRev >= 1 else {
+            state.status = "Check the numeric fields (keyframes/rev ≥ 1)."; return
+        }
+
+        let samples = PathGenerator.samples(
+            axisStart: a, axisEnd: b, radius: radius,
+            startAngleDeg: startA, endAngleDeg: endA, revolutions: revs,
+            startTime: min(t0, t1), endTime: max(t0, t1),
+            keyframesPerRevolution: perRev)
+
+        let fixedAim = (a + b) * 0.5
+        viewport.generatePath(ref: ref, samples: samples, fixedAim: fixedAim)
+
+        timelineEditorWC?.editorView.needsDisplay = true
+        markDirty()
+        state.status = "Created \(samples.count) keyframes for \(pathAnimatorTrackLabel(ref))."
+        print("[DEBUG] AppDelegate: path animator created \(samples.count) keyframes")
     }
 
     // MARK: - Timeline Duration

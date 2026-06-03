@@ -212,6 +212,15 @@ final class TimelineEditorView: NSView {
     /// nil = lane selected but no diamond; only valid when selectedTrackIndex != nil.
     private var selectedKFIndex: Int? = nil
 
+    /// The `TrackRef` of the currently selected lane, or nil if nothing is selected.
+    /// Used by the Path Animator helper to know which entity to animate.
+    var selectedTrackRef: TrackRef? {
+        guard let i = selectedTrackIndex else { return nil }
+        let t = buildTracks()
+        guard i >= 0, i < t.count else { return nil }
+        return t[i].ref
+    }
+
     // ── Drag state ────────────────────────────────────────────────────────────
 
     private var isDragging:        Bool    = false
@@ -883,10 +892,11 @@ final class TimelineEditorView: NSView {
             if hit.kfIndex < times.count { timeline?.seek(to: times[hit.kfIndex]) }
             onLaneSelected?(tracks[hit.trackIndex].ref)
 
-            // Double-click enters edit mode only on plain clicks (no Alt).
-            if !isOption && event.clickCount == 2 {
-                handleReturnKey(tracks: tracks)
-            }
+            // Edit mode disabled (under evaluation for removal) — double-click no
+            // longer enters it.  The I / Insert keyframe workflow is unaffected.
+            // if !isOption && event.clickCount == 2 {
+            //     handleReturnKey(tracks: tracks)
+            // }
             return
         }
 
@@ -1303,22 +1313,25 @@ final class TimelineEditorView: NSView {
             // Keep selectedTrackIndex so the lane stays highlighted to match the
             // current selection after the edit ends.
             needsDisplay       = true
-        } else {
-            // ── Enter edit mode ────────────────────────────────────────────────
-            guard let ti = selectedTrackIndex, let ki = selectedKFIndex else { return }
-            let ref   = tracks[ti].ref
-            let times = keyframeTimes(for: ref)
-            guard ki < times.count else { return }
-
-            editKFTime        = times[ki]
-            isEditingKeyframe = true
-            needsDisplay      = true
-
-            print("[DEBUG] TimelineEditorView: entering edit mode lane=\(ti)"
-                + " kf=\(ki) t=" + String(format: "%.3f", editKFTime))
-
-            onEnterEditMode?(ref, editKFTime)
         }
+        // ── Enter edit mode (DISABLED — under evaluation for removal) ───────────
+        // The benevolent I / Insert keyframe workflow replaces it; Return no longer
+        // enters edit mode.  Restore this branch to bring edit mode back.
+        // else {
+        //     guard let ti = selectedTrackIndex, let ki = selectedKFIndex else { return }
+        //     let ref   = tracks[ti].ref
+        //     let times = keyframeTimes(for: ref)
+        //     guard ki < times.count else { return }
+        //
+        //     editKFTime        = times[ki]
+        //     isEditingKeyframe = true
+        //     needsDisplay      = true
+        //
+        //     print("[DEBUG] TimelineEditorView: entering edit mode lane=\(ti)"
+        //         + " kf=\(ki) t=" + String(format: "%.3f", editKFTime))
+        //
+        //     onEnterEditMode?(ref, editKFTime)
+        // }
     }
 
     private func handleEscapeKey() {

@@ -87,6 +87,9 @@ final class ViewportView: MTKView {
     // CameraPanel inspector.  Lives here so the choice survives panel
     // hide/show cycles.
     let cameraPanelState   = CameraPanelState()
+    // Rotation Path Animator helper state — lives here so captures + field values
+    // survive panel hide/show cycles.
+    let rotationPathState  = RotationPathAnimatorState()
     private var playbackCancellable: AnyCancellable?
 
     // Phase 6: HUD observable state — AppDelegate embeds the SwiftUI overlay using this.
@@ -1308,6 +1311,69 @@ final class ViewportView: MTKView {
             + " distance=" + String(format: "%.4f", camera.distance)
             + " fov=" + String(format: "%.4f", camera.fovYRadians))
         onKeyframeStamped?(.camera)
+    }
+
+    // MARK: - Path Animator
+
+    /// Replaces all keyframes of `ref` within [startTime, endTime] with keyframes
+    /// following the sampled helix.  Camera and lights aim at `fixedAim` (the axis
+    /// midpoint); objects aim at the per-sample axis point (same height).  Only
+    /// camera / light / object tracks are supported.
+    func generatePath(ref: TrackRef,
+                      samples:   [PathGenerator.Sample],
+                      fixedAim:  SIMD3<Float>) {
+        guard let first = samples.first, let last = samples.last else { return }
+        let lo = min(first.time, last.time) - 1e-6
+        let hi = max(first.time, last.time) + 1e-6
+
+        switch ref {
+        case .camera:
+            if camera.keyframeTrack == nil { camera.keyframeTrack = CameraKeyframeTrack() }
+            camera.keyframeTrack?.keyframes.removeAll { $0.time >= lo && $0.time <= hi }
+            for s in samples {
+                let dir   = s.position - fixedAim                  // eye − target
+                let dist  = max(0.05, min(5000, simd_length(dir)))
+                let pitch = asin(max(-1, min(1, dir.y / dist)))
+                let yaw   = atan2(dir.x, dir.z)
+                camera.keyframeTrack?.addKeyframe(CameraKeyframe(
+                    time: s.time, yaw: yaw, pitch: pitch, distance: dist,
+                    target: fixedAim, fov: camera.fovYRadians))
+            }
+            onKeyframeStamped?(.camera)
+
+        case .light(let i):
+            guard i >= 0, i < lightManager.lights.count else { return }
+            let light = lightManager.lights[i]
+            while lightManager.keyframeTracks.count <= i { lightManager.keyframeTracks.append(nil) }
+            if lightManager.keyframeTracks[i] == nil { lightManager.keyframeTracks[i] = LightKeyframeTrack() }
+            lightManager.keyframeTracks[i]?.keyframes.removeAll { $0.time >= lo && $0.time <= hi }
+            for s in samples {
+                lightManager.keyframeTracks[i]?.addKeyframe(LightKeyframe(
+                    time: s.time, intensity: light.intensity, color: light.color,
+                    target: fixedAim, position: s.position,
+                    range: light.range, beamThickness: light.beamThickness))
+            }
+            onKeyframeStamped?(.light(i))
+
+        case .object(let i):
+            guard i >= 0, i < sceneManager.objects.count else { return }
+            let obj = sceneManager.objects[i]
+            if obj.keyframeTrack == nil { obj.keyframeTrack = KeyframeTrack() }
+            obj.keyframeTrack?.keyframes.removeAll { $0.time >= lo && $0.time <= hi }
+            let baseInv = simd_inverse(obj.baseTransform)   // delta = inverse(base) · world
+            let opacity = obj.material.opacity
+            for s in samples {
+                let worldRot = PathGenerator.lookAtRotation(from: s.position, to: s.axisPoint)
+                let world    = PathGenerator.makeTransform(translation: s.position, rotation: worldRot)
+                let (t, r, sc) = PathGenerator.decompose(baseInv * world)
+                obj.keyframeTrack?.addKeyframe(TransformKeyframe(
+                    time: s.time, translation: t, rotation: r, scale: sc, opacity: opacity))
+            }
+            onKeyframeStamped?(.object(i))
+
+        default:
+            break   // group / fog / particles not supported
+        }
     }
 
     // MARK: - Add / Clear Atmosphere Keyframes
