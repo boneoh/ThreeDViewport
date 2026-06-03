@@ -55,9 +55,11 @@ final class ModelInspectorState: ObservableObject {
     /// given world position — translates every root part of the group; FK children
     /// follow via the per-frame hierarchy pass.  Wired by AppDelegate.
     var setGroupWorldPosition: ((SceneObject, SIMD3<Float>) -> Void)?
-    /// Live world-space Euler rotation (degrees, YXZ) of the anchor as drawn.
-    /// Wired by AppDelegate; includes the group transform when present.
-    var worldRotation:    ((SceneObject) -> SIMD3<Float>)?
+    /// Live world-space rotation MATRIX of the anchor as drawn (incl. group
+    /// transform when present).  Wired by AppDelegate.  Euler is derived from it
+    /// here so the read-back can pick the representation continuous with the
+    /// currently displayed angles (avoids gimbal-lock snapping).
+    var worldRotationMatrix: ((SceneObject) -> matrix_float4x4)?
     /// Rotates a grouped selection so the anchor's world rotation becomes the given
     /// Euler — pivots every root around the anchor's world position.  Wired by AppDelegate.
     var setGroupWorldRotation: ((SceneObject, SIMD3<Float>) -> Void)?
@@ -109,7 +111,8 @@ final class ModelInspectorState: ObservableObject {
         // field shows the model's overall position, not an arbitrary child part.
         anchor   = newTargets.first(where: { $0.parentIndex == nil }) ?? first
         position = anchor.map { worldPos(of: $0) } ?? .zero
-        rotation = anchor.map { worldRot(of: $0) } ?? .zero
+        // Fresh selection: canonical Euler (no continuity hint to bias toward).
+        rotation = anchor.map { TransformMath.eulerFromMatrix(worldMatrix(of: $0)) } ?? .zero
         scale    = anchor.map { worldScl(of: $0) } ?? SIMD3<Float>(1, 1, 1)
 
         // Editing is allowed for a single non-grouped root (writes obj.transform),
@@ -131,11 +134,10 @@ final class ModelInspectorState: ObservableObject {
         return SIMD3<Float>(t.x, t.y, t.z)
     }
 
-    /// World rotation (YXZ Euler degrees) of `obj` as drawn, via the provider
-    /// wired by AppDelegate; falls back to decomposing the local transform.
-    private func worldRot(of obj: SceneObject) -> SIMD3<Float> {
-        if let wr = worldRotation { return wr(obj) }
-        return TransformMath.eulerFromMatrix(obj.transform)
+    /// World rotation matrix of `obj` as drawn, via the provider wired by
+    /// AppDelegate; falls back to the local transform.
+    private func worldMatrix(of obj: SceneObject) -> matrix_float4x4 {
+        worldRotationMatrix?(obj) ?? obj.transform
     }
 
     /// World-effective scale of `obj` as drawn, via the provider wired by
@@ -157,7 +159,9 @@ final class ModelInspectorState: ObservableObject {
         if p != position {
             isUpdating = true; position = p; isUpdating = false
         }
-        let r = worldRot(of: obj)
+        // Continuity read-back: pick the Euler representation nearest the current
+        // displayed angles so X = ±90° doesn't snap Y/Z to an equivalent triple.
+        let r = TransformMath.eulerFromMatrix(worldMatrix(of: obj), near: rotation)
         if r != rotation {
             isUpdating = true; rotation = r; isUpdating = false
         }

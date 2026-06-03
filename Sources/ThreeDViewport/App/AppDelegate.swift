@@ -33,6 +33,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // Rotation Path Animator helper panel.
     private var rotationPathPanel: NSPanel?
 
+    // Linear Path Animator helper panel.
+    private var linearPathPanel: NSPanel?
+
     // Global settings panel.
     private var settingsPanel: NSPanel?
 
@@ -868,7 +871,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         )
         rotationPathItem.target = self
         pathSubmenu.addItem(rotationPathItem)
-        // "Linear…" submenu item added when the Linear Path Animator is built.
+        let linearPathItem = NSMenuItem(
+            title: "Linear…",
+            action: #selector(showLinearPathAnimator(_:)),
+            keyEquivalent: ""
+        )
+        linearPathItem.target = self
+        pathSubmenu.addItem(linearPathItem)
         pathAnimatorItem.submenu = pathSubmenu
         windowMenu.addItem(pathAnimatorItem)
 
@@ -2210,15 +2219,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         // World rotation (YXZ Euler degrees) — mirrors worldPosition: include the
         // group transform if any, so the rotation field tracks group animation too.
-        state.worldRotation = { [weak viewport] obj in
-            let world: matrix_float4x4
+        state.worldRotationMatrix = { [weak viewport] obj in
             if let sm = viewport?.sceneManager,
                let gid = obj.groupID, let gt = sm.groupTransforms[gid] {
-                world = gt * obj.transform
-            } else {
-                world = obj.transform
+                return gt * obj.transform
             }
-            return TransformMath.eulerFromMatrix(world)
+            return obj.transform
         }
 
         // World-effective scale — mirrors worldPosition: decompose the combined
@@ -2420,6 +2426,110 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         probeInspectorPanel = panel
         panel.makeKeyAndOrderFront(nil)
         print("[DEBUG] AppDelegate: probe inspector panel opened")
+    }
+
+    // MARK: - Linear Path Animator
+
+    @objc private func showLinearPathAnimator(_ sender: Any) {
+        if let panel = linearPathPanel {
+            panel.isVisible ? panel.orderOut(nil) : panel.makeKeyAndOrderFront(nil)
+            return
+        }
+        guard let viewport = viewportView else { return }
+        let state = viewport.linearPathState
+
+        let panel = KeyForwardingPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 300, height: 460),
+            styleMask:   [.titled, .closable, .miniaturizable, .resizable, .utilityWindow, .nonactivatingPanel],
+            backing:     .buffered,
+            defer:       false
+        )
+        panel.title                  = "Linear Path Animator"
+        panel.isFloatingPanel        = true
+        panel.becomesKeyOnlyIfNeeded = false
+        panel.forwardTarget          = viewport
+        panel.level                  = .normal
+        panel.hidesOnDeactivate      = false
+
+        panel.contentView = FirstClickHostingView(rootView: LinearPathAnimatorPanel(
+            state: state,
+            clipboard: viewport.coordinateClipboard,
+            captureStartPoint: { [weak viewport] in
+                state.startPoint = viewport?.probeConfig.position
+                state.status = "Captured start point."
+            },
+            captureEndPoint: { [weak viewport] in
+                state.endPoint = viewport?.probeConfig.position
+                state.status = "Captured end point."
+            },
+            captureStart: { [weak self] in self?.linearPathCaptureStart() },
+            captureEnd:   { [weak self] in self?.linearPathCaptureEnd() },
+            create:       { [weak self] in self?.linearPathCreate() }
+        ))
+
+        if let win = window {
+            let f = win.frame
+            panel.setFrameOrigin(NSPoint(x: f.minX + 20, y: f.maxY - panel.frame.height - 40))
+        } else {
+            panel.center()
+        }
+
+        linearPathPanel = panel
+        panel.makeKeyAndOrderFront(nil)
+        print("[DEBUG] AppDelegate: linear path animator panel opened")
+    }
+
+    private func linearPathCaptureStart() {
+        guard let viewport = viewportView,
+              let editor = timelineEditorWC?.editorView else { return }
+        let state = viewport.linearPathState
+        guard let ref = editor.selectedTrackRef else {
+            state.status = "Select a camera, light, or object track in the Timeline first."
+            return
+        }
+        switch ref {
+        case .camera, .light, .object:
+            state.capturedRef = ref
+            state.trackLabel  = pathAnimatorTrackLabel(ref)
+            state.startTime   = viewport.timeline.currentTime
+            state.status      = "Captured start time."
+        default:
+            state.status = "Path Animator supports camera, light, and object tracks only."
+        }
+    }
+
+    private func linearPathCaptureEnd() {
+        guard let viewport = viewportView else { return }
+        let state = viewport.linearPathState
+        state.endTime = viewport.timeline.currentTime
+        state.status  = "Captured end time."
+    }
+
+    private func linearPathCreate() {
+        guard let viewport = viewportView else { return }
+        let state = viewport.linearPathState
+
+        guard let a = state.startPoint, let b = state.endPoint else {
+            state.status = "Capture both line points first."; return
+        }
+        guard let ref = state.capturedRef, let t0 = state.startTime, let t1 = state.endTime else {
+            state.status = "Capture the track and start/end times first."; return
+        }
+        guard abs(t1 - t0) > 1e-4 else {
+            state.status = "Start and end times must differ."; return
+        }
+        guard let count = Int(state.keyframes), count >= 2 else {
+            state.status = "Keyframes must be a whole number ≥ 2."; return
+        }
+
+        let samples = PathGenerator.linearSamples(
+            start: a, end: b, startTime: min(t0, t1), endTime: max(t0, t1), count: count)
+        viewport.generateLinearPath(ref: ref, samples: samples, travelDir: b - a)
+
+        timelineEditorWC?.editorView.needsDisplay = true
+        markDirty()
+        state.status = "Created \(samples.count) keyframes for \(pathAnimatorTrackLabel(ref))."
+        print("[DEBUG] AppDelegate: linear path animator created \(samples.count) keyframes")
     }
 
     // MARK: - Rotation Path Animator

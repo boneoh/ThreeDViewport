@@ -59,6 +59,26 @@ enum PathGenerator {
         return out
     }
 
+    /// Samples a straight line from `start` to `end` into `count` (≥2) evenly-spaced
+    /// points with matching evenly-spaced times.  Constant velocity — shape accel /
+    /// decel via the track's easing mode.
+    static func linearSamples(start: SIMD3<Float>,
+                              end:   SIMD3<Float>,
+                              startTime: Double,
+                              endTime:   Double,
+                              count:     Int) -> [(time: Double, position: SIMD3<Float>)] {
+        let n = max(2, count)
+        var out: [(time: Double, position: SIMD3<Float>)] = []
+        out.reserveCapacity(n)
+        for i in 0..<n {
+            let s = Float(i) / Float(n - 1)
+            let p = start + (end - start) * s
+            let t = startTime + Double(s) * (endTime - startTime)
+            out.append((t, p))
+        }
+        return out
+    }
+
     /// Builds a world rotation that aims local −Z at `aim` from `position`, up = world Y.
     /// (Objects have no intrinsic forward; we adopt the −Z convention.)
     static func lookAtRotation(from position: SIMD3<Float>, to aim: SIMD3<Float>) -> simd_quatf {

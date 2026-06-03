@@ -42,6 +42,63 @@ enum TransformMath {
         return SIMD3<Float>(x, y, z) * (180.0 / .pi)
     }
 
+    /// Like `eulerFromMatrix`, but returns the equivalent YXZ triple nearest to
+    /// `previous` (degrees) so the displayed angles stay continuous across the
+    /// asin (X = ±90°) singularity instead of snapping to a different equivalent
+    /// representation.
+    ///
+    /// Continuity uses the two canonical solutions — `(x, y, z)` and
+    /// `(180−x, y+180, z+180)`, which rebuild the same orientation — each wrapped
+    /// to within ±180° of `previous`, picking the closer one.  At gimbal lock it
+    /// keeps `previous` Y/Z when that still rebuilds the orientation (the common
+    /// inspector-edit case, where the matrix was just built from `previous`),
+    /// avoiding the Y/Z flip; otherwise it falls back to the nearest canonical
+    /// solution.  Every returned triple rebuilds the input rotation exactly.
+    static func eulerFromMatrix(_ m: matrix_float4x4, near previous: SIMD3<Float>) -> SIMD3<Float> {
+        let (n0, n1, n2) = normalizedColumns(m)
+        let sx = simd_clamp(-n2.y, -1, 1)
+
+        if abs(sx) >= 0.9999 {
+            let xDeg: Float = sx > 0 ? 90 : -90
+            let held = SIMD3<Float>(xDeg, previous.y, previous.z)
+            if maxAbsColumnDiff(matrixFromEuler(held), pureRotation(of: m)) < 1e-3 {
+                return held
+            }
+        }
+
+        let toDeg: Float = 180 / .pi
+        let xr   = asin(sx) * toDeg
+        let solA = SIMD3<Float>(xr,
+                                atan2(n2.x, n2.z) * toDeg,
+                                atan2(n0.y, n1.y) * toDeg)
+        let solB = SIMD3<Float>(180 - xr, solA.y + 180, solA.z + 180)
+        let cA = wrapNear(solA, previous)
+        let cB = wrapNear(solB, previous)
+        return distanceSquared(cA, previous) <= distanceSquared(cB, previous) ? cA : cB
+    }
+
+    /// Adds ±360° to bring `a` within ±180° of `ref` (degrees).
+    private static func wrapNear(_ a: Float, _ ref: Float) -> Float {
+        var x = a
+        while x - ref >  180 { x -= 360 }
+        while x - ref < -180 { x += 360 }
+        return x
+    }
+    private static func wrapNear(_ v: SIMD3<Float>, _ ref: SIMD3<Float>) -> SIMD3<Float> {
+        SIMD3<Float>(wrapNear(v.x, ref.x), wrapNear(v.y, ref.y), wrapNear(v.z, ref.z))
+    }
+    private static func distanceSquared(_ a: SIMD3<Float>, _ b: SIMD3<Float>) -> Float {
+        let d = a - b; return simd_dot(d, d)
+    }
+    private static func maxAbsColumnDiff(_ a: matrix_float4x4, _ b: matrix_float4x4) -> Float {
+        var m: Float = 0
+        for c in 0..<4 {
+            let d = a[c] - b[c]
+            m = max(m, max(abs(d.x), max(abs(d.y), max(abs(d.z), abs(d.w)))))
+        }
+        return m
+    }
+
     /// Extracts non-uniform column scales from the upper-3×3 of a transform.
     static func scale(of m: matrix_float4x4) -> SIMD3<Float> {
         let (c0, c1, c2) = columns3(m)

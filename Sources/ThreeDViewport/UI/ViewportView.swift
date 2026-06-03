@@ -90,6 +90,8 @@ final class ViewportView: MTKView {
     // Rotation Path Animator helper state — lives here so captures + field values
     // survive panel hide/show cycles.
     let rotationPathState  = RotationPathAnimatorState()
+    // Linear Path Animator helper state.
+    let linearPathState    = LinearPathAnimatorState()
     private var playbackCancellable: AnyCancellable?
 
     // Phase 6: HUD observable state — AppDelegate embeds the SwiftUI overlay using this.
@@ -1364,6 +1366,73 @@ final class ViewportView: MTKView {
             let opacity = obj.material.opacity
             for s in samples {
                 let worldRot = PathGenerator.lookAtRotation(from: s.position, to: s.axisPoint)
+                let world    = PathGenerator.makeTransform(translation: s.position, rotation: worldRot)
+                let (t, r, sc) = PathGenerator.decompose(baseInv * world)
+                obj.keyframeTrack?.addKeyframe(TransformKeyframe(
+                    time: s.time, translation: t, rotation: r, scale: sc, opacity: opacity))
+            }
+            onKeyframeStamped?(.object(i))
+
+        default:
+            break   // group / fog / particles not supported
+        }
+    }
+
+    /// Linear variant: replaces the selected track's keyframes in [start, end] with
+    /// keyframes moving along a straight line.  Camera/lights keep their current
+    /// orientation (parallel dolly); objects face the direction of travel.
+    func generateLinearPath(ref: TrackRef,
+                            samples:   [(time: Double, position: SIMD3<Float>)],
+                            travelDir: SIMD3<Float>) {
+        guard let first = samples.first, let last = samples.last else { return }
+        let lo = min(first.time, last.time) - 1e-6
+        let hi = max(first.time, last.time) + 1e-6
+
+        switch ref {
+        case .camera:
+            if camera.keyframeTrack == nil { camera.keyframeTrack = CameraKeyframeTrack() }
+            camera.keyframeTrack?.keyframes.removeAll { $0.time >= lo && $0.time <= hi }
+            // Fixed orientation: keep current yaw/pitch/distance; translate eye→target
+            // together so the view direction is preserved (parallel dolly).
+            let offset   = camera.eyePosition - camera.target
+            let yaw      = camera.yaw
+            let pitch    = camera.pitch
+            let distance = camera.distance
+            let fov      = camera.fovYRadians
+            for s in samples {
+                camera.keyframeTrack?.addKeyframe(CameraKeyframe(
+                    time: s.time, yaw: yaw, pitch: pitch, distance: distance,
+                    target: s.position - offset, fov: fov))
+            }
+            onKeyframeStamped?(.camera)
+
+        case .light(let i):
+            guard i >= 0, i < lightManager.lights.count else { return }
+            let light = lightManager.lights[i]
+            let aimOffset = light.target - light.position   // keep beam direction constant
+            while lightManager.keyframeTracks.count <= i { lightManager.keyframeTracks.append(nil) }
+            if lightManager.keyframeTracks[i] == nil { lightManager.keyframeTracks[i] = LightKeyframeTrack() }
+            lightManager.keyframeTracks[i]?.keyframes.removeAll { $0.time >= lo && $0.time <= hi }
+            for s in samples {
+                lightManager.keyframeTracks[i]?.addKeyframe(LightKeyframe(
+                    time: s.time, intensity: light.intensity, color: light.color,
+                    target: s.position + aimOffset, position: s.position,
+                    range: light.range, beamThickness: light.beamThickness))
+            }
+            onKeyframeStamped?(.light(i))
+
+        case .object(let i):
+            guard i >= 0, i < sceneManager.objects.count else { return }
+            let obj = sceneManager.objects[i]
+            if obj.keyframeTrack == nil { obj.keyframeTrack = KeyframeTrack() }
+            obj.keyframeTrack?.keyframes.removeAll { $0.time >= lo && $0.time <= hi }
+            let baseInv  = simd_inverse(obj.baseTransform)
+            let opacity  = obj.material.opacity
+            let canAim   = simd_length(travelDir) > 1e-6
+            for s in samples {
+                let worldRot = canAim
+                    ? PathGenerator.lookAtRotation(from: s.position, to: s.position + travelDir)
+                    : simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
                 let world    = PathGenerator.makeTransform(translation: s.position, rotation: worldRot)
                 let (t, r, sc) = PathGenerator.decompose(baseInv * world)
                 obj.keyframeTrack?.addKeyframe(TransformKeyframe(

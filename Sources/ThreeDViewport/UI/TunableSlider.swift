@@ -70,8 +70,15 @@ struct TunableSlider: View {
         // NSPanel/NSHostingView setup, so drive the repeat ourselves: nudge once
         // on key-down, then run a timer until the key is released (`.up`), focus
         // is lost, or the view disappears.
-        .onKeyPress(keys: [.leftArrow, .rightArrow], phases: [.down, .up]) { press in
+        .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow], phases: [.down, .up]) { press in
             guard isEnabled else { return .ignored }
+            // Only Left/Right nudge the value.  Up/Down are intentional no-ops, but
+            // we still consume them so a stray press doesn't fall through to the
+            // viewport (which would move the selected model).
+            guard press.key == .leftArrow || press.key == .rightArrow else {
+                stopRepeating()
+                return .handled
+            }
             let delta = press.key == .leftArrow ? -step : step
             switch press.phase {
             case .down: nudge(delta); startRepeating(delta); return .handled

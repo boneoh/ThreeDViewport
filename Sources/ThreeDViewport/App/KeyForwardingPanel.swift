@@ -23,6 +23,18 @@ final class KeyForwardingPanel: NSPanel {
             }
             return
         }
+        // Arrow keys belong to the focused control (e.g. a TunableSlider), not the
+        // viewport.  SwiftUI's `.onKeyPress` consumes the initial key-down, but the
+        // OS key-repeat events for held arrows are NOT delivered to it in this
+        // NSPanel/NSHostingView setup — they fall through to here.  Forwarding those
+        // to the viewport moved the selected model while a slider was being nudged,
+        // so swallow all arrow keys instead of forwarding them.
+        switch event.keyCode {
+        case 123, 124, 125, 126:   // ←  →  ↓  ↑
+            return
+        default:
+            break
+        }
         if let target = forwardTarget {
             target.keyDown(with: event)
         } else {
