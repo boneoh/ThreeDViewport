@@ -134,7 +134,15 @@ final class LaserHitSystem {
         var bestPoint:  SIMD3<Float>? = nil
         var bestDist:   Float         = 0
 
-        for obj in objects where obj.isVisible {
+        // An object stops the laser if it visually occludes it: either it's drawn
+        // (isVisible), or it's a depth-only holdout (occludeWhenHidden) — but NOT a
+        // transparent holdout (glass), which is excluded from holdout occlusion so
+        // the beam passes through it, matching the rendered depth.  This makes hit
+        // detection agree with the beam's depth-clipping in every export pass,
+        // including FX Solo/Matte where all geometry is held out.
+        for obj in objects where obj.isVisible
+            || (obj.occludeWhenHidden
+                && !(obj.material.opacity < 1.0 || obj.material.baseColorFactor.w < 1.0)) {
             // Transform the world-space ray into this object's local space.
             // simd_inverse handles arbitrary transforms (rotation, scale, translation).
             let inv        = simd_inverse(obj.transform)

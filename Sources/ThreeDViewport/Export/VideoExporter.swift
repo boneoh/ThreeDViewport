@@ -2,6 +2,8 @@ import Foundation
 import Metal
 import AVFoundation
 import CoreVideo
+import CoreGraphics
+import CoreText
 
 // Phase 3: Exports the animated scene to a ProRes .mov file at 1920×1080.
 //
@@ -62,9 +64,11 @@ struct ExportFrameRate: Equatable {
 enum ExportCodec {
 
     /// ProRes 4444 — 12-bit RGB + alpha channel.
-    /// Alpha = Luma is baked in (Rec.709), so black → transparent and
-    /// bright areas → opaque.  Ready for direct use in DaVinci Resolve
-    /// and LZX Videomancer without a separate key pass.
+    /// Color passes write alpha = Rec.709 luma of the RGB with full RGB, tagged
+    /// Premultiplied so the RGB displays at correct brightness while the luma sits
+    /// in alpha as a key — ready for DaVinci Resolve / LZX Videomancer without a
+    /// separate key pass.  Matte passes keep the geometry coverage alpha (1 =
+    /// geometry, 0 = background/holdout).
     case proRes4444
 
     /// ProRes 422 HQ — 10-bit 4:2:2, no alpha.
@@ -74,7 +78,7 @@ enum ExportCodec {
 
     var displayName: String {
         switch self {
-        case .proRes4444:  return "ProRes 4444 — Alpha = Luma (compositing)"
+        case .proRes4444:  return "ProRes 4444 — Premult alpha = Luma (compositing)"
         case .proRes422HQ: return "ProRes 422 HQ — solid black (grading)"
         }
     }
@@ -133,6 +137,14 @@ final class VideoExporter {
     private let frameTimescale:    Int32   // CMTime timescale (rational, exact for NTSC)
     private let frameTicks:        Int32   // CMTime value advanced per frame
 
+    // Active codec for the current export — set at the top of export(). Used by
+    // pixelBufferFrom to decide alpha handling (luma alpha for 4444 color passes).
+    private var activeCodec: ExportCodec = .proRes4444
+
+    // Seconds of 3-2-1 sync countdown prepended to every export (a white flash
+    // frame is appended after, as the frame-accurate alignment point).
+    private let countdownSeconds = 3
+
     // Phase 8+: rendering options matching the live display
     var colorMode:     RenderColorMode = .color
     var isWireframe:   Bool = false
@@ -167,6 +179,12 @@ final class VideoExporter {
     // particles are gated separately by nil-ing fogSettings/particleManager).
     var includeLaserFX: Bool = true
 
+    // When true, transparent (glass) objects are not drawn.  Export All's Background
+    // pass sets this so the station's glass doesn't alpha-composite its pale tint
+    // over the pure-black holdout silhouettes (which the Videomancer keys on black).
+    // Held-out objects behind windows then stay pure black; windows read as open.
+    var suppressTransparent: Bool = false
+
     // Phase C: image-based lighting — shared with the live Renderer so exports
     // match the viewport.  Set by ViewportView after construction.
     var ibl: IBL?
@@ -190,6 +208,9 @@ final class VideoExporter {
 
     // Color grade pipeline (fullscreen B/C post-process)
     private var colorGradePipelineState: MTLRenderPipelineState?
+
+    // Luma-alpha pipeline (fullscreen; rewrites alpha = Rec.709 luma for 4444 color)
+    private var lumaAlphaPipelineState: MTLRenderPipelineState?
 
     // Laser hit system — independent of the live renderer, reset per export
     private var laserHitSystem: LaserHitSystem = LaserHitSystem()
@@ -438,6 +459,18 @@ final class VideoExporter {
             colorGradePipelineState = try? device.makeRenderPipelineState(descriptor: gradeDesc)
             print("[DEBUG] VideoExporter: color grade pipeline "
                 + (colorGradePipelineState != nil ? "created" : "FAILED"))
+
+            // Luma-alpha pipeline reuses the fullscreen-quad vertex function.
+            if let lumaFragFn = library.makeFunction(name: "luma_alpha_fragment") {
+                let lumaDesc = MTLRenderPipelineDescriptor()
+                lumaDesc.label                           = "LumaAlphaExport"
+                lumaDesc.vertexFunction                  = gradeVertFn
+                lumaDesc.fragmentFunction                = lumaFragFn
+                lumaDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
+                lumaAlphaPipelineState = try? device.makeRenderPipelineState(descriptor: lumaDesc)
+                print("[DEBUG] VideoExporter: luma-alpha pipeline "
+                    + (lumaAlphaPipelineState != nil ? "created" : "FAILED"))
+            }
         }
 
         print("[DEBUG] VideoExporter: initialized — duration="
@@ -449,7 +482,7 @@ final class VideoExporter {
     // MARK: - Public export entry point
 
     /// Exports the full animation to a ProRes .mov at the given URL.
-    /// `codec` selects ProRes 4444 (with Alpha=Luma) or ProRes 422 HQ (solid black).
+    /// `codec` selects ProRes 4444 (Premult alpha=Luma on color passes) or ProRes 422 HQ (solid black).
     /// `progress` is called on the main thread with values 0.0–1.0.
     /// `completion` is called on the main thread; nil = success, otherwise Error.
     func export(to url: URL,
@@ -457,23 +490,36 @@ final class VideoExporter {
                 progress:   @escaping (Float)   -> Void,
                 completion: @escaping (Error?)  -> Void) {
 
-        let totalFrames = Int(animDuration * frameRate)
-        guard totalFrames > 0 else {
-            print("[DEBUG] VideoExporter: export — totalFrames is zero, aborting")
+        activeCodec = codec
+
+        let animFrames = Int(animDuration * frameRate)
+        guard animFrames > 0 else {
+            print("[DEBUG] VideoExporter: export — animFrames is zero, aborting")
             DispatchQueue.main.async { completion(ExportError.zeroDuration) }
             return
         }
 
+        // Prepended sync countdown: 3 seconds of 3-2-1 on black + one white flash
+        // frame (the frame-accurate alignment point), then the animation.  Content
+        // timing is unchanged — only the writer's presentation times are offset.
+        let fpsInt         = max(1, Int(frameRate.rounded()))
+        let countdownTotal = countdownSeconds * fpsInt + 1   // +1 = flash frame
+        let totalFrames    = countdownTotal + animFrames     // full file length
+
         print("[DEBUG] VideoExporter: export start — "
-            + String(totalFrames) + " frames → " + url.lastPathComponent)
+            + String(animFrames) + " anim + " + String(countdownTotal)
+            + " countdown frames → " + url.lastPathComponent)
 
         // ── Offscreen render-target pool ──────────────────────────────────────
         // Two slots lets the GPU render frame N while the CPU reads back and
         // encodes frame N-1 (pipelined).  Feedback forces a single slot: its
         // queue reuses shared textures across frames and must stay strictly
-        // serial.  gradeTex is the per-slot blit intermediate for Color Grade.
+        // serial.  gradeTex is the per-slot blit intermediate, shared by the Color
+        // Grade and luma-alpha fullscreen passes (both blit colorTex→grade→colorTex).
         let pipelineDepth = (feedbackSettings?.isEnabled == true) ? 1 : 2
         let needGrade     = (colorGradeSettings.map { !$0.isIdentity } ?? false)
+        let needLumaAlpha = (codec == .proRes4444 && colorMode == .color)
+        let needIntermediate = needGrade || needLumaAlpha
         var slots: [(color: MTLTexture, staging: MTLTexture,
                      depth: MTLTexture, grade: MTLTexture?)] = []
         for _ in 0..<pipelineDepth {
@@ -483,8 +529,8 @@ final class VideoExporter {
                 DispatchQueue.main.async { completion(ExportError.textureCreationFailed) }
                 return
             }
-            let g = needGrade ? makeGradeTexture() : nil
-            if needGrade && g == nil {
+            let g = needIntermediate ? makeGradeTexture() : nil
+            if needIntermediate && g == nil {
                 DispatchQueue.main.async { completion(ExportError.textureCreationFailed) }
                 return
             }
@@ -590,6 +636,28 @@ final class VideoExporter {
             writer.startSession(atSourceTime: .zero)
             print("[DEBUG] VideoExporter: writer started, status=" + String(writer.status.rawValue))
 
+            // ── Prepend sync countdown ────────────────────────────────────────
+            // Generate the 4 distinct frames once (3, 2, 1, flash) and append each
+            // at its writer presentation time.  These go through the same adaptor,
+            // so resolution / fps / codec / color + alpha tags match the rest of
+            // the file automatically.  Identical across every Export All pass.
+            let countdownDigits = (0..<self.countdownSeconds).map { sec in
+                self.makeCountdownPixelBuffer(kind: .number(self.countdownSeconds - sec))
+            }
+            let flashBuffer = self.makeCountdownPixelBuffer(kind: .flash)
+            for i in 0..<countdownTotal {
+                let buffer: CVPixelBuffer?
+                if i < self.countdownSeconds * fpsInt {
+                    buffer = countdownDigits[i / fpsInt]   // F frames per digit
+                } else {
+                    buffer = flashBuffer                   // final flash frame
+                }
+                guard let pb = buffer else { continue }
+                let pts = CMTime(value: CMTimeValue(i) * CMTimeValue(self.frameTicks),
+                                 timescale: self.frameTimescale)
+                self.appendPixelBuffer(pb, at: pts, adaptor: adaptor, writerInput: writerInput)
+            }
+
             // In-flight frames: each holds the committed GPU buffer plus the slot
             // staging texture to read back once it finishes.  Drained FIFO so frames
             // are appended in order (single queue ⇒ buffers complete in commit order).
@@ -608,9 +676,12 @@ final class VideoExporter {
                                  progress:         progress)
             }
 
-            for frameIndex in 0..<totalFrames {
+            for frameIndex in 0..<animFrames {
+                // Writer index is offset past the prepended countdown; content time
+                // (t) is not — the animation still starts from t=0.
+                let writerIndex = countdownTotal + frameIndex
                 // Rational timing — exact for NTSC rates (e.g. 30000/1001).
-                let presentationTime = CMTime(value: CMTimeValue(frameIndex) * CMTimeValue(self.frameTicks),
+                let presentationTime = CMTime(value: CMTimeValue(writerIndex) * CMTimeValue(self.frameTicks),
                                               timescale: self.frameTimescale)
                 let t = Double(frameIndex) * Double(self.frameTicks) / Double(self.frameTimescale)
 
@@ -627,9 +698,10 @@ final class VideoExporter {
                 // Laser hit detection + particle simulation (deterministic, uses frame time)
                 let frameDt     = Float(1.0 / self.frameRate)
                 let frameHitTime = Float(t)
-                let visibleObjs  = self.sceneManager.objects.filter { $0.isVisible }
+                // Pass all objects; nearestHit decides what occludes (visible OR
+                // opaque holdout), so held-out geometry stops the laser in FX passes.
                 self.laserHitSystem.updateHits(lights: self.exportLights,
-                                               objects: visibleObjs)
+                                               objects: self.sceneManager.objects)
                 self.laserHitSystem.updateParticles(dt: frameDt)
                 let sparkGPUData = self.laserHitSystem.buildSparkGPUData()
 
@@ -648,7 +720,7 @@ final class VideoExporter {
                     continue
                 }
                 pending.append((cb: cb, staging: slot.staging,
-                                frameIndex: frameIndex, pts: presentationTime))
+                                frameIndex: writerIndex, pts: presentationTime))
             }
 
             // Drain the frames still in flight, in order.
@@ -862,7 +934,11 @@ final class VideoExporter {
             }
             let opaqueObjects:      [SceneObject]
             let transparentObjects: [SceneObject]
-            if visibleObjects.contains(where: isTransparent) {
+            if suppressTransparent {
+                // Background pass: drop glass so it can't tint the black holdouts.
+                opaqueObjects      = visibleObjects.filter { !isTransparent($0) }
+                transparentObjects = []
+            } else if visibleObjects.contains(where: isTransparent) {
                 opaqueObjects = visibleObjects.filter { !isTransparent($0) }
                 let eye = camera.eyePosition
                 transparentObjects = visibleObjects
@@ -1011,9 +1087,31 @@ final class VideoExporter {
             }
         }
 
+        // ── Luma alpha (ProRes 4444 color passes) ─────────────────────────────
+        // Rewrites the alpha channel to Rec.709 luma of the RGB (RGB unchanged).
+        // Matte (.blackWhite) and 422 passes skip this and keep the coverage alpha.
+        if activeCodec == .proRes4444, colorMode == .color,
+           let gTex     = gradeTex,
+           let pipeline = lumaAlphaPipelineState {
+            if let blit = commandBuffer.makeBlitCommandEncoder() {
+                blit.copy(from: colorTex, to: gTex)
+                blit.endEncoding()
+            }
+            let lumaPass = MTLRenderPassDescriptor()
+            lumaPass.colorAttachments[0].texture     = colorTex
+            lumaPass.colorAttachments[0].loadAction  = .dontCare
+            lumaPass.colorAttachments[0].storeAction = .store
+            if let enc = commandBuffer.makeRenderCommandEncoder(descriptor: lumaPass) {
+                enc.setRenderPipelineState(pipeline)
+                enc.setFragmentTexture(gTex, index: 0)
+                enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                enc.endEncoding()
+            }
+        }
+
         // ── Blit color → staging; synchronize if needed for CPU readback ──────
-        // The blit copies RGBA, so the coverage alpha already in colorTex (geometry
-        // = 1, background/holdout = 0) carries through to the ProRes 4444 matte.
+        // colorTex's alpha holds either the coverage matte (matte/422 passes) or
+        // the Rec.709 luma (4444 color passes); either way it copies straight through.
         if let blit = commandBuffer.makeBlitCommandEncoder() {
             blit.copy(from: colorTex, to: stagingTex)
             if !device.hasUnifiedMemory {
@@ -1365,9 +1463,117 @@ final class VideoExporter {
                          from: MTLRegion(origin: MTLOrigin(x: 0, y: 0, z: 0),
                                          size:   MTLSize(width: width, height: height, depth: 1)),
                          mipmapLevel: 0)
-        // Alpha already carries the coverage matte (geometry = 1, background/holdout
-        // = 0) straight from the render target — no per-pixel CPU pass needed.
+
+        // ProRes 4444 color passes carry alpha = Rec.709 luma (written by the GPU
+        // luma-alpha pass) with full, un-darkened RGB.  Tag the buffer Premultiplied
+        // so the alpha mode propagates into the track format description and the RGB
+        // displays at full brightness downstream (Straight would re-darken it by the
+        // alpha).  Matte/422 passes keep their coverage alpha and the default tag.
+        if activeCodec == .proRes4444 && colorMode == .color {
+            CVBufferSetAttachment(buffer,
+                                  kCVImageBufferAlphaChannelModeKey,
+                                  kCVImageBufferAlphaChannelMode_PremultipliedAlpha,
+                                  .shouldPropagate)
+        }
         return buffer
+    }
+
+    // MARK: - Sync countdown
+
+    private enum CountdownFrameKind {
+        case number(Int)   // big centered digit on black
+        case flash         // solid white alignment frame
+    }
+
+    /// Builds one countdown frame at the export resolution via CoreGraphics, so it
+    /// matches the writer's pixel format exactly.  Opaque (alpha = 255) so it reads
+    /// the same under any downstream alpha interpretation.
+    private func makeCountdownPixelBuffer(kind: CountdownFrameKind) -> CVPixelBuffer? {
+        var pb: CVPixelBuffer?
+        let attrs: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey           as String: width,
+            kCVPixelBufferHeightKey          as String: height
+        ]
+        guard CVPixelBufferCreate(nil, width, height, kCVPixelFormatType_32BGRA,
+                                   attrs as CFDictionary, &pb) == kCVReturnSuccess,
+              let buffer = pb else {
+            print("[DEBUG] VideoExporter: countdown CVPixelBufferCreate failed")
+            return nil
+        }
+
+        CVPixelBufferLockBaseAddress(buffer, [])
+        defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+
+        guard let base = CVPixelBufferGetBaseAddress(buffer) else { return nil }
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(buffer)
+        // BGRA = 32-bit little-endian premultiplied-first.
+        let bitmapInfo = CGImageAlphaInfo.premultipliedFirst.rawValue
+                       | CGBitmapInfo.byteOrder32Little.rawValue
+        guard let ctx = CGContext(data: base, width: width, height: height,
+                                  bitsPerComponent: 8, bytesPerRow: bytesPerRow,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: bitmapInfo) else {
+            print("[DEBUG] VideoExporter: countdown CGContext failed")
+            return nil
+        }
+
+        let rect = CGRect(x: 0, y: 0, width: width, height: height)
+        switch kind {
+        case .flash:
+            ctx.setFillColor(red: 1, green: 1, blue: 1, alpha: 1)
+            ctx.fill(rect)
+
+        case .number(let n):
+            ctx.setFillColor(red: 0, green: 0, blue: 0, alpha: 1)
+            ctx.fill(rect)
+
+            // Draw in CoreGraphics' native y-up space (no flip): a bitmap context's
+            // top scanline lands in memory row 0, which is exactly how the video
+            // pipeline reads the buffer, so the glyph comes out upright.
+            let fontSize = CGFloat(height) * 0.4
+            let font     = CTFontCreateWithName("Helvetica-Bold" as CFString, fontSize, nil)
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font:            font,
+                .foregroundColor: CGColor(red: 1, green: 1, blue: 1, alpha: 1)
+            ]
+            let attr = NSAttributedString(string: String(n), attributes: attrs)
+            let line = CTLineCreateWithAttributedString(attr)
+            // Center the glyph: baseline placed so ascent/descent straddle the middle
+            // (y increases upward).
+            let ascent  = CTFontGetAscent(font)
+            let descent = CTFontGetDescent(font)
+            let lineWidth = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
+            let tx = (CGFloat(width)  - lineWidth) / 2
+            let ty = CGFloat(height) / 2 - (ascent - descent) / 2
+            ctx.textPosition = CGPoint(x: tx, y: ty)
+            CTLineDraw(line, ctx)
+        }
+
+        if activeCodec == .proRes4444 && colorMode == .color {
+            CVBufferSetAttachment(buffer,
+                                  kCVImageBufferAlphaChannelModeKey,
+                                  kCVImageBufferAlphaChannelMode_PremultipliedAlpha,
+                                  .shouldPropagate)
+        }
+        return buffer
+    }
+
+    /// Appends a pre-built pixel buffer (countdown frame) at the given time, waiting
+    /// for the writer input to be ready.  Mirrors appendFrame's readiness loop.
+    private func appendPixelBuffer(_ pb: CVPixelBuffer,
+                                   at presentationTime: CMTime,
+                                   adaptor: AVAssetWriterInputPixelBufferAdaptor,
+                                   writerInput: AVAssetWriterInput) {
+        var waitCount = 0
+        while !writerInput.isReadyForMoreMediaData {
+            Thread.sleep(forTimeInterval: 0.002)
+            waitCount += 1
+            if waitCount > 500 { break }
+        }
+        if writerInput.isReadyForMoreMediaData {
+            adaptor.append(pb, withPresentationTime: presentationTime)
+        }
     }
 
     // MARK: - Animation (independent of Timeline.currentTime)

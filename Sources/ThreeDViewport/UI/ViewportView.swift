@@ -1573,6 +1573,7 @@ final class ViewportView: MTKView {
 
     func startExport(to url: URL, codec: ExportCodec, fps: ExportFrameRate,
                      exportState: ExportState, includeFX: Bool = true,
+                     suppressGlass: Bool = false,
                      onCompletion: ((Error?) -> Void)? = nil) {
         guard let dev = device else {
             print("[DEBUG] ViewportView: startExport — Metal device is nil")
@@ -1615,6 +1616,7 @@ final class ViewportView: MTKView {
         exporter.fogSettings        = includeFX ? fogSettings : nil
         exporter.particleManager    = includeFX ? particleManager : nil
         exporter.includeLaserFX     = includeFX
+        exporter.suppressTransparent = suppressGlass
         exporter.ibl                = renderer?.ibl   // share IBL so exports match preview
         exporter.backgroundEquirect = renderer?.backgroundEquirect   // dedicated bg HDR (if any)
         feedbackProcessor.reset()   // clear live queue; exporter has its own processor
@@ -1652,6 +1654,7 @@ final class ViewportView: MTKView {
         let matte:   Bool            // true → Black+White matte colour mode
         let blackBg: Bool            // true → solid-black background override
         let fx:      Bool            // true → render fog + particles + lasers
+        var suppressGlass: Bool = false  // true → don't draw transparent (glass) objects
     }
 
     /// Runs the full multi-pass export cycle sequentially, writing
@@ -1675,7 +1678,8 @@ final class ViewportView: MTKView {
             passes.append(ExportPass(name: "Actor Solo",  visible: [.actor], matte: false, blackBg: true, fx: false))
             passes.append(ExportPass(name: "Actor Matte", visible: [.actor], matte: true,  blackBg: true, fx: false))
         }
-        passes.append(ExportPass(name: "Background", visible: [.background], matte: false, blackBg: false, fx: false))
+        passes.append(ExportPass(name: "Background", visible: [.background], matte: false, blackBg: false, fx: false,
+                                 suppressGlass: true))
         if present.contains(.macguffin) {
             passes.append(ExportPass(name: "MacGuffin Solo",  visible: [.macguffin], matte: false, blackBg: true, fx: false))
             passes.append(ExportPass(name: "MacGuffin Matte", visible: [.macguffin], matte: true,  blackBg: true, fx: false))
@@ -1699,7 +1703,7 @@ final class ViewportView: MTKView {
             exportState.lastMessage = "Exporting pass \(i + 1)/\(total): \(pass.name)"
             let url = folder.appendingPathComponent("\(projectName).\(nn).\(pass.name).mov")
             startExport(to: url, codec: codec, fps: fps, exportState: exportState,
-                        includeFX: pass.fx) { error in
+                        includeFX: pass.fx, suppressGlass: pass.suppressGlass) { error in
                 if let error = error { onAllComplete(error); return }
                 runPass(i + 1)   // startExport's completion is delivered on the main thread
             }

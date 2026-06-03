@@ -1004,8 +1004,9 @@ final class Renderer: NSObject, MTKViewDelegate {
         // the beam and the translucent glass composites over it.
         let screenSize = SIMD2<Float>(Float(view.drawableSize.width),
                                       Float(view.drawableSize.height))
-        let visibleForHits = sceneManager.objects.filter { $0.isVisible }
-        laserHitSystem.updateHits(lights: animatedLights, objects: visibleForHits)
+        // Pass all objects; nearestHit decides what occludes (visible OR opaque
+        // holdout), so the laser is stopped by held-out geometry in FX passes too.
+        laserHitSystem.updateHits(lights: animatedLights, objects: sceneManager.objects)
         laserHitSystem.updateParticles(dt: dt)
         let sparkGPUData = laserHitSystem.buildSparkGPUData()
 

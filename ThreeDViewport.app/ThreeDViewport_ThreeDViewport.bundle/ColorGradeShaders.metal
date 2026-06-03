@@ -57,3 +57,18 @@ fragment float4 color_grade_fragment(
 
     return float4(saturate(rgb), pix.a);
 }
+
+// ── Luma-alpha pass ────────────────────────────────────────────────────────────
+// Copies RGB unchanged and writes alpha = Rec.709 luma of the RGB.  Used by
+// VideoExporter for ProRes 4444 color passes so the alpha channel carries a luma
+// matte.  The pixel buffer is tagged Premultiplied downstream, so the full RGB
+// displays at correct brightness while the luma sits in alpha as a key.
+fragment float4 luma_alpha_fragment(
+    GradeVertOut        in  [[stage_in]],
+    texture2d<float>    src [[texture(0)]]
+) {
+    constexpr sampler s(filter::nearest, address::clamp_to_edge);
+    float4 pix  = src.sample(s, in.uv);
+    float  luma = dot(pix.rgb, float3(0.2126, 0.7152, 0.0722));
+    return float4(pix.rgb, luma);
+}
