@@ -3,7 +3,7 @@
 The other pages are reference chapters, one feature each. This page is a **guide**:
 it walks through how the pieces combine into real workflows — building layered
 motion, and cutting a scene into clean compositing passes for DaVinci Resolve or an
-LZX Videomancer rig.
+LZX video synthesizer rig.
 
 If a term is new, follow the link to its chapter. Here we focus on how they play
 together.
@@ -95,7 +95,7 @@ A **matte** is a black-and-white image where white = "this is my subject" and bl
   **geometry-coverage alpha** (1 = geometry, 0 = background). See
   [Export](Export.md) for the codec table.
 
-This matters for the synth pipeline: an LZX Videomancer keys on **luma** (the white
+This matters for the synth pipeline: an LZX FKG3 module can key on **luma** (the white
 silhouette), so a Black + White matte pass is what it wants. Resolve, by contrast,
 can blend on the **4444 alpha**. Same scene, two delivery shapes.
 
@@ -126,7 +126,7 @@ object's **class** (Actor / Background / MacGuffin) in the
 - **Scene** — everything, with FX.
 - **Actor Solo / Matte** — just the actors (solo = lit, matte = white silhouette),
   everything else **held out** so the actor's edges stay clean.
-- **Background** — set dressing only, no FX.
+- **Background** — set dressing only, no FX, no Actor, no MacGuffin.
 - **MacGuffin Solo / Matte** — your hero prop, isolated the same way.
 - **FX Solo / Matte** — the effects layer on black.
 
@@ -139,7 +139,7 @@ for you, consistently, across the whole set.
 > 1. Class the character **Actor**, the set **Background**.
 > 2. Leave holdout on for both.
 > 3. Export All on **ProRes 4444**.
-> 4. Feed the **Actor Matte** (white silhouette) to the Videomancer's key input and
+> 4. Feed the **Actor Matte** (white silhouette) to the FKG3's key input and
 >    the **Background** pass to a fill input — the foreground props that overlap the
 >    actor are already punched out of the matte.
 
@@ -224,8 +224,8 @@ Tying it all together, a typical shot:
    layers compose as intended; flip to **Black + White** (**G**) to preview the
    mattes.
 4. **Export.** [Export All Passes](Export.md) on the codec your finishing tool wants
-   — 4444 for Resolve/Videomancer (luma-alpha color + coverage mattes), 422 for a
-   plain colour-grade chain.
+   — 4444 for Resolve (luma-alpha color + coverage mattes), 422 for a
+   plain colour-grade chain using FKG3.
 5. **Composite.** Line the passes up on the white flash frame; key the matte passes,
    stack the solos over the background, add the FX layer last.
 
