@@ -54,7 +54,7 @@ the Probe position and paste it wherever you need it.
 
 **Feed a Path Animator from a known point**
 Copy a Probe/mark/object position, then **Paste** it into a
-[Rotation](Rotation-Path-Animator.md) axis point or a
+[Orbit](Orbit-Path-Animator.md) axis point or a
 [Linear](Linear-Path-Animator.md) line point instead of re-positioning the Probe.
 
 **Match a camera target to a light target**
@@ -69,5 +69,5 @@ identity — handy for re-centering after experimenting.
 
 [Probe Inspector](Probe-Inspector.md) · [Camera Panel](Camera-Panel.md) ·
 [Model Inspector](Model-Inspector.md) · [Lights & Background](Lights-and-Background.md) ·
-[Atmosphere](Atmosphere.md) · [Rotation](Rotation-Path-Animator.md) /
+[Atmosphere](Atmosphere.md) · [Orbit](Orbit-Path-Animator.md) /
 [Linear](Linear-Path-Animator.md) Path Animator.

@@ -73,6 +73,9 @@ struct ProjectData: Codable {
     /// the station's scale once for the whole project).  Tracked groups still
     /// save an entry but the track evaluator overwrites it on first frame.
     var groupBaseTransforms:    [GroupBaseTransformData] = []
+    /// v34: Glue envelopes — geometryless null nodes that parent member objects so
+    /// they animate as a unit.  Empty for older files, which load unchanged.
+    var envelopes:              [EnvelopeData] = []
 
     // MARK: - Memberwise init (required because we define init(from:) below)
 
@@ -108,7 +111,8 @@ struct ProjectData: Codable {
          cameraEasingMode:    Int                     = 0,
          lightEasingModes:    [Int]                   = [],
          fogEasingMode:       Int                     = 0,
-         particleEmitterEasingModes: [Int]            = []) {
+         particleEmitterEasingModes: [Int]            = [],
+         envelopes:           [EnvelopeData]          = []) {
         self.version             = version
         self.modelPath           = modelPath
         self.modelPaths          = modelPaths
@@ -142,6 +146,7 @@ struct ProjectData: Codable {
         self.lightEasingModes    = lightEasingModes
         self.fogEasingMode       = fogEasingMode
         self.particleEmitterEasingModes = particleEmitterEasingModes
+        self.envelopes           = envelopes
     }
 
     // MARK: - Custom decoder
@@ -189,6 +194,38 @@ struct ProjectData: Codable {
         lightEasingModes    = (try? c.decode([Int].self, forKey: .lightEasingModes))    ?? []
         fogEasingMode       = (try? c.decode(Int.self,   forKey: .fogEasingMode))       ?? 0
         particleEmitterEasingModes = (try? c.decode([Int].self, forKey: .particleEmitterEasingModes)) ?? []
+        envelopes           = (try? c.decode([EnvelopeData].self, forKey: .envelopes)) ?? []
+    }
+}
+
+// v34: One Glue envelope.  `transform` is the column-major 4×4 origin matrix (16
+// floats).  `memberIndices` reference objects by their position in the rebuilt
+// object array — the same positional convention the loader already uses to
+// reattach per-object state (isVisible, objectClass, …).  Members re-derive their
+// localTransform from this origin on load, so nothing is stored per member.
+struct EnvelopeData: Codable {
+    var name:          String
+    var transform:     [Float]        = []   // 16 floats, column-major
+    var keyframes:     [KeyframeData] = []
+    var easingMode:    Int            = 0
+    var memberIndices: [Int]          = []
+
+    init(from decoder: Decoder) throws {
+        let c          = try decoder.container(keyedBy: CodingKeys.self)
+        name           = (try? c.decode(String.self,        forKey: .name))          ?? "Envelope"
+        transform      = (try? c.decode([Float].self,       forKey: .transform))     ?? []
+        keyframes      = (try? c.decode([KeyframeData].self, forKey: .keyframes))     ?? []
+        easingMode     = (try? c.decode(Int.self,           forKey: .easingMode))    ?? 0
+        memberIndices  = (try? c.decode([Int].self,         forKey: .memberIndices)) ?? []
+    }
+
+    init(name: String, transform: [Float], keyframes: [KeyframeData],
+         easingMode: Int, memberIndices: [Int]) {
+        self.name          = name
+        self.transform     = transform
+        self.keyframes     = keyframes
+        self.easingMode    = easingMode
+        self.memberIndices = memberIndices
     }
 }
 

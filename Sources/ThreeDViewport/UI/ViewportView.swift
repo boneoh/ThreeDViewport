@@ -87,11 +87,13 @@ final class ViewportView: MTKView {
     // CameraPanel inspector.  Lives here so the choice survives panel
     // hide/show cycles.
     let cameraPanelState   = CameraPanelState()
-    // Rotation Path Animator helper state — lives here so captures + field values
+    // Orbit Path Animator helper state — lives here so captures + field values
     // survive panel hide/show cycles.
-    let rotationPathState  = RotationPathAnimatorState()
+    let orbitPathState  = OrbitPathAnimatorState()
     // Linear Path Animator helper state.
     let linearPathState    = LinearPathAnimatorState()
+    // Spin Animator helper state.
+    let spinAnimatorState  = SpinAnimatorState()
     private var playbackCancellable: AnyCancellable?
 
     // Phase 6: HUD observable state — AppDelegate embeds the SwiftUI overlay using this.
@@ -742,6 +744,7 @@ final class ViewportView: MTKView {
 
         // ── Objects: world-space bounding boxes ────────────────────────────────
         for obj in sceneManager.objects {
+            if obj.isEnvelope { continue }   // null node — no geometry to frame
             let groupT = obj.groupID.flatMap { sceneManager.groupTransforms[$0] }
                 ?? matrix_identity_float4x4
             let rendered = groupT * obj.transform
@@ -1450,6 +1453,67 @@ final class ViewportView: MTKView {
         default:
             break   // group / fog / particles not supported
         }
+    }
+
+    // MARK: - Spin Animator
+
+    /// Replaces the object track's keyframes in [start, end] with a constant,
+    /// wobble-free self-spin about the object's own local X/Y/Z axis.
+    ///
+    /// Each keyframe is a *pure rotation delta* (translation 0, scale 1), so the
+    /// renderer's `baseTransform × delta` spins the object about its own local
+    /// origin while keeping its base position and scale — and a local-origin
+    /// rotation is parent-independent, so it composes cleanly under a glued
+    /// envelope's orbit.  The track is forced to LINEAR easing: slerp between
+    /// equal-angle steps is exact constant-velocity rotation (no spline overshoot).
+    /// `axisIndex` 0/1/2 = local X/Y/Z.  Signed `revolutions` sets direction.
+    func generateSpin(ref: TrackRef,
+                      axisIndex:  Int,
+                      revolutions: Float,
+                      keyframesPerRevolution: Float,
+                      startTime: Double,
+                      endTime:   Double) {
+        guard case .object(let i) = ref, i >= 0, i < sceneManager.objects.count else { return }
+        let obj = sceneManager.objects[i]
+
+        let lo = min(startTime, endTime) - 1e-6
+        let hi = max(startTime, endTime) + 1e-6
+
+        if obj.keyframeTrack == nil { obj.keyframeTrack = KeyframeTrack() }
+        // Linear easing guarantees constant-velocity, on-axis rotation.
+        obj.keyframeTrack?.easingMode = .linear
+        obj.keyframeTrack?.keyframes.removeAll { $0.time >= lo && $0.time <= hi }
+
+        let axis: SIMD3<Float>
+        switch axisIndex {
+        case 0:  axis = SIMD3<Float>(1, 0, 0)
+        case 2:  axis = SIMD3<Float>(0, 0, 1)
+        default: axis = SIMD3<Float>(0, 1, 0)
+        }
+
+        let perRev = max(3.0, keyframesPerRevolution)   // <180° steps → correct short-arc slerp
+        let turns  = abs(revolutions)
+        let count  = max(2, Int((turns * perRev).rounded(.up)) + 1)
+        let deg2rad = Float.pi / 180.0
+        let opacity = obj.material.opacity
+
+        let t0 = min(startTime, endTime)
+        let t1 = max(startTime, endTime)
+        for k in 0..<count {
+            let s     = Float(k) / Float(count - 1)
+            let theta = revolutions * 360.0 * s * deg2rad     // starts at 0 → no pop
+            let rot   = simd_quatf(angle: theta, axis: axis)
+            let time  = t0 + Double(s) * (t1 - t0)
+            obj.keyframeTrack?.addKeyframe(TransformKeyframe(
+                time:        time,
+                translation: SIMD3<Float>(0, 0, 0),   // pure-rotation delta
+                rotation:    rot,
+                scale:       SIMD3<Float>(1, 1, 1),
+                opacity:     opacity))
+        }
+        onKeyframeStamped?(.object(i))
+        print("[DEBUG] ViewportView: generateSpin — \(count) keyframes for '\(obj.name)'"
+            + " axis=\(axisIndex) revs=\(revolutions)")
     }
 
     // MARK: - Add / Clear Atmosphere Keyframes

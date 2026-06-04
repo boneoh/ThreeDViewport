@@ -14,7 +14,7 @@ import simd
 
 /// Observable state, held on the ViewportView so captures + field values survive
 /// panel hide/show.
-final class RotationPathAnimatorState: ObservableObject {
+final class OrbitPathAnimatorState: ObservableObject {
     @Published var axisStart:  SIMD3<Float>? = nil
     @Published var axisEnd:    SIMD3<Float>? = nil
     @Published var trackLabel: String?       = nil
@@ -33,8 +33,8 @@ final class RotationPathAnimatorState: ObservableObject {
     var capturedRef: TrackRef? = nil
 }
 
-struct RotationPathAnimatorPanel: View {
-    @ObservedObject var state:     RotationPathAnimatorState
+struct OrbitPathAnimatorPanel: View {
+    @ObservedObject var state:     OrbitPathAnimatorState
     @ObservedObject var clipboard: CoordinateClipboard
 
     let captureAxisStart: () -> Void

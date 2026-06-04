@@ -1,10 +1,14 @@
-# Rotation Path Animator
+# Orbit Path Animator
 
 Generates keyframes that move the selected camera, light, or object along a
-**helix / arc / corkscrew** around an axis. Great for orbits, spin-in-place, and
-graceful curved moves that are tedious to hand-key.
+**helix / arc / corkscrew** around an axis. Great for orbits and graceful curved
+moves that are tedious to hand-key.
 
-**Open:** Window ▸ Path Animator ▸ Rotation…
+> For making an object **spin on its own axis** (rotate in place), use the
+> [Spin Path Animator](Spin-Path-Animator.md) instead — it produces a clean,
+> constant, wobble-free self-spin.
+
+**Open:** Window ▸ Path Animator ▸ Orbit…
 
 ## Workflow
 
@@ -27,8 +31,8 @@ graceful curved moves that are tedious to hand-key.
 - **Aim:** camera and lights aim at a **fixed point** (the axis midpoint); objects
   aim at the **same-height** axis point (so they turn to follow the column as they
   rise). Object −Z is treated as "forward."
-- A small radius (e.g. **0.001**) makes an object **spin in place** with no visible
-  orbital wobble.
+- The axis is **world-relative** — both Capture Axis points are world-space Probe
+  positions, so the orbit is laid out in world coordinates.
 
 ## Notes
 
@@ -36,5 +40,9 @@ graceful curved moves that are tedious to hand-key.
   time window and inserts the generated ones.
 - Object keyframes **preserve the object's current scale**.
 - Camera/light aim points are per-keyframe, so you can nudge them afterwards.
+- The generated keyframes write a **world** pose, so this is intended for **root**
+  objects (cameras, lights, ungrouped models). For two [glued](Glue.md) objects,
+  drive the **orbit on the envelope** and add the **spin on the child** with the
+  [Spin Path Animator](Spin-Path-Animator.md).
 
-See also: [Linear Path Animator](Linear-Path-Animator.md).
+See also: [Spin Path Animator](Spin-Path-Animator.md) · [Linear Path Animator](Linear-Path-Animator.md).

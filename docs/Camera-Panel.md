@@ -24,7 +24,7 @@ All coordinate fields use the shared clipboard, so you can paste a position from
 
 - Stamp with **I** (Camera mode) or the **Add Camera Keyframe** button, then refine
   in the [Timeline Editor](Timeline-Editor.md) (per-track easing applies).
-- For smooth orbital / dolly moves, the [Rotation](Rotation-Path-Animator.md) and
+- For smooth orbital / dolly moves, the [Orbit](Orbit-Path-Animator.md) and
   [Linear](Linear-Path-Animator.md) Path Animators can generate camera keyframes.
 - Arrow keys move the camera in the viewport (truck/pedestal; Shift = free-look;
   `[` `]` orbit; `+`/`−` focal length). See the [keyboard reference](../KEYBOARD_REFERENCE.md).

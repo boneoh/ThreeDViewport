@@ -34,11 +34,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // colour so a run of related marks can share one colour.
     private var lastMarkColor: NSColor = .systemYellow
 
-    // Rotation Path Animator helper panel.
-    private var rotationPathPanel: NSPanel?
+    // Orbit Path Animator helper panel.
+    private var orbitPathPanel: NSPanel?
 
     // Linear Path Animator helper panel.
     private var linearPathPanel: NSPanel?
+
+    // Spin Animator helper panel.
+    private var spinPanel: NSPanel?
 
     // Global settings panel.
     private var settingsPanel: NSPanel?
@@ -729,6 +732,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         removeAllItem.target = self
         editMenu.addItem(removeAllItem)
 
+        editMenu.addItem(.separator())
+
+        // Glue — bind two or more objects into one animatable unit (envelope).
+        let glueItem = NSMenuItem(
+            title: "Glue Objects…",
+            action: #selector(glueObjects(_:)),
+            keyEquivalent: ""
+        )
+        glueItem.target = self
+        editMenu.addItem(glueItem)
+
+        // Unglue — enabled (via validateMenuItem) only when an envelope is selected.
+        let unglueItem = NSMenuItem(
+            title: "Unglue",
+            action: #selector(unglueSelected(_:)),
+            keyEquivalent: ""
+        )
+        unglueItem.target = self
+        editMenu.addItem(unglueItem)
+
         // ── View menu — rendering toggles only ───────────────────────────────
         let viewItem = NSMenuItem()
         mainMenu.addItem(viewItem)
@@ -879,13 +902,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         let pathAnimatorItem = NSMenuItem(title: "Path Animator", action: nil, keyEquivalent: "")
         let pathSubmenu = NSMenu(title: "Path Animator")
-        let rotationPathItem = NSMenuItem(
-            title: "Rotation…",
-            action: #selector(showRotationPathAnimator(_:)),
+        let orbitPathItem = NSMenuItem(
+            title: "Orbit…",
+            action: #selector(showOrbitPathAnimator(_:)),
             keyEquivalent: ""
         )
-        rotationPathItem.target = self
-        pathSubmenu.addItem(rotationPathItem)
+        orbitPathItem.target = self
+        pathSubmenu.addItem(orbitPathItem)
         let linearPathItem = NSMenuItem(
             title: "Linear…",
             action: #selector(showLinearPathAnimator(_:)),
@@ -893,6 +916,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         )
         linearPathItem.target = self
         pathSubmenu.addItem(linearPathItem)
+        let spinItem = NSMenuItem(
+            title: "Spin…",
+            action: #selector(showSpinAnimator(_:)),
+            keyEquivalent: ""
+        )
+        spinItem.target = self
+        pathSubmenu.addItem(spinItem)
         pathAnimatorItem.submenu = pathSubmenu
         windowMenu.addItem(pathAnimatorItem)
 
@@ -1790,6 +1820,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             // Disabled when no model is in the scene (need something to follow).
             return viewportView?.sceneManager.primaryObject != nil
         }
+        if menuItem.action == #selector(glueObjects(_:)) {
+            // Need at least two root objects to bind together.
+            return (viewportView?.sceneManager.rootObjectIndicesSorted.count ?? 0) >= 2
+        }
+        if menuItem.action == #selector(unglueSelected(_:)) {
+            // Enabled only when the current selection is an envelope.
+            return viewportView?.sceneManager.selectedObject?.isEnvelope == true
+        }
         if menuItem.action == #selector(toggleColorMode(_:)) {
             // Three modes can't be shown by a single checkmark, so reflect the
             // current mode in the title instead and leave the checkmark off.
@@ -2632,15 +2670,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         print("[DEBUG] AppDelegate: linear path animator created \(samples.count) keyframes")
     }
 
-    // MARK: - Rotation Path Animator
+    // MARK: - Orbit Path Animator
 
-    @objc private func showRotationPathAnimator(_ sender: Any) {
-        if let panel = rotationPathPanel {
+    @objc private func showOrbitPathAnimator(_ sender: Any) {
+        if let panel = orbitPathPanel {
             panel.isVisible ? panel.orderOut(nil) : panel.makeKeyAndOrderFront(nil)
             return
         }
         guard let viewport = viewportView else { return }
-        let state = viewport.rotationPathState
+        let state = viewport.orbitPathState
 
         let panel = KeyForwardingPanel(
             contentRect: NSRect(x: 0, y: 0, width: 300, height: 560),
@@ -2648,14 +2686,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             backing:     .buffered,
             defer:       false
         )
-        panel.title                  = "Rotation Path Animator"
+        panel.title                  = "Orbit Path Animator"
         panel.isFloatingPanel        = true
         panel.becomesKeyOnlyIfNeeded = false
         panel.forwardTarget          = viewport
         panel.level                  = .normal
         panel.hidesOnDeactivate      = false
 
-        panel.contentView = FirstClickHostingView(rootView: RotationPathAnimatorPanel(
+        panel.contentView = FirstClickHostingView(rootView: OrbitPathAnimatorPanel(
             state: state,
             clipboard: viewport.coordinateClipboard,
             captureAxisStart: { [weak viewport] in
@@ -2666,9 +2704,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 state.axisEnd = viewport?.probeConfig.position
                 state.status = "Captured axis end."
             },
-            captureStart: { [weak self] in self?.rotationPathCaptureStart() },
-            captureEnd:   { [weak self] in self?.rotationPathCaptureEnd() },
-            create:       { [weak self] in self?.rotationPathCreate() }
+            captureStart: { [weak self] in self?.orbitPathCaptureStart() },
+            captureEnd:   { [weak self] in self?.orbitPathCaptureEnd() },
+            create:       { [weak self] in self?.orbitPathCreate() }
         ))
 
         if let win = window {
@@ -2678,7 +2716,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             panel.center()
         }
 
-        rotationPathPanel = panel
+        orbitPathPanel = panel
         panel.makeKeyAndOrderFront(nil)
         print("[DEBUG] AppDelegate: rotation path animator panel opened")
     }
@@ -2697,10 +2735,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
     }
 
-    private func rotationPathCaptureStart() {
+    private func orbitPathCaptureStart() {
         guard let viewport = viewportView,
               let editor = timelineEditorWC?.editorView else { return }
-        let state = viewport.rotationPathState
+        let state = viewport.orbitPathState
         guard let ref = editor.selectedTrackRef else {
             state.status = "Select a camera, light, or object track in the Timeline first."
             return
@@ -2716,16 +2754,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
     }
 
-    private func rotationPathCaptureEnd() {
+    private func orbitPathCaptureEnd() {
         guard let viewport = viewportView else { return }
-        let state = viewport.rotationPathState
+        let state = viewport.orbitPathState
         state.endTime = viewport.timeline.currentTime
         state.status  = "Captured end time."
     }
 
-    private func rotationPathCreate() {
+    private func orbitPathCreate() {
         guard let viewport = viewportView else { return }
-        let state = viewport.rotationPathState
+        let state = viewport.orbitPathState
 
         guard let a = state.axisStart, let b = state.axisEnd else {
             state.status = "Capture both axis points first."; return
@@ -2757,6 +2795,100 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         markDirty()
         state.status = "Created \(samples.count) keyframes for \(pathAnimatorTrackLabel(ref))."
         print("[DEBUG] AppDelegate: path animator created \(samples.count) keyframes")
+    }
+
+    // MARK: - Spin Animator
+
+    @objc private func showSpinAnimator(_ sender: Any) {
+        if let panel = spinPanel {
+            panel.isVisible ? panel.orderOut(nil) : panel.makeKeyAndOrderFront(nil)
+            return
+        }
+        guard let viewport = viewportView else { return }
+        let state = viewport.spinAnimatorState
+
+        let panel = KeyForwardingPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 300, height: 360),
+            styleMask:   [.titled, .closable, .miniaturizable, .resizable, .utilityWindow, .nonactivatingPanel],
+            backing:     .buffered,
+            defer:       false
+        )
+        panel.title                  = "Spin Path Animator"
+        panel.isFloatingPanel        = true
+        panel.becomesKeyOnlyIfNeeded = false
+        panel.forwardTarget          = viewport
+        panel.level                  = .normal
+        panel.hidesOnDeactivate      = false
+
+        panel.contentView = FirstClickHostingView(rootView: SpinAnimatorPanel(
+            state: state,
+            captureStart: { [weak self] in self?.spinCaptureStart() },
+            captureEnd:   { [weak self] in self?.spinCaptureEnd() },
+            create:       { [weak self] in self?.spinCreate() }
+        ))
+
+        if let win = window {
+            let f = win.frame
+            panel.setFrameOrigin(NSPoint(x: f.minX + 20, y: f.maxY - panel.frame.height - 40))
+        } else {
+            panel.center()
+        }
+
+        spinPanel = panel
+        panel.makeKeyAndOrderFront(nil)
+        print("[DEBUG] AppDelegate: spin animator panel opened")
+    }
+
+    private func spinCaptureStart() {
+        guard let viewport = viewportView,
+              let editor = timelineEditorWC?.editorView else { return }
+        let state = viewport.spinAnimatorState
+        guard let ref = editor.selectedTrackRef else {
+            state.status = "Select an object track in the Timeline first."
+            return
+        }
+        guard case .object = ref else {
+            state.status = "Spin supports object tracks only."
+            return
+        }
+        state.capturedRef = ref
+        state.trackLabel  = pathAnimatorTrackLabel(ref)
+        state.startTime   = viewport.timeline.currentTime
+        state.status      = "Captured start time."
+    }
+
+    private func spinCaptureEnd() {
+        guard let viewport = viewportView else { return }
+        let state = viewport.spinAnimatorState
+        state.endTime = viewport.timeline.currentTime
+        state.status  = "Captured end time."
+    }
+
+    private func spinCreate() {
+        guard let viewport = viewportView else { return }
+        let state = viewport.spinAnimatorState
+
+        guard let ref = state.capturedRef, let t0 = state.startTime, let t1 = state.endTime else {
+            state.status = "Capture the track and start/end times first."; return
+        }
+        guard abs(t1 - t0) > 1e-4 else {
+            state.status = "Start and end times must differ."; return
+        }
+        guard let revs = Float(state.revolutions), revs != 0 else {
+            state.status = "Revolutions must be a non-zero number."; return
+        }
+        guard let perRev = Float(state.perRev), perRev >= 3 else {
+            state.status = "Keyframes / rev must be ≥ 3."; return
+        }
+
+        viewport.generateSpin(ref: ref, axisIndex: state.axisIndex,
+                              revolutions: revs, keyframesPerRevolution: perRev,
+                              startTime: t0, endTime: t1)
+
+        timelineEditorWC?.editorView.needsDisplay = true
+        markDirty()
+        state.status = "Created spin for \(pathAnimatorTrackLabel(ref))."
+        print("[DEBUG] AppDelegate: spin animator created keyframes")
     }
 
     // MARK: - Timeline Duration
@@ -3530,12 +3662,104 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         let response = alert.runModal()
         if response == .alertFirstButtonReturn {
-            // Removes the root and all sub-objects that share its groupID.
-            scene.removeGroup(containing: index)
+            if obj.isEnvelope {
+                // Envelopes have no groupID — unglue (re-roots members) instead.
+                scene.removeEnvelope(at: index)
+                scene.selectedIndex = 0
+            } else {
+                // Removes the root and all sub-objects that share its groupID.
+                scene.removeGroup(containing: index)
+            }
             markDirty()
             timelineEditorWC?.updateWindowHeight()
             refreshCameraFollowTargets()
         }
+    }
+
+    // MARK: - Glue (envelopes)
+
+    @objc private func glueObjects(_ sender: Any) {
+        guard let scene = viewportView?.sceneManager else { return }
+        let roots = scene.rootObjectIndicesSorted.filter { !scene.objects[$0].isEnvelope }
+        guard roots.count >= 2 else { return }
+
+        // Candidate display name: group name for grouped models, else object name.
+        let candidates: [GlueOptions.Candidate] = roots.map { idx in
+            let obj = scene.objects[idx]
+            let name = obj.groupID.map { scene.groupName(for: $0) } ?? obj.name
+            return GlueOptions.Candidate(id: idx, name: name)
+        }
+
+        // Pre-select the currently selected root (plus a sensible second one) so the
+        // common "select A, glue with B" flow needs minimal clicking.
+        let sel = scene.selectedIndex
+        var preselected = Set<Int>()
+        if roots.contains(sel) { preselected.insert(sel) }
+        let anchor = preselected.first ?? roots[0]
+        let envCount = scene.objects.filter { $0.isEnvelope }.count
+
+        let options = GlueOptions(
+            candidates: candidates,
+            selected:   preselected,
+            anchor:     anchor,
+            name:       "Envelope \(envCount + 1)"
+        )
+
+        let alert = NSAlert()
+        alert.messageText     = "Glue Objects"
+        alert.informativeText = "Bind two or more objects so they move and animate as one unit."
+        alert.addButton(withTitle: "Glue")
+        alert.addButton(withTitle: "Cancel")
+        // NSAlert clips an accessory view that has no explicit frame, which both
+        // shrinks the panel and stops its controls (e.g. the name field) from
+        // receiving clicks/keystrokes.  Size the hosting view to its content.
+        let hosting = NSHostingView(rootView: GlueSheetView(options: options))
+        hosting.frame = NSRect(origin: .zero, size: hosting.fittingSize)
+        alert.accessoryView = hosting
+        alert.layout()
+        // Make the alert's window key so the SwiftUI text field can become editable.
+        alert.window.makeFirstResponder(hosting)
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let members = Array(options.selected)
+        guard members.count >= 2, options.selected.contains(options.anchor) else {
+            let warn = NSAlert()
+            warn.messageText = "Select at least two objects (including the anchor) to glue."
+            warn.runModal()
+            return
+        }
+        let trimmed = options.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let envName = trimmed.isEmpty ? "Envelope \(envCount + 1)" : trimmed
+
+        if let envIndex = scene.makeEnvelope(name: envName,
+                                             anchorIndex: options.anchor,
+                                             memberIndices: members) {
+            scene.selectedIndex = envIndex
+            markDirty()
+            timelineEditorWC?.updateWindowHeight()
+            refreshCameraFollowTargets()
+            print("[DEBUG] AppDelegate: glued \(members.count) objects into '\(envName)'")
+        }
+    }
+
+    @objc private func unglueSelected(_ sender: Any) {
+        guard let scene = viewportView?.sceneManager,
+              let obj = scene.selectedObject, obj.isEnvelope else { return }
+        let index = scene.selectedIndex
+
+        let alert = NSAlert()
+        alert.messageText     = "Unglue \"\(obj.name)\"?"
+        alert.informativeText = "Members become independent again, keeping their current positions."
+        alert.addButton(withTitle: "Unglue")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        scene.removeEnvelope(at: index)
+        scene.selectedIndex = 0
+        markDirty()
+        timelineEditorWC?.updateWindowHeight()
+        refreshCameraFollowTargets()
     }
 
     @objc private func confirmRemoveAll(_ sender: Any) {

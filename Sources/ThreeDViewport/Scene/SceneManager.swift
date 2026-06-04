@@ -174,6 +174,75 @@ final class SceneManager {
         }
     }
 
+    // MARK: - Glue (envelope) helpers
+
+    /// Creates a geometryless "envelope" null node and parents the given member
+    /// objects to it so they move and animate as one unit.  The envelope origin is
+    /// placed at `anchorIndex`'s world position; each member freezes its current
+    /// world pose as a localTransform relative to that origin (so nothing moves).
+    /// Returns the new envelope's index in `objects`, or nil on bad input.
+    @discardableResult
+    func makeEnvelope(name: String, anchorIndex: Int, memberIndices: [Int]) -> Int? {
+        guard anchorIndex >= 0, anchorIndex < objects.count else {
+            print("[DEBUG] SceneManager: makeEnvelope — anchorIndex out of range")
+            return nil
+        }
+        let members = memberIndices.filter { $0 >= 0 && $0 < objects.count }
+        guard members.count >= 2 else {
+            print("[DEBUG] SceneManager: makeEnvelope — need at least two members")
+            return nil
+        }
+
+        // Envelope origin = anchor object's world origin (translation only).
+        let aPos = objects[anchorIndex].transform.columns.3
+        let envT = TransformMath.translation(SIMD3<Float>(aPos.x, aPos.y, aPos.z))
+
+        let env            = SceneObject(name: name)
+        env.isEnvelope     = true
+        env.transform      = envT
+        env.baseTransform  = envT
+        env.localTransform = envT
+        objects.append(env)
+        let envIndex = objects.count - 1
+
+        // Freeze each member's current world pose relative to the envelope origin.
+        let invEnv = simd_inverse(envT)
+        for mi in members {
+            let m = objects[mi]
+            let local = invEnv * m.transform
+            m.parentIndex    = envIndex
+            m.localTransform = local
+            m.baseTransform  = local   // hierarchical parts store base = LOCAL
+        }
+
+        print("[DEBUG] SceneManager: makeEnvelope '\(name)' idx=\(envIndex)"
+            + " members=\(members) anchor=\(anchorIndex)")
+        return envIndex
+    }
+
+    /// Removes the envelope at `index`, re-rooting its members in place (their
+    /// current world transform is preserved, parentIndex cleared) so nothing jumps.
+    func removeEnvelope(at index: Int) {
+        guard index >= 0, index < objects.count, objects[index].isEnvelope else {
+            print("[DEBUG] SceneManager: removeEnvelope — index \(index) is not an envelope")
+            return
+        }
+        // Re-root members: world transform already holds their current pose; make
+        // localTransform match it (roots store local == world) and drop the parent.
+        for m in objects where m.parentIndex == index {
+            m.parentIndex    = nil
+            m.localTransform = m.transform
+            m.baseTransform  = m.transform
+        }
+        objects.remove(at: index)
+        // Removal shifts every later index down by one — fix up any parentIndex that
+        // pointed past the removed slot so other hierarchies stay valid.
+        for o in objects {
+            if let p = o.parentIndex, p > index { o.parentIndex = p - 1 }
+        }
+        print("[DEBUG] SceneManager: removeEnvelope — removed idx=\(index), remaining=\(objects.count)")
+    }
+
     // MARK: - Camera follow helpers
 
     /// Returns the world-space follow state for the named object — the data needed

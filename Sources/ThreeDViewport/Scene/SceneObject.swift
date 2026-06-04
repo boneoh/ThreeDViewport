@@ -47,6 +47,13 @@ final class SceneObject {
     // Nil = not part of any group (single-mesh models).
     var groupID: Int?
 
+    // True for "envelope" null nodes — a geometryless transform parent created by
+    // the Glue feature.  Members set their parentIndex to the envelope's index so
+    // applyHierarchy() drives them as a unit.  Has no GPU buffers (indexCount == 0),
+    // so the geometry encoder already skips it; this flag lets callers that iterate
+    // all objects (director fit, etc.) recognise and skip it explicitly.
+    var isEnvelope: Bool = false
+
     // The world transform used for rendering each frame.
     // For root parts (parentIndex == nil): directly driven by animation / interaction.
     // For hierarchical parts (parentIndex != nil): recomputed every frame by

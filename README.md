@@ -80,8 +80,10 @@ Each panel has its own page under [`docs/`](docs/) with full controls, keystroke
 | Color Grade | Window → Color Grade… · ⌘⇧G | [Color-Grade](docs/Color-Grade.md) |
 | Feedback | Window → Feedback… · ⌘F | [Feedback](docs/Feedback.md) |
 | Probe Inspector (+ Marks) | Window → Probe Inspector… | [Probe-Inspector](docs/Probe-Inspector.md) |
-| Path Animator — Rotation | Window → Path Animator → Rotation… | [Rotation-Path-Animator](docs/Rotation-Path-Animator.md) |
+| Path Animator — Orbit | Window → Path Animator → Orbit… | [Orbit-Path-Animator](docs/Orbit-Path-Animator.md) |
 | Path Animator — Linear | Window → Path Animator → Linear… | [Linear-Path-Animator](docs/Linear-Path-Animator.md) |
+| Path Animator — Spin | Window → Path Animator → Spin… | [Spin-Path-Animator](docs/Spin-Path-Animator.md) |
+| Glue (Envelopes) | Edit → Glue Objects… | [Glue](docs/Glue.md) |
 | Settings | ThreeDViewport → Settings… · ⌘, | [Settings](docs/Settings.md) |
 
 See also [Viewport-Navigation](docs/Viewport-Navigation.md), [Export](docs/Export.md), [Copy / Paste / Zero](docs/Coordinate-Clipboard.md), and [KEYBOARD_REFERENCE](KEYBOARD_REFERENCE.md).
@@ -96,7 +98,7 @@ Open `.glb` (single binary) or `.gltf` + `.bin` (JSON + sidecar) via **File → 
 
 ### Animate with keyframes
 
-Stamp keyframes with **I** for whichever mode is active — Object (`O`), Model group (`M`), Camera, or Light (`L`) — then refine them in the [Timeline Editor](docs/Timeline-Editor.md), which supports retiming, copy/paste, multi-select, and per-track easing (linear or Catmull-Rom spline tiers). For smooth generated motion, the [Rotation](docs/Rotation-Path-Animator.md) and [Linear](docs/Linear-Path-Animator.md) Path Animators build whole orbit / arc / dolly paths from a couple of Probe points.
+Stamp keyframes with **I** for whichever mode is active — Object (`O`), Model group (`M`), Camera, or Light (`L`) — then refine them in the [Timeline Editor](docs/Timeline-Editor.md), which supports retiming, copy/paste, multi-select, and per-track easing (linear or Catmull-Rom spline tiers). For smooth generated motion, the [Orbit](docs/Orbit-Path-Animator.md), [Linear](docs/Linear-Path-Animator.md), and [Spin](docs/Spin-Path-Animator.md) Path Animators build whole orbit / arc / dolly paths and wobble-free self-spins from a couple of Probe points or a time window.
 
 ### Camera follow
 

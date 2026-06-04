@@ -119,7 +119,12 @@ final class ProjectFile {
             return path
         }
 
-        let objectsData: [ObjectData] = vp.sceneManager.objects.map { obj in
+        // Exclude envelope null nodes — they have no geometry / sourceURL and are
+        // restored separately via `envelopes`.  Keeping them out of objectsData
+        // preserves the positional objectsData[i] ↔ scene.objects[i] match on load,
+        // where the rebuilt array contains only model objects before envelopes are
+        // re-created.
+        let objectsData: [ObjectData] = vp.sceneManager.objects.filter { !$0.isEnvelope }.map { obj in
             let kfData: [KeyframeData] = (obj.keyframeTrack?.keyframes ?? []).map { kf in
                 KeyframeData(
                     time: kf.time,
@@ -291,8 +296,45 @@ final class ProjectFile {
             ))
         }
 
+        // ── Glue envelopes (v34) ──────────────────────────────────────────────
+        // Member objects are referenced by their index in the NON-envelope object
+        // list (the order the loader rebuilds from modelPaths), so the references
+        // stay valid even when envelopes are interleaved in the live array.
+        let allObjects = vp.sceneManager.objects
+        var nonEnvIndexOf = [Int: Int]()   // full array index → non-envelope index
+        var nonEnvCounter = 0
+        for (i, o) in allObjects.enumerated() {
+            if o.isEnvelope { continue }
+            nonEnvIndexOf[i] = nonEnvCounter
+            nonEnvCounter += 1
+        }
+        let envelopeData: [EnvelopeData] = allObjects.enumerated().compactMap { (envIdx, env) in
+            guard env.isEnvelope else { return nil }
+            let members: [Int] = allObjects.indices
+                .filter { allObjects[$0].parentIndex == envIdx }
+                .compactMap { nonEnvIndexOf[$0] }
+            guard !members.isEmpty else { return nil }
+            let kfData: [KeyframeData] = (env.keyframeTrack?.keyframes ?? []).map { kf in
+                KeyframeData(
+                    time: kf.time,
+                    tx: kf.translation.x, ty: kf.translation.y, tz: kf.translation.z,
+                    rx: kf.rotation.imag.x, ry: kf.rotation.imag.y,
+                    rz: kf.rotation.imag.z, rw: kf.rotation.real,
+                    sx: kf.scale.x, sy: kf.scale.y, sz: kf.scale.z,
+                    opacity: kf.opacity
+                )
+            }
+            return EnvelopeData(
+                name:          env.name,
+                transform:     encodeMatrix(env.baseTransform),
+                keyframes:     kfData,
+                easingMode:    (env.keyframeTrack?.easingMode ?? .linear).rawValue,
+                memberIndices: members
+            )
+        }
+
         return ProjectData(
-            version:             32,   // v32: per-track easing for camera/light/fog/particle tracks
+            version:             34,   // v34: Glue envelopes
             modelPath:           nil,           // v3+ uses modelPaths instead
             modelPaths:          modelPaths,
             timeline:            timelineData,
@@ -342,7 +384,8 @@ final class ProjectFile {
             cameraEasingMode:    (cam.keyframeTrack?.easingMode ?? .linear).rawValue,
             lightEasingModes:    lm.keyframeTracks.map { ($0?.easingMode ?? .linear).rawValue },
             fogEasingMode:       (vp.fogSettings.keyframeTrack?.easingMode ?? .linear).rawValue,
-            particleEmitterEasingModes: vp.particleManager.emitters.map { ($0.keyframeTrack?.easingMode ?? .linear).rawValue }
+            particleEmitterEasingModes: vp.particleManager.emitters.map { ($0.keyframeTrack?.easingMode ?? .linear).rawValue },
+            envelopes:           envelopeData
         )
     }
 
@@ -589,6 +632,13 @@ final class ProjectFile {
         // Replace demo animations with saved keyframes; restore base transforms.
         applyKeyframes(data.objects, to: vp)
 
+        // ── Glue envelopes (v34) ──────────────────────────────────────────────
+        // Re-create null nodes and re-parent their members.  Done AFTER
+        // applyKeyframes so each member's saved local matrix is already restored
+        // into its baseTransform, and so the object array still contains only
+        // model objects (matching the saved non-envelope member indices).
+        applyEnvelopes(data.envelopes, to: vp)
+
         // ── Camera static state — applied LAST so it overrides any fitToScene ─
         let c = data.camera
         vp.camera.yaw         = c.yaw
@@ -774,6 +824,64 @@ final class ProjectFile {
             print("[DEBUG] ProjectFile: restored " + String(saved.keyframes.count)
                 + " keyframes for '" + obj.name + "'"
                 + (obj.name == saved.name ? "" : " (saved as '" + saved.name + "')"))
+        }
+    }
+
+    // MARK: - Apply Glue envelopes (v34)
+
+    /// Re-creates envelope null nodes and re-parents their members.  Must run after
+    /// applyKeyframes (members' local matrices are restored into baseTransform) and
+    /// before applyHierarchy runs in the renderer (which recomputes member world
+    /// transforms from envelope × local on the next draw).
+    private static func applyEnvelopes(_ data: [EnvelopeData], to vp: ViewportView) {
+        guard !data.isEmpty else { return }
+        let sm = vp.sceneManager
+        // sm.objects currently holds only model objects, in the same order as the
+        // saved non-envelope list — so memberIndices index directly into it.
+        let modelCount = sm.objects.count
+
+        for env in data {
+            guard let m = decodeMatrix(env.transform) else {
+                print("[DEBUG] ProjectFile: envelope '\(env.name)' missing transform — skipped")
+                continue
+            }
+            let node            = SceneObject(name: env.name)
+            node.isEnvelope     = true
+            node.transform      = m
+            node.baseTransform  = m
+            node.localTransform = m
+
+            if !env.keyframes.isEmpty {
+                let track = KeyframeTrack()
+                track.easingMode = EasingMode(rawValue: env.easingMode) ?? .linear
+                for kf in env.keyframes {
+                    track.addKeyframe(TransformKeyframe(
+                        time:        kf.time,
+                        translation: SIMD3<Float>(kf.tx, kf.ty, kf.tz),
+                        rotation:    simd_quatf(ix: kf.rx, iy: kf.ry, iz: kf.rz, r: kf.rw),
+                        scale:       SIMD3<Float>(kf.sx, kf.sy, kf.sz),
+                        opacity:     kf.opacity
+                    ))
+                }
+                node.keyframeTrack = track
+            }
+
+            sm.objects.append(node)
+            let envIndex = sm.objects.count - 1
+
+            // Re-link members: their saved baseTransform already holds the local
+            // pose relative to the envelope (a hierarchical part saves localTransform).
+            for mi in env.memberIndices {
+                guard mi >= 0, mi < modelCount else {
+                    print("[DEBUG] ProjectFile: envelope '\(env.name)' member index \(mi) out of range")
+                    continue
+                }
+                let member            = sm.objects[mi]
+                member.parentIndex    = envIndex
+                member.localTransform = member.baseTransform
+            }
+            print("[DEBUG] ProjectFile: restored envelope '\(env.name)' idx=\(envIndex)"
+                + " members=\(env.memberIndices)")
         }
     }
 

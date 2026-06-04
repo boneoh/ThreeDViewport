@@ -1798,9 +1798,30 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// is driven by applyAnimation() or direct interaction, unchanged.
     private func applyHierarchy() {
         let objects = sceneManager.objects
-        for obj in objects {
+
+        // Process in depth order (parents before children).  A plain array-order
+        // pass is only correct when every parent precedes its children — true for
+        // a single .glb load, but NOT for Glue envelopes, which are appended AFTER
+        // their members.  Computing each object's depth (parentIndex hops to a root)
+        // and walking ascending depth makes the pass correct for arbitrary ordering
+        // and nesting.  Object counts are small, so the per-frame cost is negligible.
+        let count = objects.count
+        var depth = [Int](repeating: 0, count: count)
+        for i in 0..<count {
+            var d = 0
+            var p = objects[i].parentIndex
+            // Guard against cycles / stale indices with a hop cap.
+            while let pi = p, pi >= 0, pi < count, d < count {
+                d += 1
+                p = objects[pi].parentIndex
+            }
+            depth[i] = d
+        }
+
+        for i in objects.indices.sorted(by: { depth[$0] < depth[$1] }) {
+            let obj = objects[i]
             guard let parentIdx = obj.parentIndex,
-                  parentIdx < objects.count else { continue }
+                  parentIdx >= 0, parentIdx < count else { continue }
             obj.transform = objects[parentIdx].transform * obj.localTransform
         }
     }

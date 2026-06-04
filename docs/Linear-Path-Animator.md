@@ -30,4 +30,4 @@ Generates keyframes that move the selected camera, light, or object along a
 > Camera/lights snap to the **start point** at the start time, so frame the camera
 > the way you want *before* clicking Create (it captures the current orientation).
 
-See also: [Rotation Path Animator](Rotation-Path-Animator.md).
+See also: [Orbit Path Animator](Orbit-Path-Animator.md) · [Spin Path Animator](Spin-Path-Animator.md).
