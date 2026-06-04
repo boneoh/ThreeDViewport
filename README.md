@@ -84,7 +84,7 @@ Each panel has its own page under [`docs/`](docs/) with full controls, keystroke
 | Path Animator — Linear | Window → Path Animator → Linear… | [Linear-Path-Animator](docs/Linear-Path-Animator.md) |
 | Settings | ThreeDViewport → Settings… · ⌘, | [Settings](docs/Settings.md) |
 
-See also [Viewport-Navigation](docs/Viewport-Navigation.md), [Export](docs/Export.md), and [KEYBOARD_REFERENCE](KEYBOARD_REFERENCE.md).
+See also [Viewport-Navigation](docs/Viewport-Navigation.md), [Export](docs/Export.md), [Copy / Paste / Zero](docs/Coordinate-Clipboard.md), and [KEYBOARD_REFERENCE](KEYBOARD_REFERENCE.md).
 
 ---
 
