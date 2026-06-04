@@ -86,6 +86,8 @@ Each panel has its own page under [`docs/`](docs/) with full controls, keystroke
 | Glue (Envelopes) | Edit → Glue Objects… | [Glue](docs/Glue.md) |
 | Settings | ThreeDViewport → Settings… · ⌘, | [Settings](docs/Settings.md) |
 
+New here? The chapters above cover one feature each. For how they combine into real workflows — layered motion, and cutting a scene into clean compositing passes — read the **[Advanced guide](docs/Advanced.md)**.
+
 See also [Viewport-Navigation](docs/Viewport-Navigation.md), [Export](docs/Export.md), [Copy / Paste / Zero](docs/Coordinate-Clipboard.md), and [KEYBOARD_REFERENCE](KEYBOARD_REFERENCE.md).
 
 ---
