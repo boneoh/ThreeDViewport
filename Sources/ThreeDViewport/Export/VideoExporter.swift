@@ -150,6 +150,12 @@ final class VideoExporter {
     var isWireframe:   Bool = false
     var showAxesGizmo: Bool = false
 
+    // Probe marks rendered into the export when `marksVisible` is on (mirrors the
+    // live viewport's drawMarks).  Set by ViewportView.startExport.
+    var marks:        [ProbeMark] = []
+    var marksVisible: Bool        = false
+    private var widgetPipelineState: MTLRenderPipelineState?
+
     // Background gradient pipeline (mirrors Renderer's background pipeline)
     private var backgroundPipelineState: MTLRenderPipelineState?
     private var backgroundDepthState:    MTLDepthStencilState?
@@ -322,6 +328,22 @@ final class VideoExporter {
             }
         } else {
             print("[DEBUG] VideoExporter: gizmo shaders not found in bundle")
+        }
+
+        // Widget (world-space line) pipeline — same shaders as the live renderer,
+        // used to draw probe marks into the export.
+        if let library    = try? device.makeDefaultLibrary(bundle: Bundle.module),
+           let widgetV    = library.makeFunction(name: "widget_vertex"),
+           let widgetF    = library.makeFunction(name: "widget_fragment") {
+            let widgetDesc = MTLRenderPipelineDescriptor()
+            widgetDesc.label                           = "WidgetExport"
+            widgetDesc.vertexFunction                  = widgetV
+            widgetDesc.fragmentFunction                = widgetF
+            widgetDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
+            widgetDesc.depthAttachmentPixelFormat      = .depth32Float
+            widgetPipelineState = try? device.makeRenderPipelineState(descriptor: widgetDesc)
+            print("[DEBUG] VideoExporter: widget pipeline "
+                + (widgetPipelineState != nil ? "created" : "FAILED"))
         }
 
         // Laser beam billboard pipeline
@@ -1030,6 +1052,8 @@ final class VideoExporter {
                         dummy2D:           dummyEquirect))
             }
 
+            drawMarksInEncoder(encoder, viewProjection: camera.viewProjectionMatrix)
+
             encoder.endEncoding()
         }
 
@@ -1359,6 +1383,44 @@ final class VideoExporter {
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4,
                                    instanceCount: count)
         }
+    }
+
+    // MARK: - Probe marks (mirrors Renderer.drawMarks)
+
+    /// Draws each visible mark as a small single-colour axis-cross + sphere into
+    /// the scene encoder.  No selection highlight in export (no cycling there).
+    private func drawMarksInEncoder(_ encoder: MTLRenderCommandEncoder,
+                                    viewProjection vp: matrix_float4x4) {
+        guard marksVisible, !marks.isEmpty, let pipeline = widgetPipelineState else { return }
+        encoder.setRenderPipelineState(pipeline)
+        if let ds = laserBeamDepthState { encoder.setDepthStencilState(ds) }
+        encoder.setCullMode(.none)
+
+        let len = max(0.4, min(camera.distance * 0.25, 1.5)) * 0.15
+        for mark in marks {
+            let c = SIMD4<Float>(mark.color, 1)
+            let p = mark.position
+            var xAxis = [p - SIMD3<Float>(len, 0, 0), p + SIMD3<Float>(len, 0, 0)]
+            drawMarkLines(encoder, &xAxis, vp, c)
+            var yAxis = [p - SIMD3<Float>(0, len, 0), p + SIMD3<Float>(0, len, 0)]
+            drawMarkLines(encoder, &yAxis, vp, c)
+            var zAxis = [p - SIMD3<Float>(0, 0, len), p + SIMD3<Float>(0, 0, len)]
+            drawMarkLines(encoder, &zAxis, vp, c)
+            var sphere = SceneWidgets.sphereWireframe(center: p, radius: len * 0.25)
+            drawMarkLines(encoder, &sphere, vp, c)
+        }
+    }
+
+    private func drawMarkLines(_ encoder: MTLRenderCommandEncoder,
+                               _ vertices: inout [SIMD3<Float>],
+                               _ vp: matrix_float4x4,
+                               _ color: SIMD4<Float>) {
+        guard !vertices.isEmpty else { return }
+        encoder.setVertexBytes(&vertices,
+                               length: MemoryLayout<SIMD3<Float>>.stride * vertices.count, index: 0)
+        var u = WidgetUniforms(viewProjectionMatrix: vp, color: color)
+        encoder.setVertexBytes(&u, length: MemoryLayout<WidgetUniforms>.stride, index: 1)
+        encoder.drawPrimitives(type: .line, vertexStart: 0, vertexCount: vertices.count)
     }
 
     // MARK: - Axes gizmo (mirrors Renderer.drawGizmoPass exactly)

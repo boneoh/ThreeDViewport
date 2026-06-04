@@ -177,6 +177,11 @@ final class ViewportView: MTKView {
     /// AppDelegate wires this to mark the document dirty.
     var onCameraEdited: (() -> Void)?
 
+    // Probe-mark key actions, wired by AppDelegate (which owns the prompt + dirty).
+    var onToggleMarks: (() -> Void)?
+    var onCycleMark:   ((Int) -> Void)?   // +1 next, −1 previous
+    var onDeleteMark:  (() -> Void)?
+
     // Overlay that highlights the viewport during a valid drag hover.
     private var dragHighlightView: DragHighlightView?
 
@@ -1745,6 +1750,8 @@ final class ViewportView: MTKView {
         exporter.colorMode          = renderSettings.colorMode
         exporter.isWireframe        = renderer?.isWireframe      ?? false
         exporter.showAxesGizmo      = renderSettings.showAxesGizmo
+        exporter.marks              = probeConfig.marks
+        exporter.marksVisible       = probeConfig.marksVisible
         exporter.feedbackSettings   = feedbackSettings
         exporter.colorGradeSettings = colorGradeSettings
         // FX (fog + weather particles) belong to the Background class: include them
@@ -2481,6 +2488,9 @@ final class ViewportView: MTKView {
         static let r:        UInt16 = 15   // reset object orientation to base
         static let s:        UInt16 = 1    // toggle Scene mode (Director view)
         static let d:        UInt16 = 2    // Director mode (Scene mode only)
+        static let k:        UInt16 = 40   // toggle probe marks visibility
+        static let n:        UInt16 = 45   // cycle marks (Shift = previous)
+        static let delete:   UInt16 = 51   // delete selected mark (gated)
         static let v:        UInt16 = 9    // toggle keyframe motion-path vectors
         // Number row 1–6 — Director standard views (Scene mode only)
         static let num1:     UInt16 = 18   // Front
@@ -2651,6 +2661,24 @@ final class ViewportView: MTKView {
                 updateMotionVectorTarget()
                 needsDisplay = true
                 print("[DEBUG] ViewportView: motion vectors = " + String(showMotionVectors))
+                return
+
+            case KC.k:
+                // K — show/hide all probe marks.
+                onToggleMarks?()
+                needsDisplay = true
+                return
+
+            case KC.n:
+                // N — cycle to next mark (Shift+N = previous); recalls the probe to it.
+                onCycleMark?(event.modifierFlags.contains(.shift) ? -1 : 1)
+                needsDisplay = true
+                return
+
+            case KC.delete:
+                // Delete — remove the selected mark (no-op unless marks shown + selected).
+                onDeleteMark?()
+                needsDisplay = true
                 return
 
             case KC.c:

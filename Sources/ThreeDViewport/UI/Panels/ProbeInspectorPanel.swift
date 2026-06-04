@@ -7,6 +7,8 @@ struct ProbeInspectorPanel: View {
 
     @ObservedObject var probe:     ProbeConfig
     @ObservedObject var clipboard: CoordinateClipboard
+    /// Prompts for a name + colour and saves the current probe position as a mark.
+    var onMarkPosition: () -> Void = {}
 
     var body: some View {
         ScrollView {
@@ -42,6 +44,31 @@ struct ProbeInspectorPanel: View {
                 SliderRow(label: "X", value: $probe.position.x, range: -100...100, format: "%.2f")
                 SliderRow(label: "Y", value: $probe.position.y, range: -100...100, format: "%.2f")
                 SliderRow(label: "Z", value: $probe.position.z, range: -100...100, format: "%.2f")
+
+                Divider()
+
+                HStack {
+                    Text("Marks").font(.headline)
+                    Spacer()
+                    Text("\(probe.marks.count)").font(.caption).foregroundStyle(.secondary)
+                }
+                Button(action: onMarkPosition) {
+                    Label("Mark Position", systemImage: "mappin.and.ellipse")
+                        .frame(maxWidth: .infinity)
+                }
+                Toggle(isOn: $probe.marksVisible) {
+                    Text("Show marks (viewport + export)")
+                        .font(.caption)
+                        .foregroundColor(probe.marksVisible ? .green : .primary)
+                }
+                .toggleStyle(.switch)
+                .tint(.green)
+                .environment(\.controlActiveState, .active)
+                Text("K toggles marks · N / Shift+N cycles (moves the probe to the mark) "
+                    + "· Delete removes the selected mark.")
+                    .font(.caption2).foregroundStyle(.secondary)
+
+                Divider()
 
                 Text("The probe marks where the scene is captured from when exporting "
                     + "an environment HDR.  It is never included in renders or exports.")

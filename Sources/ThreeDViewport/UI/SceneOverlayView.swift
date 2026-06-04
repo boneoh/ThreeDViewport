@@ -15,6 +15,8 @@ final class SceneOverlayState: ObservableObject {
     /// True while a keyframe is being live-edited (Timeline Editor edit mode).
     /// Drives a second HUD line mirroring the editor's EDITING badge.
     @Published var isEditing:        Bool       = false
+    /// Name of the mark just cycled to (N / Shift+N).  nil hides the line.
+    @Published var markName:         String?    = nil
 
     init() {
         print("[DEBUG] SceneOverlayState: initialized")
@@ -60,6 +62,18 @@ struct SceneOverlayView: View {
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundColor(Color(red: 1.0, green: 0.75, blue: 0.20))
                     .lineLimit(1)
+            }
+
+            // Mark name — shown when cycling marks (N / Shift+N).
+            if let markName = state.markName {
+                HStack(spacing: 5) {
+                    Image(systemName: "mappin.circle.fill")
+                        .font(.system(size: 11))
+                    Text(markName)
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .lineLimit(1)
+                }
+                .foregroundColor(Color(red: 0.55, green: 0.85, blue: 1.0))
             }
         }
         .padding(.horizontal, 10)

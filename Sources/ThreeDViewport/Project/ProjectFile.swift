@@ -331,7 +331,13 @@ final class ProjectFile {
             particleEmitterKeyframes: vp.particleManager.emitters.map { captureAtmosphereKeyframes($0.keyframeTrack) },
             probe:               ProbeData(px: vp.probeConfig.position.x,
                                            py: vp.probeConfig.position.y,
-                                           pz: vp.probeConfig.position.z),
+                                           pz: vp.probeConfig.position.z,
+                                           marks: vp.probeConfig.marks.map {
+                                               MarkData(name: $0.name,
+                                                        px: $0.position.x, py: $0.position.y, pz: $0.position.z,
+                                                        r: $0.color.x, g: $0.color.y, b: $0.color.z)
+                                           },
+                                           marksVisible: vp.probeConfig.marksVisible),
             groupBaseTransforms: captureGroupBaseTransforms(from: vp),
             cameraEasingMode:    (cam.keyframeTrack?.easingMode ?? .linear).rawValue,
             lightEasingModes:    lm.keyframeTracks.map { ($0?.easingMode ?? .linear).rawValue },
@@ -629,6 +635,13 @@ final class ProjectFile {
         print("[DEBUG] ProjectFile: iblIntensity=\(data.iblIntensity)")
         // v29: bake probe position (gizmo visibility is editor-only, not restored).
         vp.probeConfig.position = SIMD3<Float>(data.probe.px, data.probe.py, data.probe.pz)
+        vp.probeConfig.marks = (data.probe.marks ?? []).map {
+            ProbeMark(name: $0.name,
+                      position: SIMD3<Float>($0.px, $0.py, $0.pz),
+                      color:    SIMD3<Float>($0.r, $0.g, $0.b))
+        }
+        vp.probeConfig.marksVisible = data.probe.marksVisible ?? false
+        vp.probeConfig.selectedMarkIndex = nil
         // v28: hot-reload the Lighting HDR from the saved path (bundled if missing).
         vp.renderSettings.lightingHDRPath = data.lightingHDRPath
         let lightURL = data.lightingHDRPath.isEmpty ? nil : AppSettings.expand(data.lightingHDRPath)

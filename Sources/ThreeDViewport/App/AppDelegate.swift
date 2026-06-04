@@ -30,6 +30,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // Bake probe inspector panel.
     private var probeInspectorPanel: NSPanel?
 
+    // Last colour chosen in the Mark Position prompt — defaults the next mark's
+    // colour so a run of related marks can share one colour.
+    private var lastMarkColor: NSColor = .systemYellow
+
     // Rotation Path Animator helper panel.
     private var rotationPathPanel: NSPanel?
 
@@ -171,6 +175,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             self?.timelineEditorWC?.editorView.needsDisplay = true
             self?.markDirty()
         }
+        viewport.onToggleMarks = { [weak self] in self?.toggleMarks(self as Any) }
+        viewport.onCycleMark   = { [weak self] step in self?.cycleMark(by: step) }
+        viewport.onDeleteMark  = { [weak self] in self?.deleteSelectedMark() }
         viewport.onCameraEdited = { [weak self] in self?.markDirty() }
         viewport.sceneManager.onSelectionChanged = { [weak self, weak viewport] in
             guard let self, let viewport else { return }
@@ -861,6 +868,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         )
         probeInspectorItem.target = self
         windowMenu.addItem(probeInspectorItem)
+
+        let showMarksItem = NSMenuItem(
+            title: "Show Marks",
+            action: #selector(toggleMarks(_:)),
+            keyEquivalent: ""
+        )
+        showMarksItem.target = self
+        windowMenu.addItem(showMarksItem)
 
         let pathAnimatorItem = NSMenuItem(title: "Path Animator", action: nil, keyEquivalent: "")
         let pathSubmenu = NSMenu(title: "Path Animator")
@@ -2411,7 +2426,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.hidesOnDeactivate  = false
 
         panel.contentView = FirstClickHostingView(rootView: ProbeInspectorPanel(
-            probe: viewport.probeConfig, clipboard: viewport.coordinateClipboard))
+            probe: viewport.probeConfig, clipboard: viewport.coordinateClipboard,
+            onMarkPosition: { [weak self] in self?.promptForMark() }))
 
         if let win = window {
             let winFrame  = win.frame
@@ -2426,6 +2442,90 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         probeInspectorPanel = panel
         panel.makeKeyAndOrderFront(nil)
         print("[DEBUG] AppDelegate: probe inspector panel opened")
+    }
+
+    // MARK: - Probe marks
+
+    /// Prompts for a name + colour, then saves the current probe position as a mark.
+    private func promptForMark() {
+        guard let viewport = viewportView else { return }
+        let probe = viewport.probeConfig
+
+        let alert = NSAlert()
+        alert.messageText     = "Mark Position"
+        alert.informativeText = "Name this mark and choose a colour. It's saved at the probe's current position."
+        alert.addButton(withTitle: "Add")
+        alert.addButton(withTitle: "Cancel")
+
+        let accessory  = NSView(frame: NSRect(x: 0, y: 0, width: 240, height: 58))
+        let nameLabel  = NSTextField(labelWithString: "Name:")
+        nameLabel.frame = NSRect(x: 0, y: 32, width: 52, height: 20)
+        let nameField  = NSTextField(frame: NSRect(x: 56, y: 30, width: 184, height: 24))
+        nameField.stringValue = "Mark \(probe.marks.count + 1)"
+        let colorLabel = NSTextField(labelWithString: "Colour:")
+        colorLabel.frame = NSRect(x: 0, y: 2, width: 52, height: 20)
+        let well       = NSColorWell(frame: NSRect(x: 56, y: 0, width: 48, height: 24))
+        well.color     = lastMarkColor
+        accessory.addSubview(nameLabel); accessory.addSubview(nameField)
+        accessory.addSubview(colorLabel); accessory.addSubview(well)
+        alert.accessoryView = accessory
+        alert.window.initialFirstResponder = nameField
+
+        let response = alert.runModal()
+        well.deactivate()
+        NSColorPanel.shared.orderOut(nil)
+        guard response == .alertFirstButtonReturn else { return }
+
+        let rgb   = well.color.usingColorSpace(.sRGB) ?? well.color
+        let color = SIMD3<Float>(Float(rgb.redComponent), Float(rgb.greenComponent), Float(rgb.blueComponent))
+        lastMarkColor = well.color
+        let trimmed = nameField.stringValue.trimmingCharacters(in: .whitespaces)
+        let name    = trimmed.isEmpty ? "Mark \(probe.marks.count + 1)" : trimmed
+
+        probe.marks.append(ProbeMark(name: name, position: probe.position, color: color))
+        probe.selectedMarkIndex = probe.marks.count - 1
+        probe.marksVisible = true   // reveal so the new mark is visible immediately
+        markDirty()
+        print("[DEBUG] AppDelegate: added mark '\(name)' at \(probe.position)")
+    }
+
+    /// Toggles visibility of all marks (K key / menu).
+    @objc private func toggleMarks(_ sender: Any) {
+        guard let viewport = viewportView else { return }
+        viewport.probeConfig.marksVisible.toggle()
+        if !viewport.probeConfig.marksVisible { viewport.overlayState.markName = nil }
+        markDirty()
+    }
+
+    /// Cycles the selected mark by `step` (+1 next, −1 previous), moves the probe
+    /// to it (recall), shows its name in the HUD, and ensures marks are visible.
+    func cycleMark(by step: Int) {
+        guard let viewport = viewportView else { return }
+        let probe = viewport.probeConfig
+        guard !probe.marks.isEmpty else { return }
+        probe.marksVisible = true
+        let n   = probe.marks.count
+        let cur = probe.selectedMarkIndex ?? (step > 0 ? -1 : 0)
+        let idx = ((cur + step) % n + n) % n
+        probe.selectedMarkIndex = idx
+        let mark = probe.marks[idx]
+        probe.position = mark.position                 // recall: probe jumps to the mark
+        viewport.overlayState.markName = mark.name
+        markDirty()
+    }
+
+    /// Deletes the currently selected mark (Delete/Backspace, gated to when marks
+    /// are visible and one is selected).
+    func deleteSelectedMark() {
+        guard let viewport = viewportView else { return }
+        let probe = viewport.probeConfig
+        guard probe.marksVisible, let idx = probe.selectedMarkIndex,
+              probe.marks.indices.contains(idx) else { return }
+        let removed = probe.marks.remove(at: idx)
+        probe.selectedMarkIndex = probe.marks.isEmpty ? nil : min(idx, probe.marks.count - 1)
+        viewport.overlayState.markName = nil
+        markDirty()
+        print("[DEBUG] AppDelegate: deleted mark '\(removed.name)'")
     }
 
     // MARK: - Linear Path Animator

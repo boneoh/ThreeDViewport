@@ -192,11 +192,22 @@ struct ProjectData: Codable {
     }
 }
 
-// v29: bake probe world position.
+// v29: bake probe world position.  v33+: saved position marks.
 struct ProbeData: Codable {
     var px: Float = 0
     var py: Float = 0
     var pz: Float = 0
+    /// Optional so projects saved before v33 (no `marks` key) still decode — a
+    /// missing key becomes nil rather than throwing and resetting the probe.
+    var marks:        [MarkData]? = nil
+    var marksVisible: Bool?       = nil
+}
+
+// v33: one saved position mark (name + world position + RGB colour).
+struct MarkData: Codable {
+    var name: String = ""
+    var px: Float = 0; var py: Float = 0; var pz: Float = 0
+    var r:  Float = 1; var g:  Float = 1; var b:  Float = 1
 }
 
 // v23: One atmosphere keyframe (fog volume or particle emitter).  Mirrors

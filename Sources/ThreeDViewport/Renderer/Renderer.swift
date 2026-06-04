@@ -1055,6 +1055,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             drawSceneWidgets(encoder: encoder)
         }
         drawProbeGizmo(encoder: encoder)   // editor-only; not gated by scene mode, never exported
+        drawMarks(encoder: encoder)        // saved position marks (also rendered in export)
         drawMotionVectors(encoder: encoder) // editor-only 'V' overlay; never exported
 
         encoder.endEncoding()
@@ -1554,6 +1555,38 @@ final class Renderer: NSObject, MTKViewDelegate {
         var sphere = SceneWidgets.sphereWireframe(center: p, radius: len * 0.18)
         drawWidgetLines(encoder: encoder, vertices: &sphere, viewProjection: vp,
                         color: SIMD4<Float>(1.0, 1.0, 1.0, 1.0))
+    }
+
+    /// Draws the saved position marks: each a smaller, single-colour axis-cross +
+    /// sphere in its assigned colour.  The cycled/selected mark is drawn larger.
+    /// Shared by the live viewport and the exporter (gated by `marksVisible`).
+    private func drawMarks(encoder: MTLRenderCommandEncoder) {
+        guard let probe = probeConfig, probe.marksVisible, !probe.marks.isEmpty,
+              let pipeline = widgetPipelineState else { return }
+
+        encoder.setRenderPipelineState(pipeline)
+        if let ds = laserBeamDepthState { encoder.setDepthStencilState(ds) }
+        encoder.setCullMode(.none)
+
+        let vp      = viewCamera.viewProjectionMatrix
+        let baseLen = max(0.4, min(camera.distance * 0.25, 1.5)) * 0.15  // small, unobtrusive
+
+        for (i, mark) in probe.marks.enumerated() {
+            let selected = (i == probe.selectedMarkIndex)
+            let len      = selected ? baseLen * 1.5 : baseLen
+            let c        = SIMD4<Float>(mark.color, 1)
+            let p        = mark.position
+
+            var xAxis = [p - SIMD3<Float>(len, 0, 0), p + SIMD3<Float>(len, 0, 0)]
+            drawWidgetLines(encoder: encoder, vertices: &xAxis, viewProjection: vp, color: c)
+            var yAxis = [p - SIMD3<Float>(0, len, 0), p + SIMD3<Float>(0, len, 0)]
+            drawWidgetLines(encoder: encoder, vertices: &yAxis, viewProjection: vp, color: c)
+            var zAxis = [p - SIMD3<Float>(0, 0, len), p + SIMD3<Float>(0, 0, len)]
+            drawWidgetLines(encoder: encoder, vertices: &zAxis, viewProjection: vp, color: c)
+
+            var sphere = SceneWidgets.sphereWireframe(center: p, radius: len * 0.25)
+            drawWidgetLines(encoder: encoder, vertices: &sphere, viewProjection: vp, color: c)
+        }
     }
 
     /// Draws the keyframe motion path for the selected entity (the 'V' overlay):
