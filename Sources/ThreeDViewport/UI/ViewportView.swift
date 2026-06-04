@@ -1457,32 +1457,31 @@ final class ViewportView: MTKView {
 
     // MARK: - Spin Animator
 
-    /// Replaces the object track's keyframes in [start, end] with a constant,
-    /// wobble-free self-spin about the object's own local X/Y/Z axis.
+    /// Replaces an object **or model** track's keyframes in [start, end] with a
+    /// constant, wobble-free self-spin about its own local X/Y/Z axis.
     ///
-    /// Each keyframe is a *pure rotation delta* (translation 0, scale 1), so the
-    /// renderer's `baseTransform × delta` spins the object about its own local
-    /// origin while keeping its base position and scale — and a local-origin
-    /// rotation is parent-independent, so it composes cleanly under a glued
-    /// envelope's orbit.  The track is forced to LINEAR easing: slerp between
-    /// equal-angle steps is exact constant-velocity rotation (no spline overshoot).
-    /// `axisIndex` 0/1/2 = local X/Y/Z.  Signed `revolutions` sets direction.
+    /// **Object** (`.object`): the object's CURRENT pose is baked into every keyframe
+    /// so the spin preserves its position and scale (delta = inverse(base) × current,
+    /// `current` = localTransform for a glued child, transform for a root); the spin is
+    /// post-multiplied onto the delta's rotation so it turns about its own local axis
+    /// without drifting to the origin or resetting scale.
+    ///
+    /// **Model** (`.group`): writes the group-level track, spinning the whole model
+    /// about its own world-space **centre**.  A pivot rotation `T(P)·R·T(-P)` is
+    /// pre-multiplied onto the current group transform G0 (so θ=0 reproduces G0 — no
+    /// pop), and the spin axis follows the model's current orientation.
+    ///
+    /// Either way the track is forced to LINEAR easing: slerp between equal-angle
+    /// steps is exact constant-velocity rotation (no spline overshoot).  `axisIndex`
+    /// 0/1/2 = local X/Y/Z.  Signed `revolutions` sets direction.
     func generateSpin(ref: TrackRef,
                       axisIndex:  Int,
                       revolutions: Float,
                       keyframesPerRevolution: Float,
                       startTime: Double,
                       endTime:   Double) {
-        guard case .object(let i) = ref, i >= 0, i < sceneManager.objects.count else { return }
-        let obj = sceneManager.objects[i]
-
         let lo = min(startTime, endTime) - 1e-6
         let hi = max(startTime, endTime) + 1e-6
-
-        if obj.keyframeTrack == nil { obj.keyframeTrack = KeyframeTrack() }
-        // Linear easing guarantees constant-velocity, on-axis rotation.
-        obj.keyframeTrack?.easingMode = .linear
-        obj.keyframeTrack?.keyframes.removeAll { $0.time >= lo && $0.time <= hi }
 
         let axis: SIMD3<Float>
         switch axisIndex {
@@ -1492,28 +1491,78 @@ final class ViewportView: MTKView {
         }
 
         let perRev = max(3.0, keyframesPerRevolution)   // <180° steps → correct short-arc slerp
-        let turns  = abs(revolutions)
-        let count  = max(2, Int((turns * perRev).rounded(.up)) + 1)
+        let count  = max(2, Int((abs(revolutions) * perRev).rounded(.up)) + 1)
         let deg2rad = Float.pi / 180.0
-        let opacity = obj.material.opacity
+        let tStart = min(startTime, endTime)
+        let tEnd   = max(startTime, endTime)
+        // Even angle/time steps over the window: s ∈ [0, 1], angle starts at 0 (no pop).
+        func angle(_ s: Float) -> Float  { revolutions * 360.0 * s * deg2rad }
+        func time(_ s: Float)  -> Double { tStart + Double(s) * (tEnd - tStart) }
 
-        let t0 = min(startTime, endTime)
-        let t1 = max(startTime, endTime)
-        for k in 0..<count {
-            let s     = Float(k) / Float(count - 1)
-            let theta = revolutions * 360.0 * s * deg2rad     // starts at 0 → no pop
-            let rot   = simd_quatf(angle: theta, axis: axis)
-            let time  = t0 + Double(s) * (t1 - t0)
-            obj.keyframeTrack?.addKeyframe(TransformKeyframe(
-                time:        time,
-                translation: SIMD3<Float>(0, 0, 0),   // pure-rotation delta
-                rotation:    rot,
-                scale:       SIMD3<Float>(1, 1, 1),
-                opacity:     opacity))
+        switch ref {
+        case .object(let i):
+            guard i >= 0, i < sceneManager.objects.count else { return }
+            let obj = sceneManager.objects[i]
+            if obj.keyframeTrack == nil { obj.keyframeTrack = KeyframeTrack() }
+            obj.keyframeTrack?.easingMode = .linear
+            obj.keyframeTrack?.keyframes.removeAll { $0.time >= lo && $0.time <= hi }
+
+            // Bake the object's current pose (relative to baseTransform) so the spin
+            // keeps its live position and scale instead of snapping to the base.
+            let baseInv = simd_inverse(obj.baseTransform)
+            let current = (obj.parentIndex != nil) ? obj.localTransform : obj.transform
+            let (baseT, baseR, baseS) = PathGenerator.decompose(baseInv * current)
+            let opacity = obj.material.opacity
+
+            for k in 0..<count {
+                let s    = Float(k) / Float(count - 1)
+                let spin = simd_quatf(angle: angle(s), axis: axis)   // about own local axis
+                obj.keyframeTrack?.addKeyframe(TransformKeyframe(
+                    time:        time(s),
+                    translation: baseT,                  // keep current position
+                    rotation:    simd_normalize(baseR * spin),
+                    scale:       baseS,                  // keep current scale
+                    opacity:     opacity))
+            }
+            onKeyframeStamped?(.object(i))
+            print("[DEBUG] ViewportView: generateSpin — \(count) keyframes for object '\(obj.name)'"
+                + " axis=\(axisIndex) revs=\(revolutions)")
+
+        case .group(let gid):
+            let parts = sceneManager.objects(inGroup: gid)
+            guard !parts.isEmpty else { return }
+            if sceneManager.groupKeyframeTracks[gid] == nil {
+                sceneManager.groupKeyframeTracks[gid] = KeyframeTrack()
+            }
+            let track = sceneManager.groupKeyframeTracks[gid]
+            track?.easingMode = .linear
+            track?.keyframes.removeAll { $0.time >= lo && $0.time <= hi }
+
+            // Spin the model about its own world centre.  The group track stores the
+            // full groupTransform (rendered as groupT × part.transform); pre-multiplying
+            // a pivot rotation about that centre keeps the model in place.
+            let g0    = sceneManager.groupTransforms[gid] ?? matrix_identity_float4x4
+            let pivot = groupCenter(parts)
+            // Spin about the model's own axis = current group orientation × axis.
+            let r0        = PathGenerator.decompose(g0).rotation
+            let axisWorld = simd_act(r0, axis)
+            var tFwd = matrix_identity_float4x4; tFwd.columns.3 = SIMD4<Float>( pivot, 1)
+            var tInv = matrix_identity_float4x4; tInv.columns.3 = SIMD4<Float>(-pivot, 1)
+
+            for k in 0..<count {
+                let s   = Float(k) / Float(count - 1)
+                let rot = rotationMatrix4x4(simd_quatf(angle: angle(s), axis: axisWorld))
+                let (t, r, sc) = PathGenerator.decompose(tFwd * rot * tInv * g0)
+                track?.addKeyframe(TransformKeyframe(
+                    time: time(s), translation: t, rotation: r, scale: sc))
+            }
+            onKeyframeStamped?(.group(gid))
+            print("[DEBUG] ViewportView: generateSpin — \(count) keyframes for model gid=\(gid)"
+                + " axis=\(axisIndex) revs=\(revolutions)")
+
+        default:
+            return
         }
-        onKeyframeStamped?(.object(i))
-        print("[DEBUG] ViewportView: generateSpin — \(count) keyframes for '\(obj.name)'"
-            + " axis=\(axisIndex) revs=\(revolutions)")
     }
 
     // MARK: - Add / Clear Atmosphere Keyframes

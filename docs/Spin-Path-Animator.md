@@ -1,10 +1,12 @@
 # Spin Path Animator
 
-Generates a constant, **wobble-free self-spin** for the selected object — evenly
-spaced rotation keyframes about the object's **own local X / Y / Z axis**. The
-object spins **in place** (its position and scale are untouched), so the spin
-composes cleanly on top of any motion the object already has — including riding a
-[glued](Glue.md) envelope's orbit.
+Generates a constant, **wobble-free self-spin** for the selected object or model —
+evenly spaced rotation keyframes about its **own local X / Y / Z axis**. It spins
+**in place** (position and scale untouched), so the spin composes cleanly on top of
+any motion it already has — including riding a [glued](Glue.md) envelope's orbit.
+
+It works on two kinds of track: a single **object** lane, or a **model** (group)
+lane — a multi-part model that spins as a whole about its own centre.
 
 This is the in-place counterpart to the [Orbit Path Animator](Orbit-Path-Animator.md),
 which moves an object *around* an external axis.
@@ -13,8 +15,8 @@ which moves an object *around* an external axis.
 
 ## Workflow
 
-1. **Track & time:** select an **object** lane in the
-   [Timeline Editor](Timeline-Editor.md), scrub to the start → **Capture Start**;
+1. **Track & time:** select an **object** lane or a **model** (group header) lane in
+   the [Timeline Editor](Timeline-Editor.md), scrub to the start → **Capture Start**;
    scrub to the end → **Capture End**.
 2. **Spin:** pick the **Local axis** (X / Y / Z — Y is a top-like spin), set
    **Revolutions** (negative reverses direction), and **Keyframes / rev**.
@@ -22,9 +24,9 @@ which moves an object *around* an external axis.
 
 ## Why it doesn't wobble
 
-- Every keyframe is a **pure-rotation delta** (no translation, no scale) about a
-  single, exact axis — so there is no hand-set cross-axis drift that makes an
-  object nod or precess.
+- Every keyframe keeps the object's **current position and scale** and adds an
+  exact incremental rotation about a **single axis** — so the object spins in place
+  with no hand-set cross-axis drift that would make it nod or precess.
 - The track is set to **linear** easing, so interpolation is `slerp` between
   equal-angle steps — mathematically exact, constant-velocity rotation with no
   spline overshoot.
@@ -34,14 +36,15 @@ which moves an object *around* an external axis.
 
 ## Notes
 
-- **Create Keyframes** deletes the object track's existing keyframes within the
-  captured time window and inserts the spin, and sets that track to **linear**
-  easing.
-- The spin starts at angle 0 — the object's current orientation — so there is no
-  pop at the start, and whole-number revolutions return to the start orientation.
-- **Object tracks only** (self-spin isn't meaningful for cameras or lights).
-- The spin is about the object's **local origin (pivot)**. If a model's pivot is
-  off-centre the spin will look like a small orbit around that pivot.
+- **Create Keyframes** deletes the track's existing keyframes within the captured
+  time window and inserts the spin, and sets that track to **linear** easing.
+- The spin starts at angle 0 — the current orientation — so there is no pop at the
+  start, and whole-number revolutions return to the start orientation.
+- **Object** and **model** tracks only (self-spin isn't meaningful for cameras or
+  lights).
+- An **object** spins about its **local origin (pivot)**; if a single mesh's pivot
+  is off-centre the spin looks like a small orbit around that pivot. A **model**
+  (group) spins about its **bounding centre**, so multi-part models turn in place.
 
 ## Example: B orbits A *and* spins on its own axis
 

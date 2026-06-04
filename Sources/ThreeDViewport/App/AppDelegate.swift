@@ -2731,6 +2731,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 return objs[i].name
             }
             return "Object \(i + 1)"
+        case .group(let gid):
+            return viewportView?.sceneManager.groupName(for: gid) ?? "Model \(gid)"
         default:             return "Unsupported"
         }
     }
@@ -2844,11 +2846,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
               let editor = timelineEditorWC?.editorView else { return }
         let state = viewport.spinAnimatorState
         guard let ref = editor.selectedTrackRef else {
-            state.status = "Select an object track in the Timeline first."
+            state.status = "Select an object or model track in the Timeline first."
             return
         }
-        guard case .object = ref else {
-            state.status = "Spin supports object tracks only."
+        switch ref {
+        case .object, .group: break
+        default:
+            state.status = "Spin supports object and model tracks only."
             return
         }
         state.capturedRef = ref
