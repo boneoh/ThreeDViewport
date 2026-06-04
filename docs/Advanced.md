@@ -10,7 +10,70 @@ together.
 
 ---
 
-## Part 1 — Thinking in layers and passes
+## Part 1 — Surveying and placing the scene
+
+Before you animate or export, you usually need to put things in **exact** places —
+an object here, a light aimed there, a camera framed just so, an orbit centred on a
+precise point. Three small tools turn that from eyeballing into something exact and
+repeatable: the **Probe** (a movable world cursor), **Marks** (saved named
+positions), and the **Copy / Paste** coordinate clipboard.
+
+### The shared clipboard is the glue
+
+Every panel with X/Y/Z fields has **Copy / Paste / Zero** icons backed by one
+**app-wide, type-matched clipboard** (see [Copy / Paste / Zero](Coordinate-Clipboard.md)).
+The key idea: the **Position** channel is shared by *every* world-space point —
+object positions, the Probe, mark positions, **camera/light Targets** (an aim point
+*is* a position), and even **Path Animator axis/line points**. So a single copied
+coordinate can travel anywhere a position is expected. (Paste is channel-locked, so
+a Position can never land in a Size or Rotation field by accident.)
+
+### The Probe is your cursor and tape measure
+
+Park the [Probe](Probe-Inspector.md) anywhere with its sliders (arrow keys nudge by
+the last digit), then **Copy** its position and paste it where you need it — into an
+object's Position, a light's Target, an orbit axis point. It works in reverse too:
+**Copy** an object's position and **Paste** it into the Probe to send the Probe
+exactly there.
+
+### Marks are a reusable scaffold of named points
+
+A [Mark](Probe-Inspector.md) is a saved, named, colour-coded world position. Drop
+them at the spots that matter — a hero's first and last positions, where a light
+should aim, the centre of an orbit. Then:
+
+- **K** shows/hides all marks (they can also render into exports for dialing a take).
+- **N** / **Shift+N** cycle through them and **move the Probe to each one**, so its
+  coordinates are immediately ready to **Copy**.
+
+Marks persist with the project, so the scaffold survives across sessions.
+
+### Recipes that combine all three
+
+- **Place an object exactly on a reference.** Cycle to a mark (**N**) → the Probe
+  jumps there → **Copy** the Probe position → select the object → **Paste** into its
+  Model Inspector Position. (Or copy object A's position straight onto object B.)
+- **Aim a light or the camera at a point.** **Copy** an object or mark position →
+  **Paste** into the light's / camera's **Target**. Re-copy and re-paste to re-aim
+  after things move.
+- **Lay out a motion against references.** Drop a row of same-colour marks where a
+  subject should be over time, then key against them: cycle **N**, **Copy**, and
+  **Paste** onto the animated object — because pasting onto an already-animated item
+  **auto-stamps a keyframe** at the playhead.
+- **Seed a Path Animator from known points.** Mark the two ends of an orbit axis,
+  cycle to each, **Copy**, and **Paste** into the
+  [Orbit](Orbit-Path-Animator.md) animator's **Capture Axis Start / End** — an exact,
+  repeatable orbit centre instead of a hand-dragged Probe (this feeds Part 3).
+- **Anchor a Glue unit deliberately.** Drop a mark at the intended pivot, send an
+  object's origin there first, then [glue](Glue.md) with that object as the anchor so
+  the unit rotates around the point you chose.
+
+These named points and copied coordinates become the raw material for the motion in
+Part 3 and the framing for the passes in Part 2.
+
+---
+
+## Part 2 — Thinking in layers and passes
 
 Most of the power in ThreeDViewport comes from **separating a scene into layers you
 can recombine later** in a compositor. Three features cooperate to do that:
@@ -82,7 +145,7 @@ for you, consistently, across the whole set.
 
 ---
 
-## Part 2 — Building motion that composes
+## Part 3 — Building motion that composes
 
 Motion in ThreeDViewport is **layered** too. Each track contributes a piece, and
 the renderer multiplies them together, so you can author one clean motion at a time
@@ -144,12 +207,15 @@ envelope and a member to compare their separate contributions.
 
 ---
 
-## Part 3 — A full pass through the pipeline
+## Part 4 — A full pass through the pipeline
 
-Tying both halves together, a typical shot:
+Tying it all together, a typical shot:
 
-1. **Block the scene.** Load models, set object **classes** (Actor / Background /
-   MacGuffin) in the [Model Inspector](Model-Inspector.md), leave **holdout** on.
+1. **Block the scene.** Load models, then place them precisely with the
+   [Probe, Marks, and Copy/Paste](Probe-Inspector.md) — drop reference marks for hero
+   positions, light aims, and orbit centres. Set object **classes** (Actor /
+   Background / MacGuffin) in the [Model Inspector](Model-Inspector.md), leave
+   **holdout** on.
 2. **Build the motion.** [Glue](Glue.md) anything that should move as a unit, then
    use the [Orbit](Orbit-Path-Animator.md) / [Linear](Linear-Path-Animator.md) /
    [Spin](Spin-Path-Animator.md) animators to generate the layers. Refine timing and
@@ -165,7 +231,8 @@ Tying both halves together, a typical shot:
 
 ---
 
-See also: [Export](Export.md) · [Model Inspector](Model-Inspector.md) ·
-[Glue](Glue.md) · [Orbit](Orbit-Path-Animator.md) /
-[Linear](Linear-Path-Animator.md) / [Spin](Spin-Path-Animator.md) Path Animators ·
-[Timeline Editor](Timeline-Editor.md).
+See also: [Probe Inspector](Probe-Inspector.md) ·
+[Copy / Paste / Zero](Coordinate-Clipboard.md) · [Export](Export.md) ·
+[Model Inspector](Model-Inspector.md) · [Glue](Glue.md) ·
+[Orbit](Orbit-Path-Animator.md) / [Linear](Linear-Path-Animator.md) /
+[Spin](Spin-Path-Animator.md) Path Animators · [Timeline Editor](Timeline-Editor.md).
