@@ -65,13 +65,26 @@ New `.metal` files are picked up automatically. For distribution with a Develope
 
 Floating inspector panels open independently and remember their positions per project. They do not steal keyboard focus from the viewport (except the Timeline Editor, which becomes key on click so its shortcuts work). When the main window is minimized, all open panels hide together and reappear when the window is restored.
 
-| Panel | Menu | What it does |
-|-------|------|--------------|
-| Camera | Window → Camera… (⌘K) | Pick a follow target from a dropdown and stamp follow keyframes — see "Camera follow keyframes" below |
-| Lights & Background | Window → Lights & Background… (⌘L) | Edit up to four lights, plus solid / gradient background |
-| Feedback | Window → Feedback… (⌘F) | Video delay-line echo / trails pass |
-| Color Grade | Window → Color Grade… (⌘⇧G) | Brightness / contrast / gamma post-process |
-| Timeline Editor | Window → Timeline Editor (⌘J) | Per-track keyframe editor with retiming, copy/paste, easing modes, and in-place edit |
+## Panels & windows
+
+Each panel has its own page under [`docs/`](docs/) with full controls, keystrokes, and tips. Quick index:
+
+| Panel / window | Open | Docs |
+|----------------|------|------|
+| Transport bar | (docked, bottom) | [Transport-Bar](docs/Transport-Bar.md) |
+| Timeline Editor | Window → Timeline Editor · ⌘J | [Timeline-Editor](docs/Timeline-Editor.md) |
+| Camera | Window → Camera… · ⌘K | [Camera-Panel](docs/Camera-Panel.md) |
+| Model Inspector | Window → Model Inspector… · ⌘I | [Model-Inspector](docs/Model-Inspector.md) |
+| Lights & Background | Window → Lights & Background… · ⌘L | [Lights-and-Background](docs/Lights-and-Background.md) |
+| Atmosphere (Fog + Weather) | Window → Atmosphere… · ⌘⇧A | [Atmosphere](docs/Atmosphere.md) |
+| Color Grade | Window → Color Grade… · ⌘⇧G | [Color-Grade](docs/Color-Grade.md) |
+| Feedback | Window → Feedback… · ⌘F | [Feedback](docs/Feedback.md) |
+| Probe Inspector (+ Marks) | Window → Probe Inspector… | [Probe-Inspector](docs/Probe-Inspector.md) |
+| Path Animator — Rotation | Window → Path Animator → Rotation… | [Rotation-Path-Animator](docs/Rotation-Path-Animator.md) |
+| Path Animator — Linear | Window → Path Animator → Linear… | [Linear-Path-Animator](docs/Linear-Path-Animator.md) |
+| Settings | ThreeDViewport → Settings… · ⌘, | [Settings](docs/Settings.md) |
+
+See also [Viewport-Navigation](docs/Viewport-Navigation.md), [Export](docs/Export.md), and [KEYBOARD_REFERENCE](KEYBOARD_REFERENCE.md).
 
 ---
 
@@ -83,67 +96,37 @@ Open `.glb` (single binary) or `.gltf` + `.bin` (JSON + sidecar) via **File → 
 
 ### Animate with keyframes
 
-Four kinds of animation, each with its own timeline track:
+Stamp keyframes with **I** for whichever mode is active — Object (`O`), Model group (`M`), Camera, or Light (`L`) — then refine them in the [Timeline Editor](docs/Timeline-Editor.md), which supports retiming, copy/paste, multi-select, and per-track easing (linear or Catmull-Rom spline tiers). For smooth generated motion, the [Rotation](docs/Rotation-Path-Animator.md) and [Linear](docs/Linear-Path-Animator.md) Path Animators build whole orbit / arc / dolly paths from a couple of Probe points.
 
-- **Object** — TRS deltas on a single SceneObject. Stamped in **Object** mode (`O`).
-- **Model group** — TRS applied as a single layer on top of every part in a multi-part model (e.g. translate / rotate a whole robot as one). Stamped in **Model** mode (`M`).
-- **Camera** — absolute yaw / pitch / distance / target / FOV. Stamped via the Timeline panel's "Add Key" or the Camera panel.
-- **Light** — per-light intensity, colour, direction, position, range, and beam thickness. Stamped in **Light** mode (`L`).
+### Camera follow
 
-Object and group tracks support several easing modes (Linear plus Catmull-Rom splines at three tensions); camera and light tracks always interpolate linearly. The "I" key (or Insert) stamps a keyframe for whichever mode is active.
-
-### Camera follow keyframes
-
-A follow keyframe ties the camera to a named object (e.g. `head`) so the camera holds its **relative** position and orientation as the object moves, rotates, and rolls. Workflow:
-
-1. Open the **Camera panel** (⌘K) and pick the target object from the dropdown.
-2. Frame the shot from the recording camera.
-3. Click **Add Follow Camera Keyframe**. Stamp as many as you like — the picker stays sticky on the chosen target.
-
-Between two follow keyframes targeting the same object, both the camera's target offset and its forward direction are interpolated in the object's **local** frame, then rotated by the object's current basis each frame. The camera holds its framing under any object rotation (yaw, pitch, roll, combined) without gimbal-lock issues.
+The [Camera panel](docs/Camera-Panel.md) (⌘K) can tie the camera to a named object so it holds its relative framing as the object moves, rotates, and rolls — keyframed in the object's local frame, so it survives any rotation without gimbal-lock issues.
 
 ### Scene mode (Director's POV)
 
-Press **S** to toggle Scene mode. The viewport switches from "look through the scene camera" to "look at the scene camera from above and behind" — a free Director camera. The scene camera is drawn as a wireframe wedge so you can see how it moves through the scene. Useful for previewing camera-follow paths, debugging framing, and recording reference shots. `⌘R` re-auto-fits the Director to the scene; `⌘+` / `⌘−` dolly the Director in / out; Space + drag orbits it.
+Press **S** for a free editing viewpoint that looks *at* the scene camera (drawn as a wireframe wedge) instead of through it — for framing parts, previewing follow paths, and posing. See [Viewport-Navigation](docs/Viewport-Navigation.md).
 
-### Lights & background
+### Lights, background & atmosphere
 
-Up to four simultaneous lights, each independently configurable:
+Up to four lights (Ambient / Directional / Point / Spot / Laser), a solid / gradient / HDRI-environment background, and image-based lighting — all in [Lights & Background](docs/Lights-and-Background.md). Volumetric fog and weather (rain / snow / sleet) live in [Atmosphere](docs/Atmosphere.md).
 
-| Type | Notes |
-|------|-------|
-| Ambient | Flat fill, no direction or position |
-| Directional | World-space direction; classic sun light |
-| Point | Position only; falls off with distance |
-| Spot | Position + direction + inner / outer cone angles + range |
-| Laser | Narrow beam, depth-occluded by geometry; optional thick billboard with Gaussian glow; can be excluded from the feedback pass |
+### Look: feedback & color grade
 
-Background is either a solid colour or a vertical gradient (top / bottom colours).
+A video delay-line echo/trails pass ([Feedback](docs/Feedback.md)) and an exposure / brightness / contrast / gamma pass ([Color Grade](docs/Color-Grade.md)) — both apply in the viewport and the export.
 
-### Feedback delay-line
+### Position marks
 
-A ring-buffered echo effect that blends each rendered frame with a delayed copy. Tunable blend mode (Normal / Multiply / Screen / Additive / Overlay / Soft Light / Difference / etc.), feedback-on-top swap, decay weight, capture interval, and ring length. Status badge shows whether the buffer is priming or active. Runs only during playback and during export.
-
-### Color grade
-
-A final-pass shader applied to every rendered frame and to the export. Brightness → Contrast → Gamma, with a Reset button when anything is off identity. The pass is bypassed entirely when all three controls are at their identity values, so there's no cost when unused.
+Save named, colour-coded world positions from the [Probe](docs/Probe-Inspector.md) as on-screen reference marks (toggle **K**, cycle **N**) — handy for laying out and adjusting animation, and optionally rendered into exports for final-take tweaks.
 
 ### Video export
 
-**File → Export ProRes Video…** (⌘E) renders the full timeline offline to a 1920 × 1080 `.mov`:
-
-| Codec | Notes |
-|-------|-------|
-| **ProRes 4444 — Alpha = Luma** | 12-bit RGB + alpha; alpha is the Rec.709 luma of each pixel. Composite directly in DaVinci Resolve or LZX Videomancer without a separate key pass. |
-| **ProRes 422 HQ — solid black** | 10-bit 4:2:2, no alpha. Standard for CG renders going to a colour-grading pipeline. |
-
-The exporter runs on its own GPU pipeline with a fresh feedback processor for repeatable output. The viewport pauses during export and resumes when done; transport controls are disabled while a render is in flight.
+**File → Export ProRes Video…** (⌘E) renders the timeline offline to ProRes 4444 (luma-alpha) or 422 HQ, each prepended with a sync countdown; **Export All Passes…** (⌘⇧E) renders a multi-pass set for compositing. See [Export](docs/Export.md).
 
 ---
 
 ## Project files
 
-Projects are saved as `.3dvp` files (human-readable JSON, current version **14**). The schema is additive — older files load cleanly because unknown / missing keys are silently ignored and fields with defaults backfill themselves.
+Projects are saved as `.3dvp` files (human-readable JSON). The schema is additive — older files load cleanly because unknown / missing keys are silently ignored and fields with defaults backfill themselves.
 
 Saved state covers everything needed to reproduce a session:
 
@@ -151,7 +134,8 @@ Saved state covers everything needed to reproduce a session:
 - Camera pose + keyframe track (including follow-target metadata and local-frame forward vectors)
 - All loaded model paths, per-object base transforms, per-object keyframe tracks (with easing mode), and per-group keyframe tracks
 - Light configurations + per-light keyframe tracks
-- Background, color-grade, feedback, rendering-mode (color / greyscale), wireframe, and axes-gizmo settings
+- Background (solid / gradient / HDRI), color-grade, feedback, fog + weather emitters, rendering-mode (color / greyscale / B+W), wireframe, and axes-gizmo settings
+- Probe position and named position **marks** (names, positions, colours)
 - Window and panel positions for the main window, Timeline Editor, and every inspector panel — restored on load
 
 Model files are referenced by absolute path; they need to remain at their original location for the project to reload cleanly. If a referenced model is missing on load, the project prompts you to locate it.

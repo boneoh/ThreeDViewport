@@ -9,26 +9,28 @@ Available in the main viewport (no modifier unless noted).
 | **B** | Nudge selected keyframe 1 frame backward |
 | **C** | Camera mode |
 | **D** | Director mode — navigate the Director's POV (Scene mode only) |
-| **Delete** / **Backspace** | Delete selected keyframe(s) (forwarded to Timeline Editor) |
+| **Delete** / **Backspace** | Delete selected keyframe(s) (forwarded to Timeline Editor); also deletes the selected probe **mark** when marks are shown |
 | **E** / **End** | Jump playhead to end |
 | **F** | Nudge selected keyframe 1 frame forward |
 | **G** | Cycle render mode: Greyscale → Color → Black + White |
 | **H** / **Home** | Jump playhead to start |
 | **I** / **Insert** | Stamp keyframe for active mode |
+| **K** | Show / hide all probe marks (see [Probe Inspector](docs/Probe-Inspector.md)) |
 | **L** | Light mode (press again to cycle to next light) |
 | **M** | Model mode (move/rotate whole group as one unit) |
+| **N** | Cycle to next probe mark — moves the probe to it and shows its name in the HUD |
+| **Shift+N** | Cycle to previous probe mark |
 | **O** | Object mode (press again to cycle to next object) |
 | **P** | Play / Pause |
 | **R** | Reset current object, light, or camera orientation |
 | **⌘R** | Re-auto-fit Director (only in Scene mode) |
 | **S** | Toggle Scene mode (Director's POV — see camera, lights, models from above and behind); auto-engages Director mode |
+| **V** | Toggle the keyframe motion-path overlay for the selected entity |
 | **W** | Wireframe toggle |
 | **1**–**6** | Snap Director to a standard view of the selection — Front/Left/Rear/Right/Top/Bottom (Scene mode only) |
 | **7** | Solo: hide everything except the selected object's group (Scene mode only) |
 | **8** | Solo: make the hidden others still occlude (Scene mode only; pairs with 7) |
 | **⌘+** / **⌘−** | Dolly Director in / out (only in Scene mode) |
-| **Escape** | Cancel keyframe edit |
-| **Return** | Commit keyframe edit |
 | **Shift+Tab** | Previous keyframe across visible Timeline rows |
 | **Tab** | Next keyframe across visible Timeline rows |
 
@@ -40,10 +42,12 @@ Available in the main viewport (no modifier unless noted).
 | Shortcut | Menu | Action |
 |----------|------|--------|
 | **⌘E** | File | Export ProRes Video… |
+| **⌘⇧E** | File | Export All Passes… (multi-pass) |
 | **⌘F** | Window | Feedback panel |
 | **⌘G** | View | Render Mode (cycles Greyscale → Color → Black + White) |
 | **⌘⇧G** | Window | Color Grade panel |
 | **⌘⇧A** | Window | Atmosphere panel (Fog + Weather: rain/snow/sleet) |
+| **⌘I** | Window | Model Inspector panel |
 | **⌘J** | Window | Timeline Editor |
 | **⌘K** | Window | Camera panel (follow-target picker + stamp button) |
 | **⌘L** | Window | Lights & Background panel |
@@ -53,6 +57,9 @@ Available in the main viewport (no modifier unless noted).
 | **⌘Q** | ThreeDViewport | Quit |
 | **⌘S** | File | Save Project |
 | **⌘⇧S** | File | Save Project As… |
+
+No-shortcut Window items: **Probe Inspector…**, **Show Marks** (toggle; the **K** key
+also toggles), and **Path Animator ▸ Rotation… / Linear…**.
 
 <div style="page-break-after: always;"></div>
 
@@ -155,14 +162,12 @@ The Timeline Editor is a floating window (⌘J) that shows every keyframe on eve
 | **A** | Align multi-selected keyframes to the earliest selected (one per lane; aborts if a lane has 2+ selected) |
 | **B** | Nudge selected keyframe(s) 1 frame backward (whole multi-selection moves together) |
 | **⌘C** | Copy selected keyframe(s) to internal clipboard |
-| **D** / **Delete** / **Backspace** | Delete selected keyframe(s) |
+| **Delete** / **Backspace** | Delete selected keyframe(s) |
 | **F** | Nudge selected keyframe(s) 1 frame forward (whole multi-selection moves together) |
 | **I** / **Insert** | Stamp a keyframe on the selected lane at the playhead (replaces the nearest existing one within 1.5 frames) |
 | **⌘V** | Paste clipboard at current playhead on selected lane(s) |
 | **End** | Seek playhead to end |
-| **Escape** | Cancel keyframe edit |
 | **Home** | Seek playhead to start |
-| **Return** | Enter edit mode on the selected diamond (or commit while editing) |
 | **Shift+Tab** | Previous keyframe across all rows currently visible on screen |
 | **Tab** | Next keyframe across all rows currently visible on screen |
 
@@ -175,6 +180,5 @@ The Timeline Editor is a floating window (⌘J) that shows every keyframe on eve
 | **Click group disclosure triangle** | Expand / collapse the group's lanes |
 | **Click ruler** | Scrub the playhead |
 | **Control + Left drag** | Rubber-band select keyframes in a region |
-| **Double-click diamond** | Enter edit mode (live-adjust pose, then Return to commit) |
 | **Drag diamond** | Move it in time (multi-selection drags together) |
 | **Option-click diamond** | Toggle keyframe in/out of multi-selection |

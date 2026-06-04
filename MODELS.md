@@ -1,12 +1,14 @@
 # Model Generation Scripts
 
-ThreeDViewport ships with three Python scripts that generate every `.glb` file referenced from the included sample projects. They use [trimesh](https://trimesh.org/) for geometry and PIL for procedural texture maps, then export glTF 2.0 with embedded PBR materials.
+ThreeDViewport ships with five Python scripts that generate every `.glb` file referenced from the included sample projects. They use [trimesh](https://trimesh.org/) for geometry and PIL for procedural texture maps, then export glTF 2.0 with embedded PBR materials.
 
 | Script | Purpose |
 |--------|---------|
 | `generate_models.py` | Build a single-mesh shape (cube, sphere, mobius, molecule, etc.) with a chosen colour palette and material preset. Interactive prompts. |
-| `generate_character.py` | Build the rigged `robot` character with a 4-region colour scheme (body / head / arms / legs). Preserves the FK hierarchy needed for follow-camera and pose animation. |
-| `generate_all.py` | Batch driver. Calls the other two to produce every colour × material combination of every shape (3,000 files), plus 30 uniform-colour robots — optionally plus 900 two-tone robots. |
+| `generate_character.py` | Build the rigged `character` robot with a 4-region colour scheme (body / head / arms / legs). Preserves the FK hierarchy needed for follow-camera and pose animation. |
+| `generate_station.py` | Build a hexagonal space station from a scaled benzene molecule — hollow atom hulls with window/doorway cutouts, glass panes, and ceramic inner shells. |
+| `generate_emissive.py` | Build the nine simple primitives as pure-emissive glow markers / effect props at a chosen colour + intensity. |
+| `generate_all.py` | Batch driver. Calls the others to produce every colour × material combination of every shape, plus uniform robots, stations, and emissives — optionally plus two-tone robots. See the [`generate_all.py`](#generate_allpy) section for exact counts. |
 
 ---
 
@@ -284,7 +286,7 @@ Builds the nine simple primitives — `cube`, `cylinder`, `pyramid`, `sphere`, `
 | `roughnessFactor` | `1`           | No specular highlight |
 | `emissiveFactor`  | `(r, g, b) × intensity` | Pure emission, intensity folded in |
 
-The intensity is **pre-multiplied into `emissiveFactor`** rather than being written through the `KHR_materials_emissive_strength` glTF extension. ThreeDViewport's `GLTFLoader.swift:352` collapses both forms into the same internal `mat.emissiveFactor`, and `Shaders.metal` adds it to the output colour without clamping, so the in-engine result is identical and the GLB doesn't depend on extension support in other tools.
+The intensity is **pre-multiplied into `emissiveFactor`** rather than being written through the `KHR_materials_emissive_strength` glTF extension. ThreeDViewport's `GLTFLoader.swift` (emissive block — `mat.emissiveFactor *= strength`) collapses both forms into the same internal `mat.emissiveFactor`, and `Shaders.metal` adds it to the output colour without clamping, so the in-engine result is identical and the GLB doesn't depend on extension support in other tools.
 
 ### Intensity
 

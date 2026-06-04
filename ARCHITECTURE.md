@@ -17,16 +17,19 @@ ThreeDViewport loads `.glb`/`.gltf` models, animates them with keyframes, and ex
 Metal render loop controller implementing `MTKViewDelegate`. Manages:
 
 - **Scene geometry pipeline**: PBR materials, multiple light sources, depth testing
+- **Transparent pipeline**: Alpha-blended pass for materials with `baseColorFactor.w < 1` or `opacity < 1` (drawn after opaque, depth-tested, no depth write)
 - **Holdout pipeline**: Depth-only rendering for occlusion
-- **Background pipeline**: Gradient or solid backgrounds
-- **Laser systems**: Beam billboards and hit effect particles
-- **Weather particles**: Instanced billboard emitters
+- **Background pipeline**: Solid, gradient, or HDRI-environment (skybox) backgrounds
+- **Image-based lighting (IBL)**: Diffuse irradiance + specular prefilter + BRDF LUT from the loaded environment HDR (`IBL.swift`, `IBLShaders.metal`)
+- **Laser systems**: Beam billboards and hit-effect particles
+- **Weather particles**: Instanced billboard emitters (rain / snow / sleet)
 - **Fog volume**: Raymarched volumetric fog using scene depth
+- **Widget pass**: World-space line gizmos — probe, position marks, motion-path overlay, scene-mode camera/light widgets
 - **Axes gizmo**: Orientation widget in viewport corner
-- **Color grade**: Post-process brightness/contrast/gamma
-- **Scene mode**: Director camera for overhead viewport of animated scene
+- **Color grade**: Pre-tone-map exposure + post-process brightness/contrast/gamma
+- **Scene mode**: Director camera for a free editing view of the animated scene
 
-**Key design**: Single source-of-truth for rendering. Export path reuses the same pipeline states.
+**Key design**: Single source-of-truth for rendering. The export path (`VideoExporter`) reuses the same Metal library functions and pipeline configuration.
 
 ---
 
@@ -78,7 +81,48 @@ Supports up to 4 simultaneous light types:
 | Spot           | Cone angle, range, direction                                 |
 | Laser          | Narrow beam, depth occlusion, optional thick billboard       |
 
-Each light has keyframe tracks for intensity, color, position, and direction. Static config persisted per-light.
+Each light has a keyframe track for intensity, colour, position, target (world-space aim point), range, and beam thickness. Type, cone angles, and enabled state are static (not animated) and persisted per-light.
+
+---
+
+### Image-Based Lighting & Environment Baking
+
+**IBL (`IBL.swift`)**: Precomputes a diffuse irradiance map, a specular prefilter
+mip chain, and a BRDF integration LUT from the loaded lighting HDR (done once at
+startup, so changing the HDR path takes effect on next launch). These feed the PBR
+shader for realistic ambient reflection and are shared by preview and export. A
+separate background HDR can drive the skybox without changing the lighting.
+
+**Environment baking (`EnvironmentBaker.swift`)**: Renders the scene as a cube/
+equirect capture from the [Probe](#probe--position-marks) position and writes an
+`.hdr` (RGBE), so a scene can be turned into an environment map for re-lighting.
+
+---
+
+### Probe & Position Marks (`ProbeConfig.swift`)
+
+A movable world-space point used both as the capture origin for environment baking
+and as the source for **position marks** — saved, named, colour-coded world
+positions drawn as small line gizmos. Marks persist with the project, can be cycled
+(which recalls the probe to the mark), and optionally render into exports. The
+probe gizmo itself is editor-only and never exported.
+
+---
+
+### Path Animators (`PathGenerator.swift`)
+
+Pure geometry that generates keyframes for the selected camera, light, or object:
+
+- **Rotation** — a helix / arc / corkscrew around a Probe-defined axis (radius,
+  start/end angle, fractional revolutions). Camera/lights aim at the axis midpoint;
+  objects aim at the same-height axis point.
+- **Linear** — a straight line between two Probe points. Camera/lights keep their
+  current orientation (parallel dolly); objects face the direction of travel.
+
+Both convert a world-space path point into the appropriate track representation
+(camera orbit params, light position+target, or an object delta on `baseTransform`
+that preserves the object's scale), then replace the track's keyframes within the
+captured time window. Euler/transform math lives in `TransformMath.swift`.
 
 ---
 
@@ -97,41 +141,51 @@ Video delay-line echo/tails pass. Ring buffer composites current frame with dela
 
 ### Export Pipeline (`VideoExporter.swift`)
 
-Offline rendering to ProRes `.mov` at 1920×1080:
+Offline rendering to ProRes `.mov` at the resolution set in Settings (default 1920×1080; camera aspect is matched to it):
 
-1. **Offscreen Metal textures**: Private render target
-2. **Frame loop**: Evaluate animation → render → blit to CPU staging
+1. **Offscreen Metal textures**: Private render target, pipelined two-deep (one slot when feedback is active)
+2. **Frame loop**: Evaluate animation → render → blit to CPU staging → read back
 3. **AVAssetWriter**: Append CVPixelBuffers at rational timestamps
-4. **Codec options**: ProRes 4444 (alpha=luma) or ProRes 422 HQ (black background)
+4. **Codec options**:
+   - **ProRes 4444** — colour passes write full RGB with **alpha = Rec.709 luma** via a GPU pass, tagged **premultiplied** so RGB displays at full brightness with the luma usable as a key; matte passes keep a geometry-coverage alpha.
+   - **ProRes 422 HQ** — 10-bit 4:2:2, no alpha, black background.
+5. **Sync countdown**: every export is prepended with a 3-2-1 countdown + white flash frame (generated via CoreGraphics through the same writer) for frame-accurate alignment.
+6. **Export All**: a multi-pass driver renders Scene / Solo / Matte / Background / FX passes (driven by per-object class) to numbered files for compositing.
 
-**Key pipeline reuse**: Same Metal library functions as live preview. Holdout, gizmo, laser, weather, fog, and color grade all match preview exactly.
+**Key pipeline reuse**: Same Metal library functions as live preview. Holdout, widgets/marks, laser, weather, fog, IBL, and color grade all match preview exactly.
 
 **Timing**: Uses rational CMTime (e.g. 30000/1001 for 29.97fps) for exact NTSC rates.
 
 ---
 
-## Project File Format (v25)
+## Project File Format
 
-Human-readable JSON schema (`.3dvp`). Additive evolution—older files load with backfilled defaults.
+Human-readable JSON schema (`.3dvp`). The schema is **additive** — older files load
+with backfilled defaults, and unknown/missing keys are ignored. A version field is
+stored, but compatibility relies on per-key defaulting rather than a hard version gate.
 
 **Persisted state**:
 
 | Category          | Fields                                                                         |
 |-------------------|--------------------------------------------------------------------------------|
-| Timeline          | Duration, loop toggle, frame rate, loop revolutions                            |
-| Camera            | Static pose (yaw/pitch/dist/target/FOV) + keyframe track with follow metadata |
-| Objects           | Paths, base transforms, keyframes, material factors, normal mode               |
-| Light configs     | Type, intensity, color, position, cone angles, beam thickness                  |
-| Light keyframes   | Per-light intensity/color/direction tracks                                    |
-| Group keyframes   | Filename-keyed group transforms (v14+)                                        |
-| Background        | Solid/gradient colors                                                         |
-| Feedback          | Interval, decay, length, blend mode                                           |
-| Color grade       | Exposure, brightness, contrast, gamma                                         |
-| Fog volume        | Box min/max, color, density, variance, raymarch steps                         |
-| Weather emitters  | Per-emitter type/position/color/density config + keyframes                   |
-| Window layout     | Main + all panel positions + section collapse state                           |
+| Timeline          | Duration, loop toggle, frame rate                                              |
+| Camera            | Pose (yaw/pitch/dist/target/FOV) + keyframe track with follow metadata + easing |
+| Objects           | Paths, base transforms, keyframes (+ easing), material factors, base colour, normal mode, object class, visibility/holdout |
+| Light configs     | Type, intensity, colour, position, target, cone angles, range, beam thickness  |
+| Light keyframes   | Per-light intensity/colour/position/target/range/beam tracks (+ easing)        |
+| Group keyframes   | Filename-keyed group transforms                                                |
+| Background        | Mode (solid/gradient/environment) + colours; environment intensity/horizon     |
+| HDR paths         | Lighting HDR + background HDR paths                                            |
+| IBL               | IBL intensity                                                                  |
+| Feedback          | Interval, decay, length, blend mode, swap                                      |
+| Color grade       | Exposure, brightness, contrast, gamma                                          |
+| Fog volume        | Position/size, colour, density, variance, raymarch steps + keyframes (+ easing) |
+| Weather emitters  | Per-emitter type/position/size/colour/density config + keyframes (+ easing)    |
+| Probe + marks     | Probe position; named position marks (name, position, colour) + visibility     |
+| Render settings   | Render mode (colour / greyscale / B+W), wireframe, axes gizmo                   |
+| Window layout     | Main + all panel positions + section collapse state                            |
 
-**Backward compatibility**: Missing keys backfill (FOV defaults 27°, no keyframes = empty track). Missing models prompt for relocation.
+**Backward compatibility**: Missing keys backfill (FOV defaults 27°, no keyframes = empty track; pre-marks files get no marks). Missing models prompt for relocation.
 
 ---
 
@@ -150,15 +204,20 @@ Main Window (1920×1160)
 
 All panels are `NSPanel` (floating, non-modal):
 
-| Panel                  | Menu Shortcut | Purpose                              |
-|------------------------|---------------|--------------------------------------|
-| Camera                 | ⌘K            | Follow-target picker, stamp keys     |
-| Lights & Background    | ⌘L            | Multi-light config + bg gradient     |
-| Feedback               | ⌘F            | Feedback delay parameters            |
-| Color Grade            | ⌘⇧G           | Brightness/contrast/gamma            |
-| Atmosphere             | ⌘⇧A           | Fog + weather emitter config         |
-| Model Inspector        | ⌘I            | Per-object material/normal mode      |
-| Timeline Editor        | ⌘J            | Per-track keyframe retiming editor   |
+| Panel                  | Menu Shortcut | Purpose                                       |
+|------------------------|---------------|-----------------------------------------------|
+| Camera                 | ⌘K            | Follow-target picker, stamp keys              |
+| Lights & Background    | ⌘L            | Multi-light config + background (solid/gradient/HDRI) + IBL |
+| Feedback               | ⌘F            | Feedback delay parameters                     |
+| Color Grade            | ⌘⇧G           | Exposure / brightness / contrast / gamma      |
+| Atmosphere             | ⌘⇧A           | Fog + weather emitter config                  |
+| Model Inspector        | ⌘I            | Per-object transform, material, class, normal mode |
+| Probe Inspector        | —             | Probe position + named position marks         |
+| Path Animator          | —             | Rotation / Linear keyframe generators (submenu) |
+| Timeline Editor        | ⌘J            | Per-track keyframe editor (retime, copy/paste, easing) |
+| Settings               | ⌘,            | Folders, export resolution + default codec    |
+
+Detailed per-panel docs live in [`docs/`](docs/).
 
 **Behavior**: Panels remember positions per project. Hide when main window minimized. Do not steal viewport focus (except Timeline Editor for keyboard shortcuts).
 
@@ -224,7 +283,7 @@ When model lacks normals, computed from UV derivatives for consistent lighting a
 
 ### Project Files
 
-- Schema version check (current: v25)
+- Additive schema with a stored version field; per-key defaulting handles old files
 - Backfilled defaults for missing keys
 - Error messages for encoding/decoding failures
 
@@ -252,7 +311,9 @@ When model lacks normals, computed from UV derivatives for consistent lighting a
 - Shader model swapping (PBR simplified variants for Intel GPU)
 - Real-time waveform/level meter overlay
 - Export presets (aspect ratios, frame rates)
-- Scene camera path visualization
+
+> Scene camera path visualization (the **V** motion-path overlay) and a configurable
+> export resolution are now implemented.
 
 ---
 
