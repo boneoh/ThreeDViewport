@@ -38,7 +38,7 @@ all in one colour, then key your animation against them.
 ## Baking an environment HDR
 
 Position the probe where you want the capture origin, then File ▸ **Export Scene to
-HDR File…**. See [Lights-and-Background](Lights-and-Background.md) for using a baked
-HDR as lighting/background.
+HDR File…**. See [HDR & Image-Based Lighting](HDR.md) for resolution/background
+options and using a baked HDR as lighting/background.
 
 See also: [Keyboard reference](../KEYBOARD_REFERENCE.md).

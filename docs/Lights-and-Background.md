@@ -22,6 +22,8 @@ Render mode, image-based lighting, the background, and up to **four** scene ligh
 HDRs are loaded from the File menu: **Open Lighting HDR…** (drives IBL) and **Open
 Background HDR…** (backdrop only). You can also **bake** the current scene to an HDR
 from the [Probe](Probe-Inspector.md) position via File ▸ Export Scene to HDR File….
+For the full story on IBL intensity, lighting vs background HDRs, and baking, see
+**[HDR & Image-Based Lighting](HDR.md)**.
 
 ## Lights
 

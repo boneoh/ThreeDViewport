@@ -76,6 +76,7 @@ Each panel has its own page under [`docs/`](docs/) with full controls, keystroke
 | Camera | Window → Camera… · ⌘K | [Camera-Panel](docs/Camera-Panel.md) |
 | Model Inspector | Window → Model Inspector… · ⌘I | [Model-Inspector](docs/Model-Inspector.md) |
 | Lights & Background | Window → Lights & Background… · ⌘L | [Lights-and-Background](docs/Lights-and-Background.md) |
+| HDR & Image-Based Lighting | File → Open / Export … HDR | [HDR](docs/HDR.md) |
 | Atmosphere (Fog + Weather) | Window → Atmosphere… · ⌘⇧A | [Atmosphere](docs/Atmosphere.md) |
 | Color Grade | Window → Color Grade… · ⌘⇧G | [Color-Grade](docs/Color-Grade.md) |
 | Feedback | Window → Feedback… · ⌘F | [Feedback](docs/Feedback.md) |
