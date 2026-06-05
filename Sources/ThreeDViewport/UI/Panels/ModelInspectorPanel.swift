@@ -144,6 +144,17 @@ struct ModelInspectorPanel: View {
                     .foregroundColor(.accentColor)
             }
 
+            Button {
+                state.onAddToFavorites?()
+            } label: {
+                Label("Add to Favorites", systemImage: "star")
+                    .font(.caption)
+            }
+            .buttonStyle(.bordered)
+            .disabled(!state.canAddToFavorites)
+            .help("Create an alias to this model in your Favorite Models folder and "
+                + "point the project at it.")
+
             if state.partCount > 1 {
                 HStack(spacing: 6) {
                     Text("Parts")

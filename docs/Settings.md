@@ -13,7 +13,8 @@ Default locations used by file pickers and Export:
 |--------|----------|
 | **Projects** | `.3dvp` project files. |
 | **Movies** | Exported ProRes `.mov` files. |
-| **Models (primary)** / **(fallback)** | Where models are resolved from; the fallback is searched if a model isn't found in the primary. |
+| **Favorite Models** | Your curated favourites — typically macOS aliases (created by the Model Inspector's **Add to Favorites** button) pointing at files in the Model Library, organised into the same shape subfolders. Tried first when resolving a model. |
+| **Model Library** | The full collection (generated, downloaded, etc.). Searched if a model isn't found in Favorite Models. |
 | **HDRs** | `.hdr` environment files (lighting / background / bake output). |
 
 ## Export defaults

@@ -22,8 +22,18 @@ final class GLTFLoader {
 
     // Returns ALL SceneObjects found in the file, or nil on failure.
     // On failure `lastError` contains a user-facing description of the problem.
-    func load(url: URL) -> [SceneObject]? {
+    /// Resolves a macOS Finder alias file to its real target; returns the input
+    /// unchanged for non-alias files (or if resolution fails).  Lets the app store
+    /// an alias path in a project (favourites) yet still read the actual model.
+    static func resolveAliasFile(_ url: URL) -> URL {
+        guard let vals = try? url.resourceValues(forKeys: [.isAliasFileKey]),
+              vals.isAliasFile == true else { return url }
+        return (try? URL(resolvingAliasFileAt: url, options: [])) ?? url
+    }
+
+    func load(url rawURL: URL) -> [SceneObject]? {
         lastError = nil
+        let url = GLTFLoader.resolveAliasFile(rawURL)
         print("[DEBUG] GLTFLoader: loading " + url.lastPathComponent)
 
         let asset: GLTFAsset

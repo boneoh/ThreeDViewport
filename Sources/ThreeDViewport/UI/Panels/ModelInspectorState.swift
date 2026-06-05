@@ -22,6 +22,10 @@ final class ModelInspectorState: ObservableObject {
     @Published var opacity:         Float           = 1
     @Published var baseColor:       Color           = .white
     @Published var hasSelection:    Bool            = false
+    /// True when the selection can be added to the Favorite Models folder (has a
+    /// real sourceURL, not already inside favourites, and no alias exists yet).
+    /// Computed by AppDelegate via `favoritesEligible` on each selection change.
+    @Published var canAddToFavorites: Bool          = false
     /// World-space position of the selection's anchor (preferred-root) part.
     @Published var position:        SIMD3<Float>    = .zero
     /// World-space Euler rotation (degrees, YXZ) of the anchor — for the sliders.
@@ -46,6 +50,11 @@ final class ModelInspectorState: ObservableObject {
     var isPlaying:        (() -> Bool)?
     var onDirty:          (() -> Void)?
     var onRevealInFinder: (() -> Void)?
+    /// Creates a Favorite Models alias for the current selection (wired by AppDelegate).
+    var onAddToFavorites: (() -> Void)?
+    /// Returns whether the given selection is eligible for "Add to Favorites".
+    /// Wired by AppDelegate; consulted in update() to set `canAddToFavorites`.
+    var favoritesEligible: (([SceneObject]) -> Bool)?
     /// Live world-space position of an object as the renderer draws it (group
     /// transform × object transform).  Wired by AppDelegate; without it the field
     /// would miss model/group animation, which lives in the group transform — not
@@ -124,6 +133,8 @@ final class ModelInspectorState: ObservableObject {
         canEditPosition = singleNonGroupRoot || allSameGroup
         canEditRotation = canEditPosition
         canEditScale    = canEditPosition
+
+        canAddToFavorites = favoritesEligible?(newTargets) ?? false
     }
 
     /// World position of `obj` as drawn (group transform × transform), via the

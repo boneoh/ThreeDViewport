@@ -9,7 +9,7 @@ selection (click in the viewport, cycle with **O**, or select a Timeline lane).
 
 | Section | Controls |
 |---------|----------|
-| **Identity** | Name, source filename, part count, **Visible**, **Occlude when hidden** (holdout), **Object class** (Actor / Background / MacGuffin — drives Export All passes), normal mode. |
+| **Identity** | Name, source filename, **Reveal** in Finder, **Add to Favorites**, part count, **Visible**, **Occlude when hidden** (holdout), **Object class** (Actor / Background / MacGuffin — drives Export All passes), normal mode. |
 | **Material** | Metallic, Roughness, Opacity, Base colour. |
 | **Position** | World X / Y / Z (copy / paste / zero). |
 | **Rotation** | World Euler degrees, **YXZ** order (copy / paste / zero). |
@@ -17,6 +17,16 @@ selection (click in the viewport, cycle with **O**, or select a Timeline lane).
 
 Editing the transform is enabled for a **single ungrouped object** or a **uniform
 multi-part group** (the whole model rotates/scales about its anchor).
+
+## Add to Favorites
+
+Creates a macOS **alias** to the selected model in your **Favorite Models** folder
+(set in [Settings](Settings.md)) and repoints the project at that alias — so you can
+curate favourites without copying files. The alias is filed in a subfolder named
+after the model's own folder (e.g. `sphere`, `buckyball`), matching the library's
+shape layout. The button is disabled when the model is already a favourite (its path
+is inside Favorite Models, or an alias for it already exists there). The new alias
+path is saved with the project on your next **Save**.
 
 ## Rotation & gimbal lock
 

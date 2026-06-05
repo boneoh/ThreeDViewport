@@ -876,18 +876,25 @@ def build_dna_scene(heavy_rgb, h_rgb, bond_rgb, metalness, roughness):
     mesh_a, _ = _tube(a_pts, tube_r, sections=12, closed=False)
     mesh_b, _ = _tube(b_pts, tube_r, sections=12, closed=False)
     strands_mesh = trimesh.util.concatenate([mesh_a, mesh_b])
-
-    rung_idx   = np.linspace(0, n_pts - 1, n_rungs, dtype=int)
-    rungs_mesh = trimesh.util.concatenate(
-        [_bond(a_pts[i], b_pts[i], rung_r) for i in rung_idx]
-    )
-
     _apply_solid_color(strands_mesh, heavy_rgb, metalness, roughness)
-    _apply_solid_color(rungs_mesh,   h_rgb,     metalness, roughness)
 
     scene = trimesh.Scene()
-    scene.add_geometry(strands_mesh, node_name="heavy",    geom_name="heavy")
-    scene.add_geometry(rungs_mesh,   node_name="hydrogen", geom_name="hydrogen", parent_node_name="heavy")
+    scene.add_geometry(strands_mesh, node_name="heavy", geom_name="heavy")
+
+    # Rungs (base-pair bonds) cycle through the three palette colours so the
+    # ladder is multi-coloured instead of a single hue.  Each colour becomes one
+    # solid-coloured sub-mesh parented to the strands.
+    rung_idx    = np.linspace(0, n_pts - 1, n_rungs, dtype=int)
+    rung_colors = [heavy_rgb, h_rgb, bond_rgb]
+    for c, col in enumerate(rung_colors):
+        members = [_bond(a_pts[i], b_pts[i], rung_r)
+                   for k, i in enumerate(rung_idx) if k % len(rung_colors) == c]
+        if not members:
+            continue
+        rmesh = trimesh.util.concatenate(members)
+        _apply_solid_color(rmesh, col, metalness, roughness)
+        scene.add_geometry(rmesh, node_name=f"bond{c}", geom_name=f"bond{c}",
+                           parent_node_name="heavy")
     return scene
 
 

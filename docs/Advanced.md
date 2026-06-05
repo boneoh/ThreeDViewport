@@ -126,7 +126,8 @@ object's **class** (Actor / Background / MacGuffin) in the
 - **Scene** — everything, with FX.
 - **Actor Solo / Matte** — just the actors (solo = lit, matte = white silhouette),
   everything else **held out** so the actor's edges stay clean.
-- **Background** — set dressing only, no FX, no Actor, no MacGuffin.
+- **Background** — set dressing only, over the real backdrop, no FX.
+- **Background Matte** — white silhouette of the set dressing on black.
 - **MacGuffin Solo / Matte** — your hero prop, isolated the same way.
 - **FX Solo / Matte** — the effects layer on black.
 

@@ -1937,6 +1937,7 @@ final class ViewportView: MTKView {
         }
         passes.append(ExportPass(name: "Background", visible: [.background], matte: false, blackBg: false, fx: false,
                                  suppressGlass: true))
+        passes.append(ExportPass(name: "Background Matte", visible: [.background], matte: true, blackBg: true, fx: false))
         if present.contains(.macguffin) {
             passes.append(ExportPass(name: "MacGuffin Solo",  visible: [.macguffin], matte: false, blackBg: true, fx: false))
             passes.append(ExportPass(name: "MacGuffin Matte", visible: [.macguffin], matte: true,  blackBg: true, fx: false))

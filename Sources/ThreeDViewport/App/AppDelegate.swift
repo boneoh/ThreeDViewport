@@ -2385,6 +2385,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             guard let url = viewport?.sceneManager.selectedObject?.sourceURL else { return }
             NSWorkspace.shared.activateFileViewerSelecting([url])
         }
+        state.favoritesEligible = { [weak self] targets in
+            self?.favoritesEligibility(for: targets) ?? false
+        }
+        state.onAddToFavorites = { [weak self] in self?.addSelectedToFavorites() }
 
         let panel = KeyForwardingPanel(
             contentRect: NSRect(x: 0, y: 0, width: 352, height: 440),
@@ -3378,6 +3382,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     // MARK: - Export Video
 
+    // MARK: - Favorite Models
+
+    /// Resolves where a selection's favourite alias would live:
+    /// `FavoriteModels/<model's parent-folder name>/<filename>`.  `target` is the
+    /// real model file (a Finder alias in sourceURL is resolved).  Returns nil if
+    /// the selection has no model file (e.g. an envelope null node).
+    private func favoritesAliasContext(for targets: [SceneObject])
+        -> (sourceURL: URL, target: URL, aliasURL: URL, favRoot: URL)? {
+        guard let sourceURL = targets.first?.sourceURL else { return nil }
+        let favRoot   = AppSettings.expand(AppSettings.shared.modelsPathPrimary).standardizedFileURL
+        let target    = GLTFLoader.resolveAliasFile(sourceURL).standardizedFileURL
+        let subfolder = target.deletingLastPathComponent().lastPathComponent
+        let aliasURL  = favRoot.appendingPathComponent(subfolder, isDirectory: true)
+                               .appendingPathComponent(target.lastPathComponent)
+        return (sourceURL, target, aliasURL, favRoot)
+    }
+
+    /// Eligible when the model has a real sourceURL, that path is NOT already inside
+    /// the Favorite Models folder, and no alias for it exists there yet.
+    private func favoritesEligibility(for targets: [SceneObject]) -> Bool {
+        guard let ctx = favoritesAliasContext(for: targets) else { return false }
+        let favPath = ctx.favRoot.path
+        let srcPath = ctx.sourceURL.standardizedFileURL.path
+        if srcPath == favPath || srcPath.hasPrefix(favPath + "/") { return false }
+        if FileManager.default.fileExists(atPath: ctx.aliasURL.path) { return false }
+        return true
+    }
+
+    /// Creates a Finder alias to the selected model in the Favorite Models folder
+    /// and repoints the project at it (saved on the next Save).
+    private func addSelectedToFavorites() {
+        guard let viewport = viewportView,
+              let selected = viewport.sceneManager.selectedObject else { return }
+        let group: [SceneObject] = selected.groupID
+            .map { viewport.sceneManager.objects(inGroup: $0) } ?? [selected]
+        guard let ctx = favoritesAliasContext(for: group),
+              favoritesEligibility(for: group) else { return }
+
+        do {
+            try FileManager.default.createDirectory(
+                at: ctx.aliasURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let bookmark = try ctx.target.bookmarkData(
+                options: .suitableForBookmarkFile, includingResourceValuesForKeys: nil, relativeTo: nil)
+            try URL.writeBookmarkData(bookmark, to: ctx.aliasURL)
+        } catch {
+            showErrorAlert(message: "Couldn't add to Favorites", detail: error.localizedDescription)
+            return
+        }
+
+        // Repoint every part sharing the old sourceURL at the new alias so the
+        // project saves the alias path; load-time resolution reads the real model.
+        let oldURL = ctx.sourceURL
+        for obj in viewport.sceneManager.objects where obj.sourceURL == oldURL {
+            obj.sourceURL = ctx.aliasURL
+        }
+        markDirty()
+        // Recompute the inspector so the button disables now that it's a favourite.
+        modelInspectorState?.update(targets: group)
+        print("[DEBUG] AppDelegate: added to favourites — " + ctx.aliasURL.path)
+    }
+
     @objc private func exportAll(_ sender: Any) {
         guard let window = window else { return }
         guard viewportView?.sceneManager.primaryObject != nil else {
@@ -3404,7 +3469,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let (accessory, codecPopup, resPopup, fpsPopup) = makeExportAccessoryView()
         let alert = NSAlert()
         alert.messageText     = "Export All Passes"
-        alert.informativeText = "Renders the full pass set (Full, Actor/MacGuffin Solo + Matte, Scene) into Movies/\(projectName)/ using one codec. The project is saved first and reloaded when the cycle finishes."
+        alert.informativeText = "Renders the full pass set (Scene; Actor / MacGuffin Solo + Matte; Background + Background Matte; FX Solo + Matte) into Movies/\(projectName)/ using one codec. The project is saved first and reloaded when the cycle finishes."
         alert.accessoryView   = accessory
         alert.addButton(withTitle: "Export All")
         alert.addButton(withTitle: "Cancel")

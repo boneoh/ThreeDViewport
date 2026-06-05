@@ -30,8 +30,8 @@ struct SettingsPanel: View {
             Text("Folders").font(.subheadline).foregroundColor(.secondary)
             pathRow("Projects",          $projectsPath,        directory: true)
             pathRow("Movies",            $moviesPath,          directory: true)
-            pathRow("Models (primary)",  $modelsPathPrimary,   directory: true)
-            pathRow("Models (fallback)", $modelsPathSecondary, directory: true)
+            pathRow("Favorite Models",   $modelsPathPrimary,   directory: true)
+            pathRow("Model Library",     $modelsPathSecondary, directory: true)
             pathRow("HDRs",              $hdrFolderPath,       directory: true)
 
             Divider()

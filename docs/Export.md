@@ -34,7 +34,8 @@ Renders a cycle of passes from one codec choice, named
 |------|----------|
 | **Scene** | Everything, with FX (fog/weather/lasers/sparks). |
 | **Actor Solo / Matte** | Just the Actor-class objects (solo = lit; matte = white silhouette), others held out. |
-| **Background** | Background-class objects only, no FX. |
+| **Background** | Background-class objects only, over the real backdrop, no FX. |
+| **Background Matte** | White silhouette of the Background-class objects on black. |
 | **MacGuffin Solo / Matte** | Just the MacGuffin-class objects. |
 | **FX Solo / Matte** | The effects layer on black. |
 
