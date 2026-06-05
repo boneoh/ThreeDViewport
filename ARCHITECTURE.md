@@ -31,6 +31,8 @@ Metal render loop controller implementing `MTKViewDelegate`. Manages:
 
 **Key design**: Single source-of-truth for rendering. The export path (`VideoExporter`) reuses the same Metal library functions and pipeline configuration.
 
+> **Planned refactor:** today the shaders and `SceneGeometryEncoder` are shared, but the effect *pipeline states* and per-frame *compositing order* are still built independently in `Renderer` and `VideoExporter`. [RENDER_PIPELINE_REFACTOR.md](RENDER_PIPELINE_REFACTOR.md) proposes extracting a shared `ScenePipeline` so new effects are added once. Do this before adding/modifying effects.
+
 ---
 
 ### SceneManager (`SceneManager.swift`)
