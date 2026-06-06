@@ -117,7 +117,7 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     // MARK: - Fog volume (optional — set by ViewportView after init)
     var fogSettings: FogSettings?
-    private var fogVolumePipelineState: MTLRenderPipelineState?
+    // (Fog volume pipeline now lives in ScenePipeline.)
     // Sampleable scene depth, allocated lazily only when the fog volume is on and
     // feedback is off.  The scene renders straight to the drawable with this as its
     // depth attachment; the fog pass then samples it to clamp rays to scene depth.
@@ -250,7 +250,6 @@ final class Renderer: NSObject, MTKViewDelegate {
         laserHitPipelineState   = sp.laserHitPipelineState
         sparkPipelineState      = sp.sparkPipelineState
         particleFXPipelineState = sp.particleFXPipelineState
-        fogVolumePipelineState  = sp.fogVolumePipelineState
         colorGradePipeline      = sp.colorGradePipelineState
 
         // ── Scene geometry pipeline ───────────────────────────────────────────
@@ -446,31 +445,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         print("[DEBUG] Renderer: fog scene depth rebuilt \(width)×\(height)")
     }
 
-    /// Composites the raymarched fog volume over `dest` (which already holds the
-    /// scene), reading `depthTex` for occlusion.  Source-over blend; no read of the
-    /// destination, so it works over the drawable and the exporter's colour texture.
-    private func drawFogVolume(commandBuffer: MTLCommandBuffer,
-                               dest:          MTLTexture,
-                               depthTex:      MTLTexture) {
-        guard let fog = fogSettings, fog.isEnabled,
-              let pipe = fogVolumePipelineState else { return }
-        let pass = MTLRenderPassDescriptor()
-        pass.colorAttachments[0].texture     = dest
-        pass.colorAttachments[0].loadAction  = .load
-        pass.colorAttachments[0].storeAction = .store
-        guard let enc = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
-        var u = makeFogVolumeUniforms(fog,
-            at:             timeline.renderTime,
-            playing:        timeline.isPlaying,
-            viewProjection: viewCamera.viewProjectionMatrix,
-            cameraPos:      viewCamera.eyePosition,
-            colorMode:      colorMode.rawValue)
-        enc.setRenderPipelineState(pipe)
-        enc.setFragmentBytes(&u, length: MemoryLayout<FogVolumeUniforms>.stride, index: 0)
-        enc.setFragmentTexture(depthTex, index: 0)
-        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
-        enc.endEncoding()
-    }
+    // (Fog volume composite now lives in ScenePipeline.encodeFogVolume.)
 
     /// While the timeline is paused, makes the Fog/Weather panel + paused render
     /// follow the playhead: on each scrub (time change) the static panel fields are
@@ -658,15 +633,21 @@ final class Renderer: NSObject, MTKViewDelegate {
             commandBuffer.commit(); return
         }
 
-        // ── Background gradient / environment skybox ──────────────────────────
-        scenePipeline?.encodeBackground(into: encoder, SceneRenderContext(
+        // Per-frame context shared by every ScenePipeline pass this frame.
+        let sceneCtx = SceneRenderContext(
             viewProjection:     viewCamera.viewProjectionMatrix,
             eyePosition:        viewCamera.eyePosition,
             background:         backgroundConfig,
             backgroundEquirect: backgroundEquirect,
             ibl:                ibl,
             colorMode:          colorMode,
-            dummyEquirect:      dummyEquirect))
+            dummyEquirect:      dummyEquirect,
+            time:               timeline.renderTime,
+            playing:            timeline.isPlaying,
+            fog:                fogSettings)
+
+        // ── Background gradient / environment skybox ──────────────────────────
+        scenePipeline?.encodeBackground(into: encoder, sceneCtx)
 
         // ── Scene geometry ────────────────────────────────────────────────────
         // Do NOT early-return here: even an empty scene must go through the
@@ -873,7 +854,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         // Raymarch the fog over the drawable (which now holds the scene), reading
         // the sampleable depth texture for occlusion.
         if useFogOffscreen, let depthTex = fogSceneDepth {
-            drawFogVolume(commandBuffer: commandBuffer, dest: drawable.texture, depthTex: depthTex)
+            scenePipeline?.encodeFogVolume(commandBuffer: commandBuffer,
+                                           dest: drawable.texture, depthTex: depthTex, sceneCtx)
         }
 
         // ── Excluded laser beams + their hit effects + all sparks ─────────────

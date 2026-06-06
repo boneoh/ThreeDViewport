@@ -15,6 +15,13 @@ struct SceneRenderContext {
     var ibl:                IBL?
     var colorMode:          RenderColorMode
     var dummyEquirect:      MTLTexture?      // 1×1 fallback for the skybox equirect slot
+
+    // Timing (resolved by the driver: live timeline vs deterministic export)
+    var time:               Double
+    var playing:            Bool
+
+    // Fog volume
+    var fog:                FogSettings?     // nil / disabled = no fog pass
 }
 
 // Shared compositing core.  Owns the effect pipeline states that BOTH the live
@@ -313,5 +320,34 @@ final class ScenePipeline {
             encoder.setFragmentTexture(bgEquirect ?? ctx.dummyEquirect, index: 1)
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         }
+    }
+
+    /// Raymarched fog volume composited over `dest` (which already holds the
+    /// scene), reading `depthTex` for occlusion.  Its own render pass (source-over
+    /// blend, no destination read) so it works over the drawable or the exporter's
+    /// colour texture.  The caller gates this on feedback being off (the feedback
+    /// depth isn't sampleable); a disabled/nil fog also no-ops here.
+    func encodeFogVolume(commandBuffer: MTLCommandBuffer,
+                         dest:          MTLTexture,
+                         depthTex:      MTLTexture,
+                         _ ctx:         SceneRenderContext) {
+        guard let fog = ctx.fog, fog.isEnabled,
+              let pipe = fogVolumePipelineState else { return }
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture     = dest
+        pass.colorAttachments[0].loadAction  = .load
+        pass.colorAttachments[0].storeAction = .store
+        guard let enc = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
+        var u = makeFogVolumeUniforms(fog,
+            at:             ctx.time,
+            playing:        ctx.playing,
+            viewProjection: ctx.viewProjection,
+            cameraPos:      ctx.eyePosition,
+            colorMode:      ctx.colorMode.rawValue)
+        enc.setRenderPipelineState(pipe)
+        enc.setFragmentBytes(&u, length: MemoryLayout<FogVolumeUniforms>.stride, index: 0)
+        enc.setFragmentTexture(depthTex, index: 0)
+        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        enc.endEncoding()
     }
 }

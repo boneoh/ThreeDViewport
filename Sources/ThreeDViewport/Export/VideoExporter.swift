@@ -174,7 +174,7 @@ final class VideoExporter {
 
     // Fog settings — nil = no fog during export
     var fogSettings: FogSettings?
-    private var fogVolumePipelineState: MTLRenderPipelineState?
+    // (Fog volume pipeline now lives in ScenePipeline.)
 
     // Weather particles — nil/empty = none during export
     var particleManager: ParticleManager?
@@ -260,7 +260,6 @@ final class VideoExporter {
         self.laserHitPipelineState   = scenePipeline.laserHitPipelineState
         self.sparkPipelineState      = scenePipeline.sparkPipelineState
         self.particleFXPipelineState = scenePipeline.particleFXPipelineState
-        self.fogVolumePipelineState  = scenePipeline.fogVolumePipelineState
         self.colorGradePipelineState = scenePipeline.colorGradePipelineState
 
         // Dummy buffers for objects without UV / tangent data
@@ -638,32 +637,7 @@ final class VideoExporter {
         return t
     }
 
-    /// Composites the raymarched fog volume over `dest` (which holds the scene),
-    /// reading `depthTex` for occlusion.  Mirrors Renderer.drawFogVolume so the
-    /// export matches the live preview exactly.
-    private func drawFogVolume(commandBuffer: MTLCommandBuffer,
-                               dest:          MTLTexture,
-                               depthTex:      MTLTexture,
-                               time:          Double) {
-        guard let fog = fogSettings, fog.isEnabled,
-              let pipe = fogVolumePipelineState else { return }
-        let pass = MTLRenderPassDescriptor()
-        pass.colorAttachments[0].texture     = dest
-        pass.colorAttachments[0].loadAction  = .load
-        pass.colorAttachments[0].storeAction = .store
-        guard let enc = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
-        var u = makeFogVolumeUniforms(fog,
-            at:             time,
-            playing:        true,   // export always reads the keyframe track
-            viewProjection: camera.viewProjectionMatrix,
-            cameraPos:      camera.eyePosition,
-            colorMode:      colorMode.rawValue)
-        enc.setRenderPipelineState(pipe)
-        enc.setFragmentBytes(&u, length: MemoryLayout<FogVolumeUniforms>.stride, index: 0)
-        enc.setFragmentTexture(depthTex, index: 0)
-        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
-        enc.endEncoding()
-    }
+    // (Fog volume composite now lives in ScenePipeline.encodeFogVolume.)
 
     private func makeDepthTexture() -> MTLTexture? {
         let desc = MTLTextureDescriptor.texture2DDescriptor(
@@ -707,6 +681,21 @@ final class VideoExporter {
         let renderTarget = feedbackActive ? (feedbackProc!.sceneTexture ?? colorTex) : colorTex
         let renderDepth  = feedbackActive ? (feedbackProc!.depthTexture ?? depthTex)  : depthTex
 
+        // Per-frame context shared by every ScenePipeline pass this frame.  Export
+        // always reads the keyframe track (playing = true); fog time matches the
+        // existing behaviour (Double(hitEffectTime)).
+        let sceneCtx = SceneRenderContext(
+            viewProjection:     camera.viewProjectionMatrix,
+            eyePosition:        camera.eyePosition,
+            background:         backgroundConfig,
+            backgroundEquirect: backgroundEquirect,
+            ibl:                ibl,
+            colorMode:          colorMode,
+            dummyEquirect:      dummyEquirect,
+            time:               Double(hitEffectTime),
+            playing:            true,
+            fog:                fogSettings)
+
         // ── Draw pass ─────────────────────────────────────────────────────────
         let passDesc = MTLRenderPassDescriptor()
         passDesc.colorAttachments[0].texture     = renderTarget
@@ -727,14 +716,7 @@ final class VideoExporter {
         if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: passDesc) {
 
             // ── Background gradient / environment skybox ──────────────────────
-            scenePipeline.encodeBackground(into: encoder, SceneRenderContext(
-                viewProjection:     camera.viewProjectionMatrix,
-                eyePosition:        camera.eyePosition,
-                background:         backgroundConfig,
-                backgroundEquirect: backgroundEquirect,
-                ibl:                ibl,
-                colorMode:          colorMode,
-                dummyEquirect:      dummyEquirect))
+            scenePipeline.encodeBackground(into: encoder, sceneCtx)
 
             // ── Scene geometry ────────────────────────────────────────────────
             // Shared with the live Renderer via SceneGeometryEncoder so material,
@@ -899,8 +881,8 @@ final class VideoExporter {
 
         // ── Fog volume composite (feedback off only — matches the live preview) ──
         if !feedbackActive, fogSettings?.isEnabled == true {
-            drawFogVolume(commandBuffer: commandBuffer, dest: colorTex, depthTex: depthTex,
-                          time: Double(hitEffectTime))
+            scenePipeline.encodeFogVolume(commandBuffer: commandBuffer,
+                                          dest: colorTex, depthTex: depthTex, sceneCtx)
         }
 
         // ── Axes gizmo overlay (bottom-right corner) ──────────────────────────
