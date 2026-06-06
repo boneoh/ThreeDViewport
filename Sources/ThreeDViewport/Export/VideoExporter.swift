@@ -124,6 +124,9 @@ final class VideoExporter {
     private let backgroundConfig:  BackgroundConfig
     private let pipelineState:     MTLRenderPipelineState
     private let depthStencilState: MTLDepthStencilState
+    // Shared compositing core (built by the Renderer).  Owns the effect pipelines
+    // and the pass encoders (e.g. encodeBackground) so export matches preview.
+    private let scenePipeline:     ScenePipeline
     // Holdout (depth-only) pipeline — shared from the Renderer so exports occlude
     // identically to the preview.  nil disables the holdout pass.
     private let holdoutPipelineState: MTLRenderPipelineState?
@@ -158,9 +161,7 @@ final class VideoExporter {
 
     // Effect pipeline handles — all from the shared ScenePipeline (assigned in
     // init) so export uses the exact same states as the live preview.
-    private var backgroundPipelineState: MTLRenderPipelineState?
-    private var backgroundDepthState:    MTLDepthStencilState?
-    private var skyboxPipelineState:     MTLRenderPipelineState?
+    // (Background + skybox now drawn via scenePipeline.encodeBackground.)
     private var dummyEquirect:           MTLTexture?
     /// Dedicated background HDR equirect, shared from the Renderer so export matches.
     var backgroundEquirect:              MTLTexture?
@@ -242,6 +243,7 @@ final class VideoExporter {
         self.backgroundConfig  = backgroundConfig
         self.pipelineState     = pipelineState
         self.depthStencilState = depthStencilState
+        self.scenePipeline     = scenePipeline
         self.holdoutPipelineState     = holdoutPipelineState
         self.transparentPipelineState = transparentPipelineState
         self.transparentDepthState    = transparentDepthState
@@ -253,9 +255,6 @@ final class VideoExporter {
         // Shared effect pipeline states, built once by the Renderer's ScenePipeline
         // and reused here (Phase 0) so export matches preview by construction.  The
         // driver-local fields below are thin handles into it.
-        self.backgroundPipelineState = scenePipeline.backgroundPipelineState
-        self.backgroundDepthState    = scenePipeline.backgroundDepthState
-        self.skyboxPipelineState     = scenePipeline.skyboxPipelineState
         self.laserBeamPipelineState  = scenePipeline.laserBeamPipelineState
         self.laserBeamDepthState     = scenePipeline.laserBeamDepthState
         self.laserHitPipelineState   = scenePipeline.laserHitPipelineState
@@ -727,42 +726,15 @@ final class VideoExporter {
 
         if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: passDesc) {
 
-            // ── Background gradient (drawn before scene geometry) ─────────────
-            if backgroundConfig.mode == .gradient,
-               let bgPipe  = backgroundPipelineState,
-               let bgDepth = backgroundDepthState {
-                encoder.setRenderPipelineState(bgPipe)
-                encoder.setDepthStencilState(bgDepth)
-                encoder.setCullMode(.none)
-                var bgUniforms = backgroundConfig.backgroundUniforms
-                encoder.setFragmentBytes(&bgUniforms,
-                                         length: MemoryLayout<BackgroundUniforms>.stride,
-                                         index: 0)
-                encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
-            }
-            else if backgroundConfig.mode == .environment,
-                    let skyPipe = skyboxPipelineState,
-                    let bgDepth = backgroundDepthState,
-                    let ibl     = ibl,
-                    let cube    = ibl.envCubemap {
-                encoder.setRenderPipelineState(skyPipe)
-                encoder.setDepthStencilState(bgDepth)
-                encoder.setCullMode(.none)
-                let bgEquirect = backgroundEquirect ?? ibl.envEquirect
-                var sky = SkyboxUniforms(
-                    inverseViewProjection: simd_inverse(camera.viewProjectionMatrix),
-                    cameraPos:             SIMD4<Float>(camera.eyePosition, 1),
-                    intensity:             backgroundConfig.environmentIntensity,
-                    horizon:               backgroundConfig.environmentHorizon,
-                    useEquirect:           bgEquirect != nil ? 1 : 0,
-                    colorMode:             UInt32(colorMode.rawValue))
-                encoder.setFragmentBytes(&sky,
-                                         length: MemoryLayout<SkyboxUniforms>.stride,
-                                         index: 0)
-                encoder.setFragmentTexture(cube, index: 0)
-                encoder.setFragmentTexture(bgEquirect ?? dummyEquirect, index: 1)
-                encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
-            }
+            // ── Background gradient / environment skybox ──────────────────────
+            scenePipeline.encodeBackground(into: encoder, SceneRenderContext(
+                viewProjection:     camera.viewProjectionMatrix,
+                eyePosition:        camera.eyePosition,
+                background:         backgroundConfig,
+                backgroundEquirect: backgroundEquirect,
+                ibl:                ibl,
+                colorMode:          colorMode,
+                dummyEquirect:      dummyEquirect))
 
             // ── Scene geometry ────────────────────────────────────────────────
             // Shared with the live Renderer via SceneGeometryEncoder so material,

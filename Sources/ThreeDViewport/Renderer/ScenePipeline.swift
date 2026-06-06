@@ -1,4 +1,21 @@
 import Metal
+import simd
+
+// Per-frame scene + camera data a shared pass needs, resolved by the calling
+// driver (so deterministic-export vs wall-clock-live, and scene-vs-director
+// camera, stay driver concerns).  Grows one field group per migration phase.
+struct SceneRenderContext {
+    // Camera (already resolved: director-or-scene live, export camera on export)
+    var viewProjection:     matrix_float4x4
+    var eyePosition:        SIMD3<Float>
+
+    // Background / skybox
+    var background:         BackgroundConfig
+    var backgroundEquirect: MTLTexture?      // dedicated bg HDR, else nil
+    var ibl:                IBL?
+    var colorMode:          RenderColorMode
+    var dummyEquirect:      MTLTexture?      // 1×1 fallback for the skybox equirect slot
+}
 
 // Shared compositing core.  Owns the effect pipeline states that BOTH the live
 // `Renderer` and the offline `VideoExporter` use, built ONCE here so preview and
@@ -253,5 +270,48 @@ final class ScenePipeline {
         self.particleFXPipelineState = particleFX
         self.fogVolumePipelineState  = fogVolume
         self.colorGradePipelineState = colorGrade
+    }
+
+    // MARK: - Pass encoders
+
+    /// Background gradient OR environment skybox, drawn into the caller's open
+    /// scene encoder before geometry.  The ONLY copy of this draw — both the live
+    /// viewport and the exporter route through here so they can't drift.
+    func encodeBackground(into encoder: MTLRenderCommandEncoder, _ ctx: SceneRenderContext) {
+        if ctx.background.mode == .gradient,
+           let bgPipe  = backgroundPipelineState,
+           let bgDepth = backgroundDepthState {
+            encoder.setRenderPipelineState(bgPipe)
+            encoder.setDepthStencilState(bgDepth)
+            encoder.setCullMode(.none)
+            var bgUniforms = ctx.background.backgroundUniforms
+            encoder.setFragmentBytes(&bgUniforms,
+                                     length: MemoryLayout<BackgroundUniforms>.stride,
+                                     index: 0)
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        }
+        else if ctx.background.mode == .environment,
+                let skyPipe = skyboxPipelineState,
+                let bgDepth = backgroundDepthState,
+                let ibl     = ctx.ibl,
+                let cube    = ibl.envCubemap {
+            encoder.setRenderPipelineState(skyPipe)
+            encoder.setDepthStencilState(bgDepth)
+            encoder.setCullMode(.none)
+            let bgEquirect = ctx.backgroundEquirect ?? ibl.envEquirect   // dedicated bg, else lighting env
+            var sky = SkyboxUniforms(
+                inverseViewProjection: simd_inverse(ctx.viewProjection),
+                cameraPos:             SIMD4<Float>(ctx.eyePosition, 1),
+                intensity:             ctx.background.environmentIntensity,
+                horizon:               ctx.background.environmentHorizon,
+                useEquirect:           bgEquirect != nil ? 1 : 0,
+                colorMode:             UInt32(ctx.colorMode.rawValue))
+            encoder.setFragmentBytes(&sky,
+                                     length: MemoryLayout<SkyboxUniforms>.stride,
+                                     index: 0)
+            encoder.setFragmentTexture(cube, index: 0)
+            encoder.setFragmentTexture(bgEquirect ?? ctx.dummyEquirect, index: 1)
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        }
     }
 }

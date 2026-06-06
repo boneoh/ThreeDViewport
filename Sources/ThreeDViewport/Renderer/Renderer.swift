@@ -27,11 +27,8 @@ final class Renderer: NSObject, MTKViewDelegate {
     var transparentPipelineState: MTLRenderPipelineState?
     var transparentDepthState:    MTLDepthStencilState?
 
-    // Background gradient pipeline
-    var backgroundPipelineState: MTLRenderPipelineState?
-    var backgroundDepthState: MTLDepthStencilState?
-    // Environment skybox pipeline — samples the IBL env by camera-ray direction.
-    var skyboxPipelineState: MTLRenderPipelineState?
+    // Background gradient + environment skybox pipelines now live in ScenePipeline
+    // (drawn via scenePipeline.encodeBackground).
     private var dummyEquirect: MTLTexture?   // 1×1 placeholder for the equirect slot
     /// Optional dedicated background HDR equirect.  When set, the skybox samples
     /// this instead of the lighting (IBL) equirect, so backdrop and lighting can
@@ -248,9 +245,6 @@ final class Renderer: NSObject, MTKViewDelegate {
         // driver-local pipelines so a later guard-return can't skip it.
         let sp = ScenePipeline(device: device, library: library)
         scenePipeline           = sp
-        backgroundPipelineState = sp.backgroundPipelineState
-        backgroundDepthState    = sp.backgroundDepthState
-        skyboxPipelineState     = sp.skyboxPipelineState
         laserBeamPipelineState  = sp.laserBeamPipelineState
         laserBeamDepthState     = sp.laserBeamDepthState
         laserHitPipelineState   = sp.laserHitPipelineState
@@ -664,43 +658,15 @@ final class Renderer: NSObject, MTKViewDelegate {
             commandBuffer.commit(); return
         }
 
-        // ── Background gradient ───────────────────────────────────────────────
-        if backgroundConfig.mode == .gradient,
-           let bgPipe  = backgroundPipelineState,
-           let bgDepth = backgroundDepthState {
-            encoder.setRenderPipelineState(bgPipe)
-            encoder.setDepthStencilState(bgDepth)
-            encoder.setCullMode(.none)
-            var bgUniforms = backgroundConfig.backgroundUniforms
-            encoder.setFragmentBytes(&bgUniforms,
-                                     length: MemoryLayout<BackgroundUniforms>.stride,
-                                     index: 0)
-            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
-        }
-        // ── Environment skybox ────────────────────────────────────────────────
-        else if backgroundConfig.mode == .environment,
-                let skyPipe = skyboxPipelineState,
-                let bgDepth = backgroundDepthState,
-                let ibl     = ibl,
-                let cube    = ibl.envCubemap {
-            encoder.setRenderPipelineState(skyPipe)
-            encoder.setDepthStencilState(bgDepth)
-            encoder.setCullMode(.none)
-            let bgEquirect = backgroundEquirect ?? ibl.envEquirect   // dedicated bg, else lighting env
-            var sky = SkyboxUniforms(
-                inverseViewProjection: simd_inverse(viewCamera.viewProjectionMatrix),
-                cameraPos:             SIMD4<Float>(viewCamera.eyePosition, 1),
-                intensity:             backgroundConfig.environmentIntensity,
-                horizon:               backgroundConfig.environmentHorizon,
-                useEquirect:           bgEquirect != nil ? 1 : 0,
-                colorMode:             UInt32(colorMode.rawValue))
-            encoder.setFragmentBytes(&sky,
-                                     length: MemoryLayout<SkyboxUniforms>.stride,
-                                     index: 0)
-            encoder.setFragmentTexture(cube, index: 0)
-            encoder.setFragmentTexture(bgEquirect ?? dummyEquirect, index: 1)
-            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
-        }
+        // ── Background gradient / environment skybox ──────────────────────────
+        scenePipeline?.encodeBackground(into: encoder, SceneRenderContext(
+            viewProjection:     viewCamera.viewProjectionMatrix,
+            eyePosition:        viewCamera.eyePosition,
+            background:         backgroundConfig,
+            backgroundEquirect: backgroundEquirect,
+            ibl:                ibl,
+            colorMode:          colorMode,
+            dummyEquirect:      dummyEquirect))
 
         // ── Scene geometry ────────────────────────────────────────────────────
         // Do NOT early-return here: even an empty scene must go through the
