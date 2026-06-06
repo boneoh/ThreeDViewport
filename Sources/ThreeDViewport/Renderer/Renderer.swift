@@ -108,7 +108,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     // MARK: - Color grade (optional — set by ViewportView after init)
 
     var colorGradeSettings:    ColorGradeSettings?
-    private var colorGradePipeline: MTLRenderPipelineState?
+    // (Color grade pipeline now lives in ScenePipeline.)
 
     // MARK: - Fog volume (optional — set by ViewportView after init)
     var fogSettings: FogSettings?
@@ -240,7 +240,6 @@ final class Renderer: NSObject, MTKViewDelegate {
         let sp = ScenePipeline(device: device, library: library)
         scenePipeline           = sp
         laserBeamDepthState     = sp.laserBeamDepthState
-        colorGradePipeline      = sp.colorGradePipelineState
 
         // ── Scene geometry pipeline ───────────────────────────────────────────
         guard let vertexFn   = library.makeFunction(name: "vertex_main"),
@@ -845,10 +844,10 @@ final class Renderer: NSObject, MTKViewDelegate {
                     blit.copy(from: drawable.texture, to: gradeTex)
                     blit.endEncoding()
                 }
-                applyColorGrade(commandBuffer: commandBuffer,
-                                source: gradeTex,
-                                dest:   drawable.texture,
-                                settings: settings)
+                scenePipeline?.encodeColorGrade(commandBuffer: commandBuffer,
+                                                source: gradeTex,
+                                                dest:   drawable.texture,
+                                                settings: settings)
             }
         }
 
@@ -885,29 +884,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
     }
 
-    // MARK: - Color grade helper
-
-    func applyColorGrade(commandBuffer: MTLCommandBuffer,
-                         source:        MTLTexture,
-                         dest:          MTLTexture,
-                         settings:      ColorGradeSettings) {
-        guard let pipeline = colorGradePipeline else { return }
-        let passDesc = MTLRenderPassDescriptor()
-        passDesc.colorAttachments[0].texture     = dest
-        passDesc.colorAttachments[0].loadAction  = .dontCare   // every pixel overwritten
-        passDesc.colorAttachments[0].storeAction = .store
-        guard let enc = commandBuffer.makeRenderCommandEncoder(descriptor: passDesc) else { return }
-        enc.setRenderPipelineState(pipeline)
-        enc.setCullMode(.none)
-        enc.setFragmentTexture(source, index: 0)
-        // z = 1/gamma: precompute reciprocal so the shader avoids per-pixel division.
-        // Clamp gamma to avoid division by zero; identity when gamma==1 → z==1.
-        let gammaExp = 1.0 / max(settings.gamma, 0.01)
-        var params = SIMD3<Float>(settings.brightness, settings.contrast, gammaExp)
-        enc.setFragmentBytes(&params, length: MemoryLayout<SIMD3<Float>>.stride, index: 0)
-        enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
-        enc.endEncoding()
-    }
+    // (Color grade pass now lives in ScenePipeline.encodeColorGrade.)
 
     // MARK: - Axes gizmo
 

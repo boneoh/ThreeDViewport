@@ -202,12 +202,10 @@ final class VideoExporter {
     // Gizmo pipeline — built lazily from the same Metal library as the scene pipeline
     private var gizmoPipelineState: MTLRenderPipelineState?
 
-    // Color grade handle — from the shared ScenePipeline (assigned in init).
-    // Laser beam/hit/spark pipelines now live in ScenePipeline; the read-only laser
-    // depth state stays here as a handle because the export's probe-marks overlay
-    // reuses it (matching the live renderer).
+    // Laser beam/hit/spark + color grade pipelines now live in ScenePipeline.  The
+    // read-only laser depth state stays here as a handle because the export's
+    // probe-marks overlay reuses it (matching the live renderer).
     private var laserBeamDepthState:    MTLDepthStencilState?
-    private var colorGradePipelineState: MTLRenderPipelineState?
 
     // Luma-alpha pipeline (fullscreen; rewrites alpha = Rec.709 luma for 4444 color)
     private var lumaAlphaPipelineState: MTLRenderPipelineState?
@@ -253,7 +251,6 @@ final class VideoExporter {
         // and reused here (Phase 0) so export matches preview by construction.  The
         // driver-local fields below are thin handles into it.
         self.laserBeamDepthState     = scenePipeline.laserBeamDepthState
-        self.colorGradePipelineState = scenePipeline.colorGradePipelineState
 
         // Dummy buffers for objects without UV / tangent data
         var dummyUV:  [Float] = [0, 0]
@@ -875,29 +872,15 @@ final class VideoExporter {
 
         // ── Color grade (brightness / contrast) ──────────────────────────────
         if let settings = colorGradeSettings, !settings.isIdentity,
-           let gTex     = gradeTex,
-           let pipeline = colorGradePipelineState {
+           let gTex     = gradeTex {
             // Blit the rendered frame into the intermediate grade texture so the
             // fragment shader can sample it while writing back to colorTex.
             if let blit = commandBuffer.makeBlitCommandEncoder() {
                 blit.copy(from: colorTex, to: gTex)
                 blit.endEncoding()
             }
-            let gradePass = MTLRenderPassDescriptor()
-            gradePass.colorAttachments[0].texture     = colorTex
-            gradePass.colorAttachments[0].loadAction  = .dontCare
-            gradePass.colorAttachments[0].storeAction = .store
-            if let enc = commandBuffer.makeRenderCommandEncoder(descriptor: gradePass) {
-                enc.setRenderPipelineState(pipeline)
-                enc.setFragmentTexture(gTex, index: 0)
-                let gammaExp = 1.0 / max(settings.gamma, 0.01)
-                var params = SIMD3<Float>(settings.brightness, settings.contrast, gammaExp)
-                enc.setFragmentBytes(&params,
-                                     length: MemoryLayout<SIMD3<Float>>.stride,
-                                     index: 0)
-                enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
-                enc.endEncoding()
-            }
+            scenePipeline.encodeColorGrade(commandBuffer: commandBuffer,
+                                           source: gTex, dest: colorTex, settings: settings)
         }
 
         // ── Luma alpha (ProRes 4444 color passes) ─────────────────────────────

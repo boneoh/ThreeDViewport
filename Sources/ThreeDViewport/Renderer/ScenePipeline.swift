@@ -545,4 +545,32 @@ final class ScenePipeline {
         encodeSparks(into:     enc, ctx)
         enc.endEncoding()
     }
+
+    // MARK: - Color grade
+
+    /// Fullscreen brightness/contrast/gamma grade: samples `source` and overwrites
+    /// every pixel of `dest`.  Its own render pass.  The caller owns the
+    /// intermediate `source` texture and blits the scene into it first (sizes differ
+    /// between the live drawable and the export target).
+    func encodeColorGrade(commandBuffer: MTLCommandBuffer,
+                          source:        MTLTexture,
+                          dest:          MTLTexture,
+                          settings:      ColorGradeSettings) {
+        guard let pipeline = colorGradePipelineState else { return }
+        let passDesc = MTLRenderPassDescriptor()
+        passDesc.colorAttachments[0].texture     = dest
+        passDesc.colorAttachments[0].loadAction  = .dontCare   // every pixel overwritten
+        passDesc.colorAttachments[0].storeAction = .store
+        guard let enc = commandBuffer.makeRenderCommandEncoder(descriptor: passDesc) else { return }
+        enc.setRenderPipelineState(pipeline)
+        enc.setCullMode(.none)
+        enc.setFragmentTexture(source, index: 0)
+        // z = 1/gamma: precompute reciprocal so the shader avoids per-pixel division.
+        // Clamp gamma to avoid division by zero; identity when gamma==1 → z==1.
+        let gammaExp = 1.0 / max(settings.gamma, 0.01)
+        var params = SIMD3<Float>(settings.brightness, settings.contrast, gammaExp)
+        enc.setFragmentBytes(&params, length: MemoryLayout<SIMD3<Float>>.stride, index: 0)
+        enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        enc.endEncoding()
+    }
 }
