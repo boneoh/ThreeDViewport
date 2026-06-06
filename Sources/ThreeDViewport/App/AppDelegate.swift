@@ -303,6 +303,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
     }
 
+    /// When this app instance reactivates, re-check the system pasteboard so the
+    /// coordinate Paste icons light up after a *different* instance copied (the
+    /// pasteboard has no cross-process change notification — see CoordinateClipboard).
+    func applicationDidBecomeActive(_ notification: Notification) {
+        viewportView?.coordinateClipboard.refreshFromPasteboard()
+    }
+
     // MARK: - Window layout helpers
 
     /// Collects the current position and size of every managed window/panel.

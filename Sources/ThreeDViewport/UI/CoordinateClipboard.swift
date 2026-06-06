@@ -1,18 +1,85 @@
 import SwiftUI
+import AppKit
 import simd
 
-// A typed, session-only clipboard for copying xyz coordinate channels between
-// lights, weather emitters, the fog volume, the camera, and models.  Each channel
-// is held separately so a paste is always type-matched (Position↔Position,
-// Size↔Size) — preventing, say, a size from being dropped into a position.
-// World-space aim points (camera/light Target) use the Position channel, since a
-// target is itself a position.
+// A typed clipboard for copying xyz coordinate channels between lights, weather
+// emitters, the fog volume, the camera, and models.  Each channel is held
+// separately so a paste is always type-matched (Position↔Position, Size↔Size).
+// World-space aim points (camera/light Target) use the Position channel.
+//
+// Cross-instance (Option B): each channel keeps an in-memory slot (so all three
+// remembered values work within one instance) AND mirrors the most-recent copy to
+// the system pasteboard, so a second app instance can paste it.  The three
+// properties stay source-compatible — the getter falls back to the system
+// pasteboard when the in-memory slot is empty, the setter mirrors to it — so no
+// call site changes.  Paste icons re-evaluate when the app reactivates (see
+// `refreshFromPasteboard`, driven from AppDelegate.applicationDidBecomeActive).
 final class CoordinateClipboard: ObservableObject {
-    @Published var position:  SIMD3<Float>? = nil
-    @Published var size:      SIMD3<Float>? = nil
+
+    enum Channel: String, Codable { case position, size, rotation }
+    private struct Payload: Codable { let channel: Channel; let value: [Float] }
+    static let pasteboardType = NSPasteboard.PasteboardType("com.threedviewport.coordinate")
+
+    // In-memory slots (this instance's own copies; all three persist independently).
+    private var slotPosition: SIMD3<Float>?
+    private var slotSize:     SIMD3<Float>?
+    private var slotRotation: SIMD3<Float>?
+
+    // Bumped on reactivation so SwiftUI re-evaluates canPaste against the pasteboard.
+    @Published private var revision = 0
+
+    // Cached decode of the system pasteboard, refreshed only when changeCount moves.
+    private var cachedChangeCount = -1
+    private var cachedChannel: Channel?
+    private var cachedValue:   SIMD3<Float>?
+
+    var position: SIMD3<Float>? {
+        get { slotPosition ?? pasteboardValue(.position) }
+        set { objectWillChange.send(); slotPosition = newValue; mirror(.position, newValue) }
+    }
+    var size: SIMD3<Float>? {
+        get { slotSize ?? pasteboardValue(.size) }
+        set { objectWillChange.send(); slotSize = newValue; mirror(.size, newValue) }
+    }
     /// Euler rotation (degrees, YXZ intrinsic).  Distinct from Position so a paste
     /// can't accidentally write rotation into a translation field.
-    @Published var rotation:  SIMD3<Float>? = nil
+    var rotation: SIMD3<Float>? {
+        get { slotRotation ?? pasteboardValue(.rotation) }
+        set { objectWillChange.send(); slotRotation = newValue; mirror(.rotation, newValue) }
+    }
+
+    /// Re-check the system pasteboard (call when the app reactivates) so paste icons
+    /// light up after another instance copied.  Cheap: the actual decode only runs
+    /// when the pasteboard's changeCount has moved.
+    func refreshFromPasteboard() { revision += 1 }
+
+    // MARK: - System pasteboard bridge
+
+    private func mirror(_ channel: Channel, _ value: SIMD3<Float>?) {
+        guard let v = value,
+              let data = try? JSONEncoder().encode(Payload(channel: channel, value: [v.x, v.y, v.z]))
+        else { return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setData(data, forType: Self.pasteboardType)
+        cachedChangeCount = pb.changeCount      // our own write — keep the cache in sync
+        cachedChannel = channel; cachedValue = v
+    }
+
+    private func pasteboardValue(_ channel: Channel) -> SIMD3<Float>? {
+        let pb = NSPasteboard.general
+        if pb.changeCount != cachedChangeCount {
+            cachedChangeCount = pb.changeCount
+            if let data = pb.data(forType: Self.pasteboardType),
+               let p = try? JSONDecoder().decode(Payload.self, from: data), p.value.count == 3 {
+                cachedChannel = p.channel
+                cachedValue   = SIMD3<Float>(p.value[0], p.value[1], p.value[2])
+            } else {
+                cachedChannel = nil; cachedValue = nil
+            }
+        }
+        return cachedChannel == channel ? cachedValue : nil
+    }
 }
 
 /// Compact copy + paste icon pair shown in a value-group header (Position / Size /
