@@ -19,15 +19,15 @@ final class SpinAnimatorState: ObservableObject {
     @Published var revolutions: String = "1"
     @Published var perRev:      String = "4"
 
-    @Published var trackLabel: String? = nil
     @Published var startTime:  Double? = nil
     @Published var endTime:    Double? = nil
     @Published var status:     String  = ""
     /// Blocking validation error → raised as an alert (see .validationAlert).
     @Published var validationAlert: String? = nil
 
-    /// The captured track (not @Published — the label mirrors it for the UI).
-    var capturedRef: TrackRef? = nil
+    /// Selectable targets + the chosen one (driven by the panel's Target dropdown).
+    @Published var targets: [PathTarget] = []
+    @Published var capturedRef: TrackRef? = nil
 }
 
 struct SpinAnimatorPanel: View {
@@ -45,9 +45,10 @@ struct SpinAnimatorPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
 
-            // ── Track + time window (Timeline) ────────────────────────────────
-            GroupBox(label: Text("Track & Time (Timeline)").font(.headline)) {
+            // ── Target + time window ──────────────────────────────────────────
+            GroupBox(label: Text("Target & Time").font(.headline)) {
                 VStack(alignment: .leading, spacing: 6) {
+                    TargetPicker(targets: state.targets, selection: $state.capturedRef)
                     HStack {
                         Button("Capture Start", action: captureStart)
                         Spacer()
@@ -60,11 +61,6 @@ struct SpinAnimatorPanel: View {
                         Text(timeText(state.endTime)).font(.system(.caption, design: .monospaced))
                             .foregroundColor(.secondary)
                     }
-                    HStack {
-                        Text("Track:").foregroundColor(.secondary)
-                        Text(state.trackLabel ?? "—").bold()
-                    }
-                    .font(.caption)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(4)

@@ -2614,12 +2614,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // MARK: - Linear Path Animator
 
     @objc private func showLinearPathAnimator(_ sender: Any) {
+        guard let viewport = viewportView else { return }
+        let state = viewport.linearPathState
+        state.targets = pathAnimatorTargets(camera: true, lights: true, objects: true, groups: false)
+        if state.startTime == nil { state.startTime = 0 }
+        if state.endTime   == nil { state.endTime   = viewport.timeline.duration }
+        if let ref = state.capturedRef, !state.targets.contains(where: { $0.ref == ref }) {
+            state.capturedRef = nil   // previously-selected target no longer exists
+        }
+
         if let panel = linearPathPanel {
             panel.isVisible ? panel.orderOut(nil) : panel.makeKeyAndOrderFront(nil)
             return
         }
-        guard let viewport = viewportView else { return }
-        let state = viewport.linearPathState
 
         let panel = KeyForwardingPanel(
             contentRect: NSRect(x: 0, y: 0, width: 300, height: 460),
@@ -2663,22 +2670,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     private func linearPathCaptureStart() {
-        guard let viewport = viewportView,
-              let editor = timelineEditorWC?.editorView else { return }
-        let state = viewport.linearPathState
-        guard let ref = editor.selectedTrackRef else {
-            state.validationAlert = "Select a camera, light, or object track in the Timeline first."
-            return
-        }
-        switch ref {
-        case .camera, .light, .object:
-            state.capturedRef = ref
-            state.trackLabel  = pathAnimatorTrackLabel(ref)
-            state.startTime   = viewport.timeline.currentTime
-            state.status      = "Captured start time."
-        default:
-            state.validationAlert = "Path Animator supports camera, light, and object tracks only."
-        }
+        guard let viewport = viewportView else { return }
+        viewport.linearPathState.startTime = viewport.timeline.currentTime
+        viewport.linearPathState.status    = "Captured start time."
     }
 
     private func linearPathCaptureEnd() {
@@ -2696,7 +2690,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             state.validationAlert = "Capture both line points first."; return
         }
         guard let ref = state.capturedRef, let t0 = state.startTime, let t1 = state.endTime else {
-            state.validationAlert = "Capture the track and start/end times first."; return
+            state.validationAlert = "Select a target from the dropdown first."; return
         }
         guard abs(t1 - t0) > 1e-4 else {
             state.validationAlert = "Start and end times must differ."; return
@@ -2718,12 +2712,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // MARK: - Orbit Path Animator
 
     @objc private func showOrbitPathAnimator(_ sender: Any) {
+        guard let viewport = viewportView else { return }
+        let state = viewport.orbitPathState
+        state.targets = pathAnimatorTargets(camera: true, lights: true, objects: true, groups: false)
+        if state.startTime == nil { state.startTime = 0 }
+        if state.endTime   == nil { state.endTime   = viewport.timeline.duration }
+        if let ref = state.capturedRef, !state.targets.contains(where: { $0.ref == ref }) {
+            state.capturedRef = nil   // previously-selected target no longer exists
+        }
+
         if let panel = orbitPathPanel {
             panel.isVisible ? panel.orderOut(nil) : panel.makeKeyAndOrderFront(nil)
             return
         }
-        guard let viewport = viewportView else { return }
-        let state = viewport.orbitPathState
 
         let panel = KeyForwardingPanel(
             contentRect: NSRect(x: 0, y: 0, width: 300, height: 560),
@@ -2782,23 +2783,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
     }
 
+    /// Builds the Path Animator "Target" dropdown list from the scene, restricted to
+    /// the track kinds a given animator supports.  Alphabetical by label (GUI
+    /// convention).  Envelopes are skipped; grouped parts are represented by their
+    /// group (when groups are included), standalone objects individually.
+    private func pathAnimatorTargets(camera: Bool, lights: Bool,
+                                     objects: Bool, groups: Bool) -> [PathTarget] {
+        guard let viewport = viewportView else { return [] }
+        var result: [PathTarget] = []
+        if camera { result.append(PathTarget(label: "Camera", ref: .camera)) }
+        if lights {
+            for (i, light) in viewport.lightManager.lights.enumerated() {
+                result.append(PathTarget(label: "Light \(i + 1) - \(light.type.displayName)",
+                                         ref: .light(i)))
+            }
+        }
+        var seenGroups = Set<Int>()
+        for (i, obj) in viewport.sceneManager.objects.enumerated() where !obj.isEnvelope {
+            if let gid = obj.groupID {
+                if groups, seenGroups.insert(gid).inserted {
+                    result.append(PathTarget(label: viewport.sceneManager.groupName(for: gid),
+                                             ref: .group(gid)))
+                }
+            } else if objects {
+                result.append(PathTarget(label: obj.name, ref: .object(i)))
+            }
+        }
+        result.sort { $0.label.localizedStandardCompare($1.label) == .orderedAscending }
+        return result
+    }
+
     private func orbitPathCaptureStart() {
-        guard let viewport = viewportView,
-              let editor = timelineEditorWC?.editorView else { return }
-        let state = viewport.orbitPathState
-        guard let ref = editor.selectedTrackRef else {
-            state.validationAlert = "Select a camera, light, or object track in the Timeline first."
-            return
-        }
-        switch ref {
-        case .camera, .light, .object:
-            state.capturedRef = ref
-            state.trackLabel  = pathAnimatorTrackLabel(ref)
-            state.startTime   = viewport.timeline.currentTime
-            state.status      = "Captured start time."
-        default:
-            state.validationAlert = "Path Animator supports camera, light, and object tracks only."
-        }
+        guard let viewport = viewportView else { return }
+        viewport.orbitPathState.startTime = viewport.timeline.currentTime
+        viewport.orbitPathState.status    = "Captured start time."
     }
 
     private func orbitPathCaptureEnd() {
@@ -2816,7 +2834,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             state.validationAlert = "Capture both axis points first."; return
         }
         guard let ref = state.capturedRef, let t0 = state.startTime, let t1 = state.endTime else {
-            state.validationAlert = "Capture the track and start/end times first."; return
+            state.validationAlert = "Select a target from the dropdown first."; return
         }
         guard abs(t1 - t0) > 1e-4 else {
             state.validationAlert = "Start and end times must differ."; return
@@ -2847,12 +2865,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // MARK: - Spin Animator
 
     @objc private func showSpinAnimator(_ sender: Any) {
+        guard let viewport = viewportView else { return }
+        let state = viewport.spinAnimatorState
+        state.targets = pathAnimatorTargets(camera: false, lights: false, objects: true, groups: true)
+        if state.startTime == nil { state.startTime = 0 }
+        if state.endTime   == nil { state.endTime   = viewport.timeline.duration }
+        if let ref = state.capturedRef, !state.targets.contains(where: { $0.ref == ref }) {
+            state.capturedRef = nil   // previously-selected target no longer exists
+        }
+
         if let panel = spinPanel {
             panel.isVisible ? panel.orderOut(nil) : panel.makeKeyAndOrderFront(nil)
             return
         }
-        guard let viewport = viewportView else { return }
-        let state = viewport.spinAnimatorState
 
         let panel = KeyForwardingPanel(
             contentRect: NSRect(x: 0, y: 0, width: 300, height: 360),
@@ -2887,23 +2912,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     private func spinCaptureStart() {
-        guard let viewport = viewportView,
-              let editor = timelineEditorWC?.editorView else { return }
-        let state = viewport.spinAnimatorState
-        guard let ref = editor.selectedTrackRef else {
-            state.validationAlert = "Select an object or model track in the Timeline first."
-            return
-        }
-        switch ref {
-        case .object, .group: break
-        default:
-            state.validationAlert = "Spin supports object and model tracks only."
-            return
-        }
-        state.capturedRef = ref
-        state.trackLabel  = pathAnimatorTrackLabel(ref)
-        state.startTime   = viewport.timeline.currentTime
-        state.status      = "Captured start time."
+        guard let viewport = viewportView else { return }
+        viewport.spinAnimatorState.startTime = viewport.timeline.currentTime
+        viewport.spinAnimatorState.status    = "Captured start time."
     }
 
     private func spinCaptureEnd() {
@@ -2918,7 +2929,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let state = viewport.spinAnimatorState
 
         guard let ref = state.capturedRef, let t0 = state.startTime, let t1 = state.endTime else {
-            state.validationAlert = "Capture the track and start/end times first."; return
+            state.validationAlert = "Select a target from the dropdown first."; return
         }
         guard abs(t1 - t0) > 1e-4 else {
             state.validationAlert = "Start and end times must differ."; return

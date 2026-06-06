@@ -30,7 +30,7 @@ enum ClipboardKeyframe {
 // MARK: - Track reference
 // Internal so AppDelegate can pattern-match in edit-mode callbacks.
 
-enum TrackRef: Equatable {
+enum TrackRef: Equatable, Hashable {
     case camera
     case object(Int)   // index into sceneManager.objects
     case light(Int)    // index into LightManager.lights
