@@ -8,6 +8,8 @@ struct SceneRenderContext {
     // Camera (already resolved: director-or-scene live, export camera on export)
     var viewProjection:     matrix_float4x4
     var eyePosition:        SIMD3<Float>
+    var cameraRight:        SIMD3<Float>     // billboard basis (weather particles)
+    var cameraUp:           SIMD3<Float>
 
     // Background / skybox
     var background:         BackgroundConfig
@@ -22,6 +24,9 @@ struct SceneRenderContext {
 
     // Fog volume
     var fog:                FogSettings?     // nil / disabled = no fog pass
+
+    // Weather particles
+    var particles:          ParticleManager? // nil / no emitters = no particle pass
 }
 
 // Shared compositing core.  Owns the effect pipeline states that BOTH the live
@@ -56,7 +61,18 @@ final class ScenePipeline {
     // Color grade (fullscreen post, no depth, no blend)
     let colorGradePipelineState: MTLRenderPipelineState?
 
+    // Static, deterministic weather-particle seed pool (positions + phase), shared
+    // by both drivers so live and export sample the identical particle layout.
+    private let particleSeedBuffer: MTLBuffer?
+
     init(device: MTLDevice, library: MTLLibrary) {
+
+        let seeds = ParticleEffect.makeSeeds()
+        particleSeedBuffer = device.makeBuffer(
+            bytes:   seeds,
+            length:  seeds.count * MemoryLayout<SIMD4<Float>>.stride,
+            options: .storageModeShared)
+
 
         var background: MTLRenderPipelineState?
         var backgroundDepth: MTLDepthStencilState?
@@ -349,5 +365,39 @@ final class ScenePipeline {
         enc.setFragmentTexture(depthTex, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         enc.endEncoding()
+    }
+
+    /// Weather particles (instanced billboards), drawn into the caller's open scene
+    /// encoder.  Depth-tested against geometry (reusing the laser-beam read-only
+    /// depth state), alpha-blended, no depth write.  No-ops if no manager/emitters.
+    func encodeParticles(into encoder: MTLRenderCommandEncoder, _ ctx: SceneRenderContext) {
+        guard let mgr   = ctx.particles,
+              let pipe  = particleFXPipelineState,
+              let seeds = particleSeedBuffer,
+              let ds    = laserBeamDepthState else { return }
+
+        encoder.setRenderPipelineState(pipe)
+        encoder.setDepthStencilState(ds)
+        encoder.setCullMode(.none)
+        encoder.setVertexBuffer(seeds, offset: 0, index: 0)
+
+        for fx in mgr.emitters where fx.isEnabled {
+            let density = fx.renderState(at: ctx.time, playing: ctx.playing).density
+            let count = Int((max(0, min(1, density)) * Float(ParticleEffect.maxCount)).rounded())
+            guard count > 0 else { continue }
+
+            var u = makeParticleFXUniforms(fx,
+                viewProjection: ctx.viewProjection,
+                cameraRight:    ctx.cameraRight,
+                cameraUp:       ctx.cameraUp,
+                time:           Float(ctx.time),
+                playing:        ctx.playing,
+                colorMode:      ctx.colorMode.rawValue)
+
+            encoder.setVertexBytes(&u, length: MemoryLayout<ParticleFXUniforms>.stride, index: 1)
+            encoder.setFragmentBytes(&u, length: MemoryLayout<ParticleFXUniforms>.stride, index: 1)
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4,
+                                   instanceCount: count)
+        }
     }
 }

@@ -125,8 +125,7 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     // MARK: - Weather particles (optional — set by ViewportView after init)
     var particleManager: ParticleManager?
-    private var particleFXPipelineState: MTLRenderPipelineState?
-    private var particleSeedBuffer:      MTLBuffer?
+    // (Particle pipeline + seed buffer now live in ScenePipeline.)
     private var gradeTexture:  MTLTexture?   // intermediate; rebuilt on size change
 
     // MARK: - Laser hit effect
@@ -249,7 +248,6 @@ final class Renderer: NSObject, MTKViewDelegate {
         laserBeamDepthState     = sp.laserBeamDepthState
         laserHitPipelineState   = sp.laserHitPipelineState
         sparkPipelineState      = sp.sparkPipelineState
-        particleFXPipelineState = sp.particleFXPipelineState
         colorGradePipeline      = sp.colorGradePipelineState
 
         // ── Scene geometry pipeline ───────────────────────────────────────────
@@ -401,12 +399,6 @@ final class Renderer: NSObject, MTKViewDelegate {
             pixelFormat: .rgba16Float, width: 1, height: 1, mipmapped: false)
         dDesc.usage = [.shaderRead]
         dummyEquirect = device.makeTexture(descriptor: dDesc)
-
-        // Static, deterministic weather-particle seed pool (positions + phase).
-        let seeds = ParticleEffect.makeSeeds()
-        particleSeedBuffer = device.makeBuffer(bytes: seeds,
-                                               length: seeds.count * MemoryLayout<SIMD4<Float>>.stride,
-                                               options: .storageModeShared)
     }
 
     // MARK: - MTKViewDelegate
@@ -473,40 +465,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         return [sel]
     }
 
-    /// Draws every enabled weather emitter into the open scene encoder, at the
-    /// given timeline time (so live/scrub/export all agree).  Depth-tested against
-    /// scene geometry, alpha-blended, no depth write.
-    private func drawParticleEffects(encoder: MTLRenderCommandEncoder, time: Double) {
-        guard let mgr   = particleManager,
-              let pipe  = particleFXPipelineState,
-              let seeds = particleSeedBuffer,
-              let ds    = laserBeamDepthState else { return }
-        let playing = timeline.isPlaying
-
-        encoder.setRenderPipelineState(pipe)
-        encoder.setDepthStencilState(ds)
-        encoder.setCullMode(.none)
-        encoder.setVertexBuffer(seeds, offset: 0, index: 0)
-
-        for fx in mgr.emitters where fx.isEnabled {
-            let density = fx.renderState(at: time, playing: playing).density
-            let count = Int((max(0, min(1, density)) * Float(ParticleEffect.maxCount)).rounded())
-            guard count > 0 else { continue }
-
-            var u = makeParticleFXUniforms(fx,
-                viewProjection: viewCamera.viewProjectionMatrix,
-                cameraRight:    viewCamera.rightVector,
-                cameraUp:       viewCamera.upVector,
-                time:           Float(time),
-                playing:        playing,
-                colorMode:      colorMode.rawValue)
-
-            encoder.setVertexBytes(&u, length: MemoryLayout<ParticleFXUniforms>.stride, index: 1)
-            encoder.setFragmentBytes(&u, length: MemoryLayout<ParticleFXUniforms>.stride, index: 1)
-            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4,
-                                   instanceCount: count)
-        }
-    }
+    // (Weather particle draw now lives in ScenePipeline.encodeParticles.)
 
     func draw(in view: MTKView) {
         let perfDrawStart = Renderer.perfLoggingEnabled ? CFAbsoluteTimeGetCurrent() : 0
@@ -637,6 +596,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         let sceneCtx = SceneRenderContext(
             viewProjection:     viewCamera.viewProjectionMatrix,
             eyePosition:        viewCamera.eyePosition,
+            cameraRight:        viewCamera.rightVector,
+            cameraUp:           viewCamera.upVector,
             background:         backgroundConfig,
             backgroundEquirect: backgroundEquirect,
             ibl:                ibl,
@@ -644,7 +605,8 @@ final class Renderer: NSObject, MTKViewDelegate {
             dummyEquirect:      dummyEquirect,
             time:               timeline.renderTime,
             playing:            timeline.isPlaying,
-            fog:                fogSettings)
+            fog:                fogSettings,
+            particles:          particleManager)
 
         // ── Background gradient / environment skybox ──────────────────────────
         scenePipeline?.encodeBackground(into: encoder, sceneCtx)
@@ -770,7 +732,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         // surfaces (glass windows) draw over it and composite — so the smoke
         // stays visible through the windows instead of being depth-rejected by
         // the glass, which writes depth.
-        drawParticleEffects(encoder: encoder, time: timeline.renderTime)
+        scenePipeline?.encodeParticles(into: encoder, sceneCtx)
 
         // ── Laser hit detection + particle update ─────────────────────────────
         // Beams/hits/sparks are drawn BEFORE transparent geometry (same reason as

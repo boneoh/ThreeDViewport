@@ -178,8 +178,7 @@ final class VideoExporter {
 
     // Weather particles — nil/empty = none during export
     var particleManager: ParticleManager?
-    private var particleFXPipelineState: MTLRenderPipelineState?
-    private var particleSeedBuffer:      MTLBuffer?
+    // (Particle pipeline + seed buffer now live in ScenePipeline.)
 
     // When false, laser beams / hits / sparks are skipped.  Export All's Solo/Matte
     // passes set this so the actor/macguffin matte has no laser FX (fog + weather
@@ -259,7 +258,6 @@ final class VideoExporter {
         self.laserBeamDepthState     = scenePipeline.laserBeamDepthState
         self.laserHitPipelineState   = scenePipeline.laserHitPipelineState
         self.sparkPipelineState      = scenePipeline.sparkPipelineState
-        self.particleFXPipelineState = scenePipeline.particleFXPipelineState
         self.colorGradePipelineState = scenePipeline.colorGradePipelineState
 
         // Dummy buffers for objects without UV / tangent data
@@ -321,14 +319,8 @@ final class VideoExporter {
                 + (widgetPipelineState != nil ? "created" : "FAILED"))
         }
 
-        // Laser beam/hit, spark, weather particle, fog volume, and color grade
-        // pipelines now come from the shared ScenePipeline (handles assigned above).
-
-        // Static deterministic seed pool (identical to the live renderer's).
-        let pSeeds = ParticleEffect.makeSeeds()
-        particleSeedBuffer = device.makeBuffer(bytes: pSeeds,
-                                               length: pSeeds.count * MemoryLayout<SIMD4<Float>>.stride,
-                                               options: .storageModeShared)
+        // Laser beam/hit, spark, weather particle (+ its seed buffer), fog volume,
+        // and color grade pipelines now come from the shared ScenePipeline.
 
         // Luma-alpha pipeline (fullscreen alpha-rewrite) is export-only, so it
         // stays here.  It reuses the color-grade fullscreen-quad vertex function.
@@ -687,6 +679,8 @@ final class VideoExporter {
         let sceneCtx = SceneRenderContext(
             viewProjection:     camera.viewProjectionMatrix,
             eyePosition:        camera.eyePosition,
+            cameraRight:        camera.rightVector,
+            cameraUp:           camera.upVector,
             background:         backgroundConfig,
             backgroundEquirect: backgroundEquirect,
             ibl:                ibl,
@@ -694,7 +688,8 @@ final class VideoExporter {
             dummyEquirect:      dummyEquirect,
             time:               Double(hitEffectTime),
             playing:            true,
-            fog:                fogSettings)
+            fog:                fogSettings,
+            particles:          particleManager)
 
         // ── Draw pass ─────────────────────────────────────────────────────────
         let passDesc = MTLRenderPassDescriptor()
@@ -813,7 +808,7 @@ final class VideoExporter {
             // Drawn AFTER opaque but BEFORE transparent geometry so the smoke is
             // occluded by opaque surfaces yet stays visible through translucent
             // ones (glass windows) — mirrors the live Renderer ordering.
-            drawParticleEffects(encoder: encoder, time: Double(hitEffectTime))
+            scenePipeline.encodeParticles(into: encoder, sceneCtx)
 
             // ── Laser beam visuals + hit effects ──────────────────────────────
             // Drawn BEFORE transparent geometry (same reason as the particles):
@@ -1159,37 +1154,7 @@ final class VideoExporter {
                                vertexCount: 4, instanceCount: sparkGPUData.count)
     }
 
-    /// Weather particles — mirrors Renderer.drawParticleEffects so export matches.
-    private func drawParticleEffects(encoder: MTLRenderCommandEncoder, time: Double) {
-        guard let mgr   = particleManager,
-              let pipe  = particleFXPipelineState,
-              let seeds = particleSeedBuffer,
-              let ds    = laserBeamDepthState else { return }
-
-        encoder.setRenderPipelineState(pipe)
-        encoder.setDepthStencilState(ds)
-        encoder.setCullMode(.none)
-        encoder.setVertexBuffer(seeds, offset: 0, index: 0)
-
-        for fx in mgr.emitters where fx.isEnabled {
-            let density = fx.renderState(at: time, playing: true).density
-            let count = Int((max(0, min(1, density)) * Float(ParticleEffect.maxCount)).rounded())
-            guard count > 0 else { continue }
-
-            var u = makeParticleFXUniforms(fx,
-                viewProjection: camera.viewProjectionMatrix,
-                cameraRight:    camera.rightVector,
-                cameraUp:       camera.upVector,
-                time:           Float(time),
-                playing:        true,   // export always reads the keyframe track
-                colorMode:      colorMode.rawValue)
-
-            encoder.setVertexBytes(&u, length: MemoryLayout<ParticleFXUniforms>.stride, index: 1)
-            encoder.setFragmentBytes(&u, length: MemoryLayout<ParticleFXUniforms>.stride, index: 1)
-            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4,
-                                   instanceCount: count)
-        }
-    }
+    // (Weather particle draw now lives in ScenePipeline.encodeParticles.)
 
     // MARK: - Probe marks (mirrors Renderer.drawMarks)
 
