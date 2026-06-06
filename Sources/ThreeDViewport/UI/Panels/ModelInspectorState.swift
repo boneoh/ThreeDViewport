@@ -12,10 +12,7 @@ final class ModelInspectorState: ObservableObject {
     @Published var name:            String          = ""
     @Published var filename:        String          = ""
     @Published var partCount:       Int             = 0
-    @Published var isVisible:       Bool            = true
-    @Published var occludeWhenHidden: Bool          = false
-    /// Production class for the "Export All" cycle (Actor / Background / MacGuffin).
-    @Published var objectClass:       ObjectClass    = .background
+    // Visible / Holdout / Class moved to the Effects grid (Window ▸ Effects).
     @Published var normalMode:      NormalMode      = .auto
     @Published var metallicFactor:  Float           = 0
     @Published var roughnessFactor: Float           = 0.5
@@ -106,9 +103,6 @@ final class ModelInspectorState: ObservableObject {
         name            = first.name
         filename        = first.sourceURL?.deletingPathExtension().lastPathComponent ?? ""
         partCount       = newTargets.count
-        isVisible       = newTargets.allSatisfy { $0.isVisible }
-        occludeWhenHidden = newTargets.allSatisfy { $0.occludeWhenHidden }
-        objectClass     = first.objectClass
         normalMode      = first.normalMode
         metallicFactor  = first.material.metallicFactor
         roughnessFactor = first.material.roughnessFactor
@@ -193,28 +187,6 @@ final class ModelInspectorState: ObservableObject {
             .sink { [weak self] v in
                 guard let self, !isUpdating, let root = targets.first else { return }
                 root.name = v
-                onDirty?()
-            }.store(in: &cancellables)
-
-        $isVisible.dropFirst()
-            .sink { [weak self] v in
-                guard let self, !isUpdating else { return }
-                targets.forEach { $0.isVisible = v }
-                onRedraw?(); onDirty?()
-            }.store(in: &cancellables)
-
-        $occludeWhenHidden.dropFirst()
-            .sink { [weak self] v in
-                guard let self, !isUpdating else { return }
-                targets.forEach { $0.occludeWhenHidden = v }
-                onRedraw?(); onDirty?()
-            }.store(in: &cancellables)
-
-        // Class drives only the Export All cycle — no live redraw, just mark dirty.
-        $objectClass.dropFirst()
-            .sink { [weak self] v in
-                guard let self, !isUpdating else { return }
-                targets.forEach { $0.objectClass = v }
                 onDirty?()
             }.store(in: &cancellables)
 

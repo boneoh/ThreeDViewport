@@ -27,6 +27,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var modelInspectorPanel: NSPanel?
     private var modelInspectorState: ModelInspectorState?
 
+    // Effects grid window (per-object visible / holdout / class).
+    private var effectsGridWC:    EffectsGridWindowController?
+    private var effectsGridState: EffectsGridState?
+
     // Bake probe inspector panel.
     private var probeInspectorPanel: NSPanel?
 
@@ -194,6 +198,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 targets = []
             }
             self.modelInspectorState?.update(targets: targets)
+            // Refresh the Effects grid's rows + highlight (fires on object-array
+            // changes too, so add/remove/load all keep the grid current).
+            self.effectsGridState?.sync()
         }
 
         if viewport.device == nil {
@@ -637,6 +644,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         openProjectItem.target = self
         fileMenu.addItem(openProjectItem)
 
+        let saveProjectItem = NSMenuItem(
+            title: "Save Project",
+            action: #selector(saveProject(_:)),
+            keyEquivalent: "s"
+        )
+        saveProjectItem.target = self
+        fileMenu.addItem(saveProjectItem)
+
+        let saveProjectAsItem = NSMenuItem(
+            title: "Save Project As...",
+            action: #selector(saveProjectAs(_:)),
+            keyEquivalent: "S"   // ⌘⇧S
+        )
+        saveProjectAsItem.target = self
+        fileMenu.addItem(saveProjectAsItem)
+
         fileMenu.addItem(NSMenuItem.separator())
 
         let openLightingHDRItem = NSMenuItem(
@@ -664,24 +687,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         fileMenu.addItem(bakeHDRItem)
 
         fileMenu.addItem(NSMenuItem.separator())
-
-        let saveProjectItem = NSMenuItem(
-            title: "Save Project",
-            action: #selector(saveProject(_:)),
-            keyEquivalent: "s"
-        )
-        saveProjectItem.target = self
-        fileMenu.addItem(saveProjectItem)
-
-        let saveProjectAsItem = NSMenuItem(
-            title: "Save Project As...",
-            action: #selector(saveProjectAs(_:)),
-            keyEquivalent: "S"   // ⌘⇧S
-        )
-        saveProjectAsItem.target = self
-        fileMenu.addItem(saveProjectAsItem)
-
-        fileMenu.addItem(.separator())
 
         let exportItem = NSMenuItem(
             title: "Export ProRes Video...",
@@ -835,7 +840,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         windowMenu.addItem(.separator())
 
-        // Floating inspector panels — alphabetical order
+        // Floating inspector panels.  Added in any order below, then sorted
+        // alphabetically by title (see windowPanelStart sort after the last item),
+        // so new panels don't need to be inserted in the right place by hand.
+        let windowPanelStart = windowMenu.items.count
         let atmosphereItem = NSMenuItem(
             title: "Atmosphere…",
             action: #selector(showAtmospherePanel(_:)),
@@ -933,6 +941,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         )
         timelineEditorItem.target = self
         windowMenu.addItem(timelineEditorItem)
+
+        let effectsGridItem = NSMenuItem(
+            title: "Effects",
+            action: #selector(showEffectsGrid(_:)),
+            keyEquivalent: ""
+        )
+        effectsGridItem.target = self
+        windowMenu.addItem(effectsGridItem)
+
+        // Sort the floating-panel section alphabetically by title (leaves the
+        // standard window-management items above it untouched).
+        let panelItems = Array(windowMenu.items[windowPanelStart...])
+        for item in panelItems { windowMenu.removeItem(item) }
+        for item in panelItems.sorted(by: { $0.title.localizedStandardCompare($1.title) == .orderedAscending }) {
+            windowMenu.addItem(item)
+        }
 
         // Register as the system Window menu so AppKit tracks open windows.
         NSApplication.shared.windowsMenu = windowMenu
@@ -2947,6 +2971,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 break   // Cancel — leave duration unchanged
             }
         }
+    }
+
+    // MARK: - Effects Grid
+
+    @objc private func showEffectsGrid(_ sender: Any) {
+        // Toggle: if open and visible, close it.
+        if let wc = effectsGridWC {
+            if wc.window?.isVisible == true {
+                wc.window?.orderOut(nil)
+            } else {
+                wc.showWindow(nil)
+            }
+            return
+        }
+
+        guard let viewport = viewportView else { return }
+
+        let state = EffectsGridState()
+        state.onRedraw = { [weak viewport] in viewport?.needsDisplay = true }
+        state.onDirty  = { [weak self] in self?.markDirty() }
+        // Row click → select in the viewport (mirrors the Timeline lane click), so
+        // inspector + timeline + 'O'/'M' cycling all stay in sync via the existing
+        // onSelectionChanged / onControlModeChanged channels.
+        state.onSelect = { [weak viewport] obj in
+            guard let viewport,
+                  let idx = viewport.sceneManager.objects.firstIndex(where: { $0 === obj })
+            else { return }
+            viewport.sceneManager.selectedIndex = idx
+            viewport.setControlMode(obj.groupID != nil ? .model : .object)
+            viewport.syncOverlayState()
+        }
+        state.bind(sceneManager: viewport.sceneManager)
+        effectsGridState = state
+
+        let wc = EffectsGridWindowController(state: state)
+        effectsGridWC = wc
+        wc.showWindow(nil)
+        print("[DEBUG] AppDelegate: effects grid opened")
     }
 
     // MARK: - Timeline Editor

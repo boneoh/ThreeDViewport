@@ -172,45 +172,11 @@ struct ModelInspectorPanel: View {
 
     private var displaySection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Visibility & Display")
+            Text("Display")
                 .font(.headline)
                 .padding(.bottom, 2)
 
-            Toggle(isOn: $state.isVisible) {
-                Text("Visible")
-                    .font(.caption)
-                    .foregroundColor(state.isVisible ? .green : .primary)
-            }
-            .toggleStyle(.switch)
-            .tint(.green)
-            .environment(\.controlActiveState, .active)
-
-            Toggle(isOn: $state.occludeWhenHidden) {
-                Text("Holdout (occlude while hidden)")
-                    .font(.caption)
-                    .foregroundColor(state.occludeWhenHidden ? .green : .primary)
-            }
-            .toggleStyle(.switch)
-            .tint(.green)
-            .environment(\.controlActiveState, .active)
-            .help("When hidden, this object still blocks objects behind it — cutting "
-                + "a hole in the matte without drawing itself. Only takes effect while hidden.")
-
-            HStack(spacing: 6) {
-                Text("Class")
-                    .frame(width: 64, alignment: .leading)
-                    .foregroundStyle(.secondary)
-                    .font(.caption)
-                Picker("", selection: $state.objectClass) {
-                    ForEach(ObjectClass.allCases, id: \.self) { cls in
-                        Text(cls.displayName).tag(cls)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-            }
-            .help("Production role used by File ▸ Export All to decide which passes "
-                + "show vs hold out this object.")
+            // Visible / Holdout / Class now live in the Effects grid (Window ▸ Effects).
 
             HStack(spacing: 6) {
                 Text("Normals")
