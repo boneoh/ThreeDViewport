@@ -269,6 +269,11 @@ final class TimelineEditorView: NSView {
     }
     private var multiClipboard: [MultiClipEntry] = []
 
+    // System-pasteboard changeCount captured at our last copy.  If the live
+    // changeCount differs at paste time, another app instance copied more recently,
+    // so we prefer the pasteboard over our own in-memory clipboard (CI-2).
+    private var clipboardChangeCount: Int = -1
+
     // ── Edit-mode state ───────────────────────────────────────────────────────
 
     /// True while the user is live-editing a selected keyframe's pose in the viewport.
@@ -1733,6 +1738,95 @@ final class TimelineEditorView: NSView {
         needsDisplay = true
     }
 
+    // MARK: - Cross-instance keyframe clipboard (CI-2)
+
+    /// Identity for cross-instance track matching: name for object/group, index for
+    /// light/emitter; camera/fog are singletons.  (Reliable because Pete's projects
+    /// are Save-As descendants and share names/indices.)
+    private func keyframeDescriptor(for ref: TrackRef) -> (name: String?, index: Int?) {
+        switch ref {
+        case .camera, .fog:     return (nil, nil)
+        case .object(let i):    return (sceneManager?.objects[safe: i]?.name, nil)
+        case .group(let gid):   return (sceneManager?.groupName(for: gid), nil)
+        case .light(let i):     return (nil, i)
+        case .particles(let i): return (nil, i)
+        }
+    }
+
+    /// Maps a pasteboard entry's identity back to a local TrackRef, or nil if there's
+    /// no matching track in this scene.
+    private func resolveTrackRef(kind: KFClipKind, name: String?, index: Int?) -> TrackRef? {
+        switch kind {
+        case .camera: return .camera
+        case .fog:    return .fog
+        case .object:
+            guard let name, let i = sceneManager?.objects.firstIndex(where: { $0.name == name }) else { return nil }
+            return .object(i)
+        case .group:
+            guard let name, let sm = sceneManager,
+                  let obj = sm.objects.first(where: { $0.groupID != nil && sm.groupName(for: $0.groupID!) == name }),
+                  let gid = obj.groupID else { return nil }
+            return .group(gid)
+        case .light:
+            guard let i = index, let lm = lightManager, i < lm.lights.count else { return nil }
+            return .light(i)
+        case .particles:
+            guard let i = index, let pm = particleManager, i < pm.emitters.count else { return nil }
+            return .particles(i)
+        }
+    }
+
+    /// Mirrors copied keyframes to the system pasteboard so a second app instance
+    /// can paste them (CI-2).
+    private func writeKeyframePasteboard(_ items: [(clip: ClipboardKeyframe, timeOffset: Double, ref: TrackRef)]) {
+        let entries: [KFClipEntry] = items.map { item in
+            var e = KeyframePasteboard.entry(from: item.clip)
+            e.timeOffset = item.timeOffset
+            let d = keyframeDescriptor(for: item.ref)
+            e.trackName  = d.name
+            e.trackIndex = d.index
+            return e
+        }
+        KeyframePasteboard.write(entries)
+        clipboardChangeCount = NSPasteboard.general.changeCount   // our own copy
+    }
+
+    /// Decodes the system pasteboard into local entries (resolving track identity to
+    /// this scene), or nil if it holds no keyframes / none map here.
+    private func readKeyframePasteboard() -> [MultiClipEntry]? {
+        guard let raw = KeyframePasteboard.read() else { return nil }
+        var out: [MultiClipEntry] = []
+        for e in raw {
+            guard let clip = KeyframePasteboard.clip(from: e),
+                  let ref  = resolveTrackRef(kind: e.kind, name: e.trackName, index: e.trackIndex)
+            else { continue }
+            out.append(MultiClipEntry(clip: clip, timeOffset: e.timeOffset, ref: ref))
+        }
+        return out.isEmpty ? nil : out
+    }
+
+    /// Stamps a set of clipboard entries at the playhead (+ each entry's offset,
+    /// clamped to duration).  Same-source selections retarget to the selected lane;
+    /// multi-track selections paste back to their own lanes.  Shared by the in-memory
+    /// multi path and the cross-instance pasteboard path.
+    private func pasteEntries(_ entries: [MultiClipEntry], tracks: TrackList) {
+        guard !entries.isEmpty else { return }
+        let baseT = timeline?.currentTime ?? 0
+        let maxT  = timeline?.duration ?? Double.infinity
+        let sameSource = entries.dropFirst().allSatisfy { $0.ref == entries[0].ref }
+        let targetRef: TrackRef? = (sameSource ? selectedTrackIndex.map { tracks[$0].ref } : nil)
+        for entry in entries {
+            let t   = max(0, min(maxT, baseT + entry.timeOffset))
+            let dst = targetRef ?? entry.ref
+            pasteClip(entry.clip, to: dst, at: t)
+        }
+        selectedKFIndex = nil
+        needsDisplay    = true
+        onKeyframePasted?()
+        print("[DEBUG] TimelineEditorView: pasted \(entries.count) keyframe(s)"
+            + (targetRef != nil ? " → selected lane" : " → matched lanes"))
+    }
+
     // MARK: - Copy / Paste
 
     /// Copies the selected diamond(s) to the appropriate clipboard.
@@ -1779,6 +1873,7 @@ final class TimelineEditorView: NSView {
                 MultiClipEntry(clip: $0.clip, timeOffset: $0.time - minTime, ref: $0.ref)
             }
             clipboardKeyframe = nil   // single clipboard is stale after a multi-copy
+            writeKeyframePasteboard(multiClipboard.map { ($0.clip, $0.timeOffset, $0.ref) })
             print("[DEBUG] TimelineEditorView: Cmd+C — copied \(multiClipboard.count)"
                 + " diamonds (multi-select)")
             return
@@ -1820,6 +1915,9 @@ final class TimelineEditorView: NSView {
             coordinateClipboard?.position = kf.position
             coordinateClipboard?.size     = kf.size
         }
+        if let clip = clipboardKeyframe {
+            writeKeyframePasteboard([(clip, 0, ref)])   // mirror for cross-instance paste
+        }
         print("[DEBUG] TimelineEditorView: Cmd+C — copied \(clipboardKeyframe!.typeName)"
             + " keyframe from lane=\(ti) kf=\(ki)")
     }
@@ -1829,36 +1927,31 @@ final class TimelineEditorView: NSView {
     /// original tracks at currentTime + each entry's time offset.
     /// Otherwise pastes the single clipboardKeyframe onto the selected lane.
     private func pasteKeyframe(tracks: TrackList) {
-        // ── Multi-clipboard path ───────────────────────────────────────────────
+        // ── Most-recent-copy-wins across instances ─────────────────────────────
+        // If the system pasteboard changed since our own last copy, another app
+        // instance copied more recently — prefer it over our in-memory clipboard.
+        if NSPasteboard.general.changeCount != clipboardChangeCount,
+           let entries = readKeyframePasteboard() {
+            pasteEntries(entries, tracks: tracks)
+            return
+        }
+
+        // ── In-memory multi-clipboard path (same-instance) ─────────────────────
         if !multiClipboard.isEmpty {
-            let baseT = timeline?.currentTime ?? 0
-            let maxT  = timeline?.duration ?? Double.infinity
-
-            // If every copied diamond came from the SAME source track, retarget the
-            // whole group to the currently selected lane (matching single-paste).
-            // This is what lets you copy several keyframes off one row and paste
-            // them onto a different row.  When the copy spanned multiple tracks,
-            // keep each entry's original ref (time-shift-a-selection in place).
-            let sameSource = multiClipboard.dropFirst().allSatisfy { $0.ref == multiClipboard[0].ref }
-            let targetRef: TrackRef? = (sameSource ? selectedTrackIndex.map { tracks[$0].ref } : nil)
-
-            for entry in multiClipboard {
-                let t   = max(0, min(maxT, baseT + entry.timeOffset))
-                let dst = targetRef ?? entry.ref
-                pasteClip(entry.clip, to: dst, at: t)
-            }
-            selectedKFIndex = nil
-            needsDisplay    = true
-            onKeyframePasted?()
-            print("[DEBUG] TimelineEditorView: Cmd+V — pasted \(multiClipboard.count)"
-                + " diamonds (multi-clipboard)"
-                + (targetRef != nil ? " → selected lane" : " → original lanes"))
+            pasteEntries(multiClipboard, tracks: tracks)
             return
         }
 
         // ── Single-clipboard path ─────────────────────────────────────────────
         guard let clip = clipboardKeyframe else {
-            print("[DEBUG] TimelineEditorView: Cmd+V — clipboard empty")
+            // Nothing in this instance's clipboard — fall back to the system
+            // pasteboard, which may hold keyframes copied in another app instance
+            // (CI-2).  Track identity is resolved to this scene by name/index.
+            if let entries = readKeyframePasteboard() {
+                pasteEntries(entries, tracks: tracks)
+            } else {
+                print("[DEBUG] TimelineEditorView: Cmd+V — clipboard empty")
+            }
             return
         }
         guard let ti = selectedTrackIndex else {
