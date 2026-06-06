@@ -67,6 +67,13 @@ struct AtmospherePanel: View {
                         FogSliderRow(label: "Density", value: $fog.density, range: 0.0...1.0, format: "%.2f")
                         KeyframeRow(count: fogKeyCount, onAdd: onStampFog, onClear: onClearFog)
                             .padding(.top, 6)
+
+                        Divider().padding(.vertical, 8)
+                        Text("Volume").font(.caption2).foregroundColor(.secondary)
+                        AtmoDetailControls(source: fog, varianceKP: \.variance,
+                                           positionKP: \.position, sizeKP: \.size, clipboard: clipboard,
+                                           onAutoStampPosition: onAutoStampFog)
+                        FogSliderRow(label: "Quality", value: $fog.raymarchSteps, range: 8...96, format: "%.0f")
                     }
                     .padding(.top, 6)
                 } label: {
@@ -100,31 +107,12 @@ struct AtmospherePanel: View {
 
                         Divider().padding(.bottom, 6)
 
-                        // Selected emitter's main controls
+                        // Selected emitter's main + spatial/advanced controls
                         if let fx = particleManager.selected {
                             EmitterMainControls(emitter: fx, onStamp: onStampParticles, onClear: onClearParticles)
-                        }
-                    }
-                    .padding(.top, 6)
-                } label: {
-                    Text("Weather").font(.subheadline.bold())
-                }
 
-                Divider().padding(.vertical, 8)
-
-                // ── Advanced (spatial detail) ────────────────────────────────────
-                DisclosureGroup(isExpanded: $sections.advancedExpanded) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text("Fog Volume").font(.caption2).foregroundColor(.secondary).padding(.top, 6)
-                        AtmoDetailControls(source: fog, varianceKP: \.variance,
-                                           positionKP: \.position, sizeKP: \.size, clipboard: clipboard,
-                                           onAutoStampPosition: onAutoStampFog)
-                        FogSliderRow(label: "Quality", value: $fog.raymarchSteps, range: 8...96, format: "%.0f")
-
-                        Divider().padding(.vertical, 8)
-
-                        Text("Weather Emitter").font(.caption2).foregroundColor(.secondary)
-                        if let fx = particleManager.selected {
+                            Divider().padding(.vertical, 8)
+                            Text("Shape").font(.caption2).foregroundColor(.secondary)
                             AtmoDetailControls(source: fx, varianceKP: \.variance,
                                                positionKP: \.position, sizeKP: \.size, clipboard: clipboard,
                                                onAutoStampPosition: onAutoStampParticles)
@@ -133,7 +121,7 @@ struct AtmospherePanel: View {
                     }
                     .padding(.top, 6)
                 } label: {
-                    Text("Advanced").font(.subheadline.bold())
+                    Text("Weather").font(.subheadline.bold())
                 }
             }
             .padding(14)
