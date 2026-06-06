@@ -27,6 +27,8 @@ final class LinearPathAnimatorState: ObservableObject {
     @Published var keyframes: String = "2"
 
     @Published var status: String = ""
+    /// Blocking validation error → raised as an alert (see .validationAlert).
+    @Published var validationAlert: String? = nil
 
     /// The captured track (not @Published — the label mirrors it for the UI).
     var capturedRef: TrackRef? = nil
@@ -121,6 +123,7 @@ struct LinearPathAnimatorPanel: View {
         }
         .padding(12)
         .frame(width: 300)
+        .validationAlert($state.validationAlert)
     }
 
     /// One endpoint row: capture button + value + copy/paste/zero icons.

@@ -324,6 +324,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             layout.timelineEditor = WindowFrameData(x: f.origin.x, y: f.origin.y,
                                                     w: f.size.width, h: f.size.height)
         }
+        if let wc = effectsGridWC, wc.window?.isVisible == true,
+           let f = wc.window?.frame {
+            layout.effectsGrid = WindowFrameData(x: f.origin.x, y: f.origin.y,
+                                                 w: f.size.width, h: f.size.height)
+        }
         if let panel = lightsPanel, panel.isVisible {
             let f = panel.frame
             layout.lightsPanel = WindowFrameData(x: f.origin.x, y: f.origin.y,
@@ -391,6 +396,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             if timelineEditorWC == nil { showTimelineEditor(self) }
             timelineEditorWC?.window?.setFrame(
                 NSRect(x: tf.x, y: tf.y, width: tf.w, height: tf.h), display: true)
+        }
+
+        // Effects grid — open and position if it was visible
+        if let ef = layout.effectsGrid {
+            if effectsGridWC == nil { showEffectsGrid(self) }
+            effectsGridWC?.window?.setFrame(
+                NSRect(x: ef.x, y: ef.y, width: ef.w, height: ef.h), display: true)
         }
 
         // Lights panel — open and position if it was visible
@@ -1715,6 +1727,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             wc.window?.orderOut(nil)
             panelsHiddenByMiniaturize.insert("timeline")
         }
+        if let wc = effectsGridWC, wc.window?.isVisible == true {
+            wc.window?.orderOut(nil)
+            panelsHiddenByMiniaturize.insert("effects")
+        }
         print("[DEBUG] AppDelegate: main window miniaturizing — hid: "
             + panelsHiddenByMiniaturize.sorted().joined(separator: ", "))
     }
@@ -1764,6 +1780,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if panelsHiddenByMiniaturize.contains("atmosphere")     { atmospherePanel?.makeKeyAndOrderFront(nil) }
         if panelsHiddenByMiniaturize.contains("probeInspector") { probeInspectorPanel?.makeKeyAndOrderFront(nil) }
         if panelsHiddenByMiniaturize.contains("timeline")       { timelineEditorWC?.showWindow(nil) }
+        if panelsHiddenByMiniaturize.contains("effects")        { effectsGridWC?.showWindow(nil) }
         if !panelsHiddenByMiniaturize.isEmpty {
             print("[DEBUG] AppDelegate: restored panels: "
                 + panelsHiddenByMiniaturize.sorted().joined(separator: ", "))
@@ -2650,7 +2667,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
               let editor = timelineEditorWC?.editorView else { return }
         let state = viewport.linearPathState
         guard let ref = editor.selectedTrackRef else {
-            state.status = "Select a camera, light, or object track in the Timeline first."
+            state.validationAlert = "Select a camera, light, or object track in the Timeline first."
             return
         }
         switch ref {
@@ -2660,7 +2677,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             state.startTime   = viewport.timeline.currentTime
             state.status      = "Captured start time."
         default:
-            state.status = "Path Animator supports camera, light, and object tracks only."
+            state.validationAlert = "Path Animator supports camera, light, and object tracks only."
         }
     }
 
@@ -2676,16 +2693,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let state = viewport.linearPathState
 
         guard let a = state.startPoint, let b = state.endPoint else {
-            state.status = "Capture both line points first."; return
+            state.validationAlert = "Capture both line points first."; return
         }
         guard let ref = state.capturedRef, let t0 = state.startTime, let t1 = state.endTime else {
-            state.status = "Capture the track and start/end times first."; return
+            state.validationAlert = "Capture the track and start/end times first."; return
         }
         guard abs(t1 - t0) > 1e-4 else {
-            state.status = "Start and end times must differ."; return
+            state.validationAlert = "Start and end times must differ."; return
         }
         guard let count = Int(state.keyframes), count >= 2 else {
-            state.status = "Keyframes must be a whole number ≥ 2."; return
+            state.validationAlert = "Keyframes must be a whole number ≥ 2."; return
         }
 
         let samples = PathGenerator.linearSamples(
@@ -2770,7 +2787,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
               let editor = timelineEditorWC?.editorView else { return }
         let state = viewport.orbitPathState
         guard let ref = editor.selectedTrackRef else {
-            state.status = "Select a camera, light, or object track in the Timeline first."
+            state.validationAlert = "Select a camera, light, or object track in the Timeline first."
             return
         }
         switch ref {
@@ -2780,7 +2797,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             state.startTime   = viewport.timeline.currentTime
             state.status      = "Captured start time."
         default:
-            state.status = "Path Animator supports camera, light, and object tracks only."
+            state.validationAlert = "Path Animator supports camera, light, and object tracks only."
         }
     }
 
@@ -2796,20 +2813,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let state = viewport.orbitPathState
 
         guard let a = state.axisStart, let b = state.axisEnd else {
-            state.status = "Capture both axis points first."; return
+            state.validationAlert = "Capture both axis points first."; return
         }
         guard let ref = state.capturedRef, let t0 = state.startTime, let t1 = state.endTime else {
-            state.status = "Capture the track and start/end times first."; return
+            state.validationAlert = "Capture the track and start/end times first."; return
         }
         guard abs(t1 - t0) > 1e-4 else {
-            state.status = "Start and end times must differ."; return
+            state.validationAlert = "Start and end times must differ."; return
         }
         guard let radius = Float(state.radius),
               let startA = Float(state.startAngle),
               let endA   = Float(state.endAngle),
               let revs   = Float(state.revolutions),
               let perRev = Float(state.perRev), perRev >= 1 else {
-            state.status = "Check the numeric fields (keyframes/rev ≥ 1)."; return
+            state.validationAlert = "Check the numeric fields (keyframes/rev ≥ 1)."; return
         }
 
         let samples = PathGenerator.samples(
@@ -2874,13 +2891,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
               let editor = timelineEditorWC?.editorView else { return }
         let state = viewport.spinAnimatorState
         guard let ref = editor.selectedTrackRef else {
-            state.status = "Select an object or model track in the Timeline first."
+            state.validationAlert = "Select an object or model track in the Timeline first."
             return
         }
         switch ref {
         case .object, .group: break
         default:
-            state.status = "Spin supports object and model tracks only."
+            state.validationAlert = "Spin supports object and model tracks only."
             return
         }
         state.capturedRef = ref
@@ -2901,16 +2918,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let state = viewport.spinAnimatorState
 
         guard let ref = state.capturedRef, let t0 = state.startTime, let t1 = state.endTime else {
-            state.status = "Capture the track and start/end times first."; return
+            state.validationAlert = "Capture the track and start/end times first."; return
         }
         guard abs(t1 - t0) > 1e-4 else {
-            state.status = "Start and end times must differ."; return
+            state.validationAlert = "Start and end times must differ."; return
         }
         guard let revs = Float(state.revolutions), revs != 0 else {
-            state.status = "Revolutions must be a non-zero number."; return
+            state.validationAlert = "Revolutions must be a non-zero number."; return
         }
         guard let perRev = Float(state.perRev), perRev >= 3 else {
-            state.status = "Keyframes / rev must be ≥ 3."; return
+            state.validationAlert = "Keyframes / rev must be ≥ 3."; return
         }
 
         viewport.generateSpin(ref: ref, axisIndex: state.axisIndex,

@@ -74,7 +74,9 @@ struct FeedbackPanel: View {
 
                 Divider().padding(.bottom, 10)
 
-                if settings.isEnabled {
+                // Controls stay visible and grey out when feedback is off
+                // (disable-don't-hide convention) rather than disappearing.
+                Group {
                     // ── Blend mode picker ─────────────────────────────────────
                     HStack(spacing: 6) {
                         Text("Mode")
@@ -190,12 +192,9 @@ struct FeedbackPanel: View {
                             .foregroundColor(.secondary)
                             .padding(.top, 4)
                     }
-
-                } else {
-                    Text("Enable feedback to configure.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
                 }
+                .disabled(!settings.isEnabled)
+                .opacity(settings.isEnabled ? 1.0 : 0.45)
             }
             .padding(14)
         }

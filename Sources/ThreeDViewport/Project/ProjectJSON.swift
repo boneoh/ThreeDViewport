@@ -470,6 +470,7 @@ struct WindowLayoutData: Codable {
     var modelInspectorPanel: WindowFrameData? = nil                // v15
     var atmospherePanel:     WindowFrameData? = nil                // v25
     var probeInspectorPanel: WindowFrameData? = nil                // v30+
+    var effectsGrid:         WindowFrameData? = nil                // nil = was closed
     // v25; Atmosphere panel section expand/collapse state.  Optional so older
     // window-layout blobs still decode (nil → defaults on restore).
     var atmosphereFogExpanded:      Bool? = nil

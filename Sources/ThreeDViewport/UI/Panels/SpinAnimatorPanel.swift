@@ -23,6 +23,8 @@ final class SpinAnimatorState: ObservableObject {
     @Published var startTime:  Double? = nil
     @Published var endTime:    Double? = nil
     @Published var status:     String  = ""
+    /// Blocking validation error → raised as an alert (see .validationAlert).
+    @Published var validationAlert: String? = nil
 
     /// The captured track (not @Published — the label mirrors it for the UI).
     var capturedRef: TrackRef? = nil
@@ -105,6 +107,7 @@ struct SpinAnimatorPanel: View {
         }
         .padding(12)
         .frame(width: 300)
+        .validationAlert($state.validationAlert)
     }
 
     @ViewBuilder

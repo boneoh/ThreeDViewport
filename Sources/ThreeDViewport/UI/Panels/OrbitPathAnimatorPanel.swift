@@ -28,6 +28,8 @@ final class OrbitPathAnimatorState: ObservableObject {
     @Published var perRev:      String = "12"
 
     @Published var status: String = ""
+    /// Blocking validation error → raised as an alert (see .validationAlert).
+    @Published var validationAlert: String? = nil
 
     /// The captured track (not @Published — the label mirrors it for the UI).
     var capturedRef: TrackRef? = nil
@@ -123,6 +125,7 @@ struct OrbitPathAnimatorPanel: View {
         }
         .padding(12)
         .frame(width: 300)
+        .validationAlert($state.validationAlert)
     }
 
     /// One axis-point row: capture button + value + copy/paste/zero icons.
