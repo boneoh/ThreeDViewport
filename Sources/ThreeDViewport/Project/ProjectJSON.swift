@@ -551,6 +551,9 @@ struct ObjectData: Codable {
     var occludeWhenHidden: Bool  = false
     // Production class for "Export All" (rawValue: background/actor/macguffin).
     var objectClass:     String  = ObjectClass.background.rawValue
+    // Per-object feedback opt-in (Effects grid).  Default true → older files keep
+    // the previous "everything trails" behaviour.
+    var feedbackEnabled: Bool    = true
     var normalMode:      Int     = 0
     var metallicFactor:  Float   = -1
     var roughnessFactor: Float   = -1
@@ -569,6 +572,7 @@ struct ObjectData: Codable {
         isVisible            = (try? c.decode(Bool.self,          forKey: .isVisible))           ?? true
         occludeWhenHidden    = (try? c.decode(Bool.self,          forKey: .occludeWhenHidden))   ?? false
         objectClass          = (try? c.decode(String.self,        forKey: .objectClass))         ?? ObjectClass.background.rawValue
+        feedbackEnabled      = (try? c.decode(Bool.self,          forKey: .feedbackEnabled))     ?? true
         normalMode           = (try? c.decode(Int.self,           forKey: .normalMode))          ?? 0
         metallicFactor       = (try? c.decode(Float.self,         forKey: .metallicFactor))      ?? -1
         roughnessFactor      = (try? c.decode(Float.self,         forKey: .roughnessFactor))     ?? -1
@@ -579,7 +583,8 @@ struct ObjectData: Codable {
     init(name: String, keyframes: [KeyframeData],
          baseTransformMatrix: [Float] = [], easingMode: Int = 0,
          isVisible: Bool = true, occludeWhenHidden: Bool = false,
-         objectClass: String = ObjectClass.background.rawValue, normalMode: Int = 0,
+         objectClass: String = ObjectClass.background.rawValue,
+         feedbackEnabled: Bool = true, normalMode: Int = 0,
          metallicFactor: Float = -1, roughnessFactor: Float = -1,
          baseColorFactor: [Float] = [], opacity: Float = 1) {
         self.name                = name
@@ -589,6 +594,7 @@ struct ObjectData: Codable {
         self.isVisible           = isVisible
         self.occludeWhenHidden   = occludeWhenHidden
         self.objectClass         = objectClass
+        self.feedbackEnabled     = feedbackEnabled
         self.normalMode          = normalMode
         self.metallicFactor      = metallicFactor
         self.roughnessFactor     = roughnessFactor

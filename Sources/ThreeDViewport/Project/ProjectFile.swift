@@ -159,6 +159,7 @@ final class ProjectFile {
                 isVisible:           obj.isVisible,
                 occludeWhenHidden:   obj.occludeWhenHidden,
                 objectClass:         obj.objectClass.rawValue,
+                feedbackEnabled:     obj.feedbackEnabled,
                 normalMode:          obj.normalMode.rawValue,
                 metallicFactor:      obj.material.metallicFactor,
                 roughnessFactor:     obj.material.roughnessFactor,
@@ -774,6 +775,7 @@ final class ProjectFile {
             obj.isVisible = saved.isVisible
             obj.occludeWhenHidden = saved.occludeWhenHidden   // v17
             obj.objectClass = ObjectClass(rawValue: saved.objectClass) ?? .background
+            obj.feedbackEnabled = saved.feedbackEnabled
             if let mode = NormalMode(rawValue: saved.normalMode), mode != .auto {
                 vp.applyNormalMode(mode, toTargets: [obj])
                 obj.normalMode = mode

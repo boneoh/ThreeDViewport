@@ -457,6 +457,79 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     // (Weather particle draw now lives in ScenePipeline.encodeParticles.)
 
+    // MARK: - Geometry encode helpers
+
+    /// Splits a visible-object list into (opaque, transparent) draw lists; the
+    /// transparent list is sorted back-to-front from the view camera for correct
+    /// over-compositing.
+    private func splitOpaqueTransparent(_ objects: [SceneObject])
+        -> (opaque: [SceneObject], transparent: [SceneObject]) {
+        func isTransparent(_ o: SceneObject) -> Bool {
+            o.material.opacity < 1.0 || o.material.baseColorFactor.w < 1.0
+        }
+        guard objects.contains(where: isTransparent) else { return (objects, []) }
+        let opaque = objects.filter { !isTransparent($0) }
+        let eye = viewCamera.eyePosition
+        let transparent = objects.filter(isTransparent)
+            .map { obj -> (SceneObject, Float) in
+                let m: matrix_float4x4
+                if let gid = obj.groupID, let gt = sceneManager.groupTransforms[gid] {
+                    m = gt * obj.transform
+                } else { m = obj.transform }
+                let p = SIMD3<Float>(m.columns.3.x, m.columns.3.y, m.columns.3.z)
+                let d = p - eye
+                return (obj, dot(d, d))
+            }
+            .sorted { $0.1 > $1.1 }     // farthest first
+            .map { $0.0 }
+        return (opaque, transparent)
+    }
+
+    /// Encodes opaque geometry with the scene PBR pipeline into `encoder`.
+    private func encodeOpaqueGeometry(_ objects: [SceneObject], into encoder: MTLRenderCommandEncoder) {
+        guard !objects.isEmpty, let pipeline = pipelineState, let ds = depthStencilState else { return }
+        SceneGeometryEncoder.encode(
+            into:            encoder,
+            objects:         objects,
+            groupTransforms: sceneManager.groupTransforms,
+            lightUniforms:   lightManager.buildLightUniforms(from: animatedLights),
+            context: SceneGeometryEncoder.Context(
+                viewProjection:    viewCamera.viewProjectionMatrix,
+                eyePosition:       viewCamera.eyePosition,
+                pipelineState:     pipeline,
+                depthStencilState: ds,
+                colorMode:         colorMode,
+                isWireframe:       isWireframe,
+                exposure:          colorGradeSettings?.exposure ?? 1.0,
+                ibl:               ibl,
+                dummyUV:           dummyUVBuffer,
+                dummyTangent:      dummyTangentBuffer,
+                dummy2D:           dummyEquirect))
+    }
+
+    /// Encodes transparent (alpha-blended) geometry with the transparent pipeline.
+    private func encodeTransparentGeometry(_ objects: [SceneObject], into encoder: MTLRenderCommandEncoder) {
+        guard !objects.isEmpty,
+              let tP = transparentPipelineState, let tDS = transparentDepthState else { return }
+        SceneGeometryEncoder.encode(
+            into:            encoder,
+            objects:         objects,
+            groupTransforms: sceneManager.groupTransforms,
+            lightUniforms:   lightManager.buildLightUniforms(from: animatedLights),
+            context: SceneGeometryEncoder.Context(
+                viewProjection:    viewCamera.viewProjectionMatrix,
+                eyePosition:       viewCamera.eyePosition,
+                pipelineState:     tP,
+                depthStencilState: tDS,
+                colorMode:         colorMode,
+                isWireframe:       isWireframe,
+                exposure:          colorGradeSettings?.exposure ?? 1.0,
+                ibl:               ibl,
+                dummyUV:           dummyUVBuffer,
+                dummyTangent:      dummyTangentBuffer,
+                dummy2D:           dummyEquirect))
+    }
+
     func draw(in view: MTKView) {
         let perfDrawStart = Renderer.perfLoggingEnabled ? CFAbsoluteTimeGetCurrent() : 0
 
@@ -667,62 +740,23 @@ final class Renderer: NSObject, MTKViewDelegate {
                     dummy2D:           dummyEquirect))
         }
 
-        // Split into opaque (opacity == 1) and transparent (< 1) draw lists.
-        // Transparent parts are sorted back-to-front from the view camera so
-        // the over-compositing blend produces a correct result; without the
-        // sort, a near transparent surface drawn before a far one would
-        // composite the far one against background instead of the near one.
-        let opaqueObjects:      [SceneObject]
-        let transparentObjects: [SceneObject]
-        // A material renders transparent if either knob is < 1: the runtime
-        // opacity slider, OR baseColorFactor.w baked into the GLB (the latter
-        // is how Models/station/*.glb ships translucent window submeshes).
-        // The shader multiplies the two, so we test both here for routing.
-        func isTransparent(_ o: SceneObject) -> Bool {
-            o.material.opacity < 1.0 || o.material.baseColorFactor.w < 1.0
-        }
-        if visibleObjects.contains(where: isTransparent) {
-            opaqueObjects = visibleObjects.filter { !isTransparent($0) }
-            let eye = viewCamera.eyePosition
-            transparentObjects = visibleObjects
-                .filter(isTransparent)
-                .map { obj -> (SceneObject, Float) in
-                    let m: matrix_float4x4
-                    if let gid = obj.groupID, let gt = sceneManager.groupTransforms[gid] {
-                        m = gt * obj.transform
-                    } else {
-                        m = obj.transform
-                    }
-                    let p = SIMD3<Float>(m.columns.3.x, m.columns.3.y, m.columns.3.z)
-                    let d = p - eye
-                    return (obj, dot(d, d))
-                }
-                .sorted { $0.1 > $1.1 }     // farthest first
-                .map { $0.0 }
+        // Per-object feedback opt-out: when feedback is active, objects whose
+        // feedbackEnabled is false are deferred to a post-composite pass (below) so
+        // they don't trail.  When feedback is off the flag is moot — everything
+        // draws here.  Each lane is split opaque/transparent (back-to-front).
+        let visibleOn:  [SceneObject]
+        let visibleOff: [SceneObject]
+        if feedbackActive {
+            visibleOn  = visibleObjects.filter { $0.feedbackEnabled }
+            visibleOff = visibleObjects.filter { !$0.feedbackEnabled }
         } else {
-            opaqueObjects      = visibleObjects
-            transparentObjects = []
+            visibleOn  = visibleObjects
+            visibleOff = []
         }
+        let (onOpaque, onTransparent) = splitOpaqueTransparent(visibleOn)
 
-        if !opaqueObjects.isEmpty, let ds = depthStencilState {
-            SceneGeometryEncoder.encode(
-                into:            encoder,
-                objects:         opaqueObjects,
-                groupTransforms: sceneManager.groupTransforms,
-                lightUniforms:   lightManager.buildLightUniforms(from: animatedLights),
-                context: SceneGeometryEncoder.Context(
-                    viewProjection:    viewCamera.viewProjectionMatrix,
-                    eyePosition:       viewCamera.eyePosition,
-                    pipelineState:     pipeline,
-                    depthStencilState: ds,
-                    colorMode:         colorMode,
-                    isWireframe:       isWireframe,
-                    exposure:          colorGradeSettings?.exposure ?? 1.0,
-                    ibl:               ibl,
-                    dummyUV:           dummyUVBuffer,
-                    dummyTangent:      dummyTangentBuffer,
-                    dummy2D:           dummyEquirect))
-        }
+        // Opaque geometry (feedback-on lane / all when feedback off).
+        encodeOpaqueGeometry(onOpaque, into: encoder)
 
         // ── Weather particles (depth-tested against geometry, alpha-blended) ───
         // Drawn AFTER opaque but BEFORE transparent geometry: opaque surfaces
@@ -755,27 +789,8 @@ final class Renderer: NSObject, MTKViewDelegate {
             scenePipeline?.encodeSparks(into: encoder, sceneCtx)
         }
 
-        if !transparentObjects.isEmpty,
-           let tDS = transparentDepthState,
-           let tP  = transparentPipelineState {
-            SceneGeometryEncoder.encode(
-                into:            encoder,
-                objects:         transparentObjects,
-                groupTransforms: sceneManager.groupTransforms,
-                lightUniforms:   lightManager.buildLightUniforms(from: animatedLights),
-                context: SceneGeometryEncoder.Context(
-                    viewProjection:    viewCamera.viewProjectionMatrix,
-                    eyePosition:       viewCamera.eyePosition,
-                    pipelineState:     tP,
-                    depthStencilState: tDS,
-                    colorMode:         colorMode,
-                    isWireframe:       isWireframe,
-                    exposure:          colorGradeSettings?.exposure ?? 1.0,
-                    ibl:               ibl,
-                    dummyUV:           dummyUVBuffer,
-                    dummyTangent:      dummyTangentBuffer,
-                    dummy2D:           dummyEquirect))
-        }
+        // Transparent geometry (feedback-on lane / all when feedback off).
+        encodeTransparentGeometry(onTransparent, into: encoder)
 
         // ── Scene-mode widgets (camera frustum + light gizmos) ────────────────
         // Drawn last in the main pass so they layer above geometry where depth
@@ -801,6 +816,26 @@ final class Renderer: NSObject, MTKViewDelegate {
                            settings:      fs)
             } else {
                 fp.blitLastOutput(commandBuffer: commandBuffer, dest: drawable.texture)
+            }
+        }
+
+        // ── Feedback-off geometry (drawn after the composite, so no trails) ───
+        // Into the drawable, depth-testing/writing against the feedback pass's
+        // preserved scene depth so it's occluded correctly by feedback-on geometry.
+        if feedbackActive, !visibleOff.isEmpty,
+           let fp = feedbackProcessor, let depthTex = fp.depthTexture {
+            let desc = MTLRenderPassDescriptor()
+            desc.colorAttachments[0].texture     = drawable.texture
+            desc.colorAttachments[0].loadAction  = .load    // keep the composite
+            desc.colorAttachments[0].storeAction = .store
+            desc.depthAttachment.texture         = depthTex
+            desc.depthAttachment.loadAction      = .load    // test against scene depth
+            desc.depthAttachment.storeAction     = .store   // lasers/fog read it after
+            if let enc = commandBuffer.makeRenderCommandEncoder(descriptor: desc) {
+                let (offOpaque, offTransparent) = splitOpaqueTransparent(visibleOff)
+                encodeOpaqueGeometry(offOpaque, into: enc)
+                encodeTransparentGeometry(offTransparent, into: enc)
+                enc.endEncoding()
             }
         }
 

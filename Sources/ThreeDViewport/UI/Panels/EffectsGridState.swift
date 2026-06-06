@@ -81,6 +81,7 @@ final class EffectsGridState: ObservableObject {
 
     func visibleState(_ row: Row) -> TriState { triState(row.members.map { $0.isVisible }) }
     func holdoutState(_ row: Row) -> TriState { triState(row.members.map { $0.occludeWhenHidden }) }
+    func feedbackState(_ row: Row) -> TriState { triState(row.members.map { $0.feedbackEnabled }) }
     /// Single class shared by all members, or nil when they differ ("Mixed").
     func classSelection(_ row: Row) -> ObjectClass? {
         let classes = Set(row.members.map { $0.objectClass })
@@ -102,6 +103,11 @@ final class EffectsGridState: ObservableObject {
 
     func setHoldout(_ members: [SceneObject], _ value: Bool) {
         members.forEach { $0.occludeWhenHidden = value }
+        onRedraw?(); onDirty?(); objectWillChange.send()
+    }
+
+    func setFeedback(_ members: [SceneObject], _ value: Bool) {
+        members.forEach { $0.feedbackEnabled = value }
         onRedraw?(); onDirty?(); objectWillChange.send()
     }
 

@@ -10,6 +10,7 @@ struct EffectsGridPanel: View {
 
     private let visW:   CGFloat = 52
     private let holdW:  CGFloat = 60
+    private let feedW:  CGFloat = 64
     private let classW: CGFloat = 124
     private let indent: CGFloat = 18
 
@@ -52,6 +53,7 @@ struct EffectsGridPanel: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             Text("Visible").frame(width: visW)
             Text("Holdout").frame(width: holdW)
+            Text("Trail").frame(width: feedW)
             Text("Class").frame(width: classW)
         }
         .font(.caption.weight(.semibold))
@@ -86,6 +88,8 @@ struct EffectsGridPanel: View {
                 .frame(width: visW)
             TriBox(state: state.holdoutState(row)) { v in state.setHoldout(row.members, v) }
                 .frame(width: holdW)
+            TriBox(state: state.feedbackState(row)) { v in state.setFeedback(row.members, v) }
+                .frame(width: feedW)
             classMenu(current: state.classSelection(row)) { state.setClass(row.members, $0) }
                 .frame(width: classW)
         }
@@ -109,6 +113,8 @@ struct EffectsGridPanel: View {
                 .frame(width: visW)
             TriBox(state: obj.occludeWhenHidden ? .on : .off) { v in state.setHoldout([obj], v) }
                 .frame(width: holdW)
+            TriBox(state: obj.feedbackEnabled ? .on : .off) { v in state.setFeedback([obj], v) }
+                .frame(width: feedW)
             classMenu(current: obj.objectClass) { state.setClass([obj], $0) }
                 .frame(width: classW)
         }

@@ -12,7 +12,7 @@ final class EffectsGridWindowController: NSWindowController {
     init(state: EffectsGridState) {
         self.state = state
 
-        let panelRect = NSRect(x: 0, y: 0, width: 460, height: 420)
+        let panelRect = NSRect(x: 0, y: 0, width: 500, height: 420)
         let hosting = NSHostingView(rootView: EffectsGridPanel(state: state))
         hosting.autoresizingMask = [.width, .height]
 
