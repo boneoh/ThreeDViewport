@@ -29,9 +29,19 @@ Metal render loop controller implementing `MTKViewDelegate`. Manages:
 - **Color grade**: Pre-tone-map exposure + post-process brightness/contrast/gamma
 - **Scene mode**: Director camera for a free editing view of the animated scene
 
-**Key design**: Single source-of-truth for rendering. The export path (`VideoExporter`) reuses the same Metal library functions and pipeline configuration.
+**Key design**: Single source-of-truth for rendering. The `Renderer` is the *viewport driver* — it owns the MTKView drawable, vsync, live-light decoupling, hit-testing, and the editor-only overlays (widgets, gizmos, probe, marks, motion path). The whole effect stack (background, skybox, fog, weather, lasers, color grade) is delegated to the shared `ScenePipeline` (below), so the live preview and the export path render it identically. The geometry mesh draw is shared via `SceneGeometryEncoder`.
 
-> **Planned refactor:** today the shaders and `SceneGeometryEncoder` are shared, but the effect *pipeline states* and per-frame *compositing order* are still built independently in `Renderer` and `VideoExporter`. [RENDER_PIPELINE_REFACTOR.md](RENDER_PIPELINE_REFACTOR.md) proposes extracting a shared `ScenePipeline` so new effects are added once. Do this before adding/modifying effects.
+---
+
+### Compositing Core (`ScenePipeline.swift`)
+
+Shared rendering core called by **both** the live `Renderer` and the offline `VideoExporter`. Built once by the `Renderer` and handed to the `VideoExporter`, so a new effect is added in one place and both paths pick it up identically.
+
+- **Owns all effect pipeline states**: background gradient, environment skybox, laser beam / hit / spark, weather particles (+ the shared particle seed buffer), fog volume, color grade. Built once in `init`.
+- **Per-pass encoders**: `encodeBackground`, `encodeParticles`, `encodeLaserBeams` / `encodeLaserHits` / `encodeSparks` / `encodeExcludedLaserBeams` (in-encoder passes), and `encodeFogVolume` / `encodeColorGrade` (own-encoder post passes).
+- **`SceneRenderContext`**: one per-frame struct the driver fills with resolved camera, timing, scene/effect state, and mode flags — so deterministic-export vs wall-clock-live timing and scene-vs-director camera stay driver concerns.
+
+**Stays in the drivers** (not in `ScenePipeline`): render-target/encoder ownership (drawable vs feedback scene-texture vs offscreen), the `LaserHitSystem` instances (each driver steps its own — live wall-clock vs deterministic export), overlays, and export-only post (countdown, luma-alpha, writer). See [RENDER_PIPELINE_REFACTOR.md](RENDER_PIPELINE_REFACTOR.md) for the design and migration history.
 
 ---
 
@@ -154,7 +164,7 @@ Offline rendering to ProRes `.mov` at the resolution set in Settings (default 19
 5. **Sync countdown**: every export is prepended with a 3-2-1 countdown + white flash frame (generated via CoreGraphics through the same writer) for frame-accurate alignment.
 6. **Export All**: a multi-pass driver renders Scene / Solo / Matte / Background / FX passes (driven by per-object class) to numbered files for compositing.
 
-**Key pipeline reuse**: Same Metal library functions as live preview. Holdout, widgets/marks, laser, weather, fog, IBL, and color grade all match preview exactly.
+**Key pipeline reuse**: The export is the *export driver* — it owns the offscreen target, deterministic per-frame clock, codec/alpha handling, and the export-only post (luma-alpha rewrite, countdown). The effect stack (background, skybox, fog, weather, lasers, color grade) is rendered through the **shared `ScenePipeline`** (see Renderer §), and geometry through `SceneGeometryEncoder`, so the output matches the live preview by construction.
 
 **Timing**: Uses rational CMTime (e.g. 30000/1001 for 29.97fps) for exact NTSC rates.
 

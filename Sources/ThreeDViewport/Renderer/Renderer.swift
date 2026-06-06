@@ -233,13 +233,14 @@ final class Renderer: NSObject, MTKViewDelegate {
             return
         }
 
-        // Shared effect pipeline states (background, skybox, lasers, particles,
-        // fog, color grade) are built once here and exposed via handles below so
-        // the export path reuses the exact same states.  Created before the
-        // driver-local pipelines so a later guard-return can't skip it.
+        // Shared effect pipeline states (background, skybox, lasers, particles, fog,
+        // color grade) are built once by ScenePipeline and reused by the export path.
+        // Created before the driver-local pipelines so a later guard-return can't skip
+        // it.  The only state still read directly here is the read-only laser depth
+        // state, reused by the widget / probe / marks / motion-path overlays.
         let sp = ScenePipeline(device: device, library: library)
-        scenePipeline           = sp
-        laserBeamDepthState     = sp.laserBeamDepthState
+        scenePipeline       = sp
+        laserBeamDepthState = sp.laserBeamDepthState
 
         // ── Scene geometry pipeline ───────────────────────────────────────────
         guard let vertexFn   = library.makeFunction(name: "vertex_main"),
@@ -316,8 +317,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         tDepthDesc.isDepthWriteEnabled  = true
         transparentDepthState = device.makeDepthStencilState(descriptor: tDepthDesc)
 
-        // (Background gradient + environment skybox pipelines now built in
-        //  ScenePipeline; handles assigned at the top of buildPipeline.)
+        // (Background + skybox pipelines now built in ScenePipeline.)
 
         // ── Axes gizmo pipeline ───────────────────────────────────────────────
         guard let gizmoVertFn = library.makeFunction(name: "gizmo_vertex"),
@@ -345,8 +345,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             print("[DEBUG] Renderer: gizmo pipeline failed — " + error.localizedDescription)
         }
 
-        // (Laser beam / hit, spark, and color grade pipelines now built in
-        //  ScenePipeline; handles assigned at the top of buildPipeline.)
+        // (Laser beam / hit, spark, and color grade pipelines now built in ScenePipeline.)
 
         // ── Scene-mode widget pipeline (lines, depth-tested no write, no blend) ─
         guard let widgetVertFn = library.makeFunction(name: "widget_vertex"),

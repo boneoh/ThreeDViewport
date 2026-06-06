@@ -1,8 +1,16 @@
 # Render Pipeline Refactor — Planning Doc
 
-Status: **proposed / not started.** This is a design + migration plan to do *before*
-adding or modifying visual effects. See [ARCHITECTURE.md](ARCHITECTURE.md) for the
-current component overview.
+Status: **DONE.** Implemented in Phases 0–6 (see §5). The shared `ScenePipeline`
+now owns every effect pipeline state and per-pass encoder; `Renderer` and
+`VideoExporter` are thin drivers calling it through one per-frame `SceneRenderContext`.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the resulting component overview.
+
+**One deviation from the original plan (Phase 4):** the two `LaserHitSystem`
+instances were **kept separate** (each driver steps its own — live wall-clock vs
+deterministic export) rather than collapsed into one. Only the laser *draw code* was
+shared. Collapsing the instances would have changed export output (fresh-vs-inherited
+spark state at frame 0) and coupled the two simulations, violating the
+behavior-preserving goal in §6. §4/§5 below are updated to reflect this.
 
 ---
 
@@ -129,7 +137,7 @@ struct SceneRenderContext {
     var backgroundEquirect: MTLTexture?
     var fog:              FogSettings?
     var particles:        ParticleManager?
-    var lasers:           LaserHitSystem?     // single instance, passed in
+    var lasers:           LaserHitSystem      // per-driver instance, passed in
     var colorGrade:       ColorGradeSettings?
 
     // Mode / pass flags (replace today's duplicated branches)
@@ -166,8 +174,11 @@ Notes:
   toggles; centralizing them here removes the parallel logic in both files. (The
   export luma-premult-vs-coverage *alpha* choice stays in the exporter — it's a
   post-`ScenePipeline` rewrite, see §5 Phase 5.)
-- `LaserHitSystem` becomes a single instance owned by the driver and passed in (the
-  exporter's separate instance at VideoExporter.swift:222 goes away).
+- `LaserHitSystem`: **each driver keeps its own instance** (passed in via the
+  context) — they are *not* collapsed into one. The live instance steps on wall-clock
+  `dt`; the export instance steps deterministically and starts fresh per export.
+  Sharing one would change export output and couple the two simulations. Only the
+  laser *draw code* is shared. (Revised from the original "single instance" plan.)
 
 ---
 
@@ -198,9 +209,12 @@ Safest, most self-contained.
 **Phase 3 — Weather particles.** Move `drawParticleEffects` into `encodeParticles(...)`
 (`ParticleManager` already shared as state).
 
-**Phase 4 — Lasers (beam + hit + spark).** Move the laser/hit/spark draws; collapse the
-two `LaserHitSystem` instances into one passed via context (the exporter's instance at
-VideoExporter.swift:222 goes away).
+**Phase 4 — Lasers (beam + hit + spark).** Move the laser/hit/spark draws into
+`ScenePipeline` (beam / hit / spark / excluded-pass encoders). Each driver keeps its
+own `LaserHitSystem` and passes it via the context — the two instances are **not**
+collapsed (see §4 note: doing so would change export output). The shared
+excluded-beams post pass delegates to the beam/hit/spark encoders, removing the inline
+beam-loop duplication.
 
 **Phase 5 — Color grade.** Move `applyColorGrade(commandBuffer:)` into
 `encodeColorGrade(...)`. Keep the exporter's `lumaAlpha` alpha-rewrite *after*

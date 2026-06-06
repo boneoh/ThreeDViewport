@@ -159,9 +159,9 @@ final class VideoExporter {
     var marksVisible: Bool        = false
     private var widgetPipelineState: MTLRenderPipelineState?
 
-    // Effect pipeline handles — all from the shared ScenePipeline (assigned in
-    // init) so export uses the exact same states as the live preview.
-    // (Background + skybox now drawn via scenePipeline.encodeBackground.)
+    // 1×1 placeholder for the skybox equirect slot when the IBL has no equirect
+    // source.  The effect pipelines themselves live in the shared ScenePipeline;
+    // this texture is passed into it via the per-frame SceneRenderContext.
     private var dummyEquirect:           MTLTexture?
     /// Dedicated background HDR equirect, shared from the Renderer so export matches.
     var backgroundEquirect:              MTLTexture?
@@ -247,9 +247,10 @@ final class VideoExporter {
         self.frameTimescale    = fps.timescale
         self.frameTicks        = fps.frameDuration
 
-        // Shared effect pipeline states, built once by the Renderer's ScenePipeline
-        // and reused here (Phase 0) so export matches preview by construction.  The
-        // driver-local fields below are thin handles into it.
+        // Effect pipeline states + per-pass encoders come from the shared
+        // ScenePipeline so export matches preview by construction.  The only state
+        // read directly here is the read-only laser depth state, reused by the
+        // probe-marks overlay.
         self.laserBeamDepthState     = scenePipeline.laserBeamDepthState
 
         // Dummy buffers for objects without UV / tangent data
@@ -262,9 +263,9 @@ final class VideoExporter {
                                                length: 4 * MemoryLayout<Float>.stride,
                                                options: .storageModeShared)
 
-        // Background + skybox pipelines now come from the shared ScenePipeline
-        // (handles assigned above).  The skybox draw still needs a 1×1 placeholder
-        // for its equirect slot when the IBL has no equirect source.
+        // The skybox draw (in ScenePipeline) still needs a 1×1 placeholder for its
+        // equirect slot when the IBL has no equirect source; it's passed via the
+        // per-frame context.
         let dDesc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba16Float, width: 1, height: 1, mipmapped: false)
         dDesc.usage = [.shaderRead]
