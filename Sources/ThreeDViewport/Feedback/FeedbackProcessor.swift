@@ -145,12 +145,13 @@ final class FeedbackProcessor {
         sceneTexture  = device.makeTexture(descriptor: colorDesc)
         outputTexture = device.makeTexture(descriptor: colorDesc)
 
-        // Depth texture: render target only
+        // Depth texture: render target + shader-readable so the fog volume pass can
+        // sample scene depth when feedback is active (fog + feedback coexistence).
         let depthDesc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .depth32Float,
             width: width, height: height,
             mipmapped: false)
-        depthDesc.usage       = .renderTarget
+        depthDesc.usage       = [.renderTarget, .shaderRead]
         depthDesc.storageMode = .private
         depthTexture = device.makeTexture(descriptor: depthDesc)
 

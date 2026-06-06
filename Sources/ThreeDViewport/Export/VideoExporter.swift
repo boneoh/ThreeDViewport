@@ -860,10 +860,15 @@ final class VideoExporter {
                                                    dest: colorTex, depthTex: depthTex, sceneCtx)
         }
 
-        // ── Fog volume composite (feedback off only — matches the live preview) ──
-        if !feedbackActive, fogSettings?.isEnabled == true {
-            scenePipeline.encodeFogVolume(commandBuffer: commandBuffer,
-                                          dest: colorTex, depthTex: depthTex, sceneCtx)
+        // ── Fog volume composite (last; fog + feedback coexist) ───────────────
+        // Samples the feedback pass's depth when feedback is on, else the frame's
+        // scene depth — matches the live preview.
+        if fogSettings?.isEnabled == true {
+            let fogDepth = feedbackActive ? feedbackProc?.depthTexture : depthTex
+            if let fogTex = fogDepth {
+                scenePipeline.encodeFogVolume(commandBuffer: commandBuffer,
+                                              dest: colorTex, depthTex: fogTex, sceneCtx)
+            }
         }
 
         // ── Axes gizmo overlay (bottom-right corner) ──────────────────────────

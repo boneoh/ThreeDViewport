@@ -528,10 +528,11 @@ final class Renderer: NSObject, MTKViewDelegate {
         let feedbackActive = (feedbackSettings?.isEnabled == true)
                            && (feedbackProcessor?.sceneTexture != nil)
 
-        // Fog volume: when enabled and feedback is off, render the scene straight
-        // to the drawable but with a sampleable depth texture as the depth target,
-        // then composite the raymarched fog over the drawable reading that depth.
-        // (Feedback + fog is skipped for now — the feedback depth isn't sampleable.)
+        // Fog volume: the raymarch needs sampleable scene depth.  When feedback is
+        // OFF we render the scene to the drawable with a dedicated sampleable depth
+        // texture (useFogOffscreen).  When feedback is ON the scene already renders
+        // to the feedback pass's (now sampleable) depth, so fog samples that instead
+        // — fog and feedback coexist.  Either way fog composites after the scene.
         let fogActive       = (fogSettings?.isEnabled == true)
         let useFogOffscreen = fogActive && !feedbackActive
         if useFogOffscreen {
@@ -803,20 +804,24 @@ final class Renderer: NSObject, MTKViewDelegate {
             }
         }
 
-        // ── Fog volume composite ──────────────────────────────────────────────
-        // Raymarch the fog over the drawable (which now holds the scene), reading
-        // the sampleable depth texture for occlusion.
-        if useFogOffscreen, let depthTex = fogSceneDepth {
-            scenePipeline?.encodeFogVolume(commandBuffer: commandBuffer,
-                                           dest: drawable.texture, depthTex: depthTex, sceneCtx)
-        }
-
         // ── Excluded laser beams + their hit effects + all sparks ─────────────
         // Drawn after feedback so none of these get feedback trails.
         if feedbackActive, let fp = feedbackProcessor, let depthTex = fp.depthTexture {
             scenePipeline?.encodeExcludedLaserBeams(commandBuffer: commandBuffer,
                                                     dest: drawable.texture,
                                                     depthTex: depthTex, sceneCtx)
+        }
+
+        // ── Fog volume composite (last, over scene + lasers) ──────────────────
+        // Raymarch the fog over the drawable, sampling scene depth for occlusion:
+        // the feedback pass's depth when feedback is on, else the dedicated fog-scene
+        // depth.  This is what lets fog and feedback coexist.
+        if fogActive {
+            let fogDepth = feedbackActive ? feedbackProcessor?.depthTexture : fogSceneDepth
+            if let depthTex = fogDepth {
+                scenePipeline?.encodeFogVolume(commandBuffer: commandBuffer,
+                                               dest: drawable.texture, depthTex: depthTex, sceneCtx)
+            }
         }
 
         // Axes gizmo overlay — drawn on top of everything (no depth test).
