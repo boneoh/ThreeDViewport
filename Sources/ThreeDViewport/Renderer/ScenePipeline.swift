@@ -27,6 +27,14 @@ struct SceneRenderContext {
 
     // Weather particles
     var particles:          ParticleManager? // nil / no emitters = no particle pass
+
+    // Lasers (beam + hit + spark).  `lasers` stays a per-driver instance (live
+    // wall-clock vs deterministic export stepping); only the draw is shared.
+    var lights:             [LightConfig]    // driver's resolved light array
+    var lasers:             LaserHitSystem   // owns hit info + spark state
+    var screenSize:         SIMD2<Float>     // for beam/hit billboard sizing
+    var hitEffectTime:      Float            // hit-flare animation clock (driver-resolved)
+    var sparkGPUData:       [SparkParticleGPU]  // built once per frame by the driver
 }
 
 // Shared compositing core.  Owns the effect pipeline states that BOTH the live
@@ -65,7 +73,11 @@ final class ScenePipeline {
     // by both drivers so live and export sample the identical particle layout.
     private let particleSeedBuffer: MTLBuffer?
 
+    // Kept for the transient per-frame spark buffer (too large for setVertexBytes).
+    private let device: MTLDevice
+
     init(device: MTLDevice, library: MTLLibrary) {
+        self.device = device
 
         let seeds = ParticleEffect.makeSeeds()
         particleSeedBuffer = device.makeBuffer(
@@ -399,5 +411,138 @@ final class ScenePipeline {
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4,
                                    instanceCount: count)
         }
+    }
+
+    // MARK: - Lasers
+
+    /// Laser beam billboards into the caller's open scene encoder.  `excludedOnly`
+    /// selects beams whose `excludeBeamFromFeedback` matches (so the driver can draw
+    /// in-feedback vs post-feedback sets).  Beam length is clamped to the hit surface.
+    func encodeLaserBeams(into encoder: MTLRenderCommandEncoder,
+                          excludedOnly: Bool,
+                          _ ctx: SceneRenderContext) {
+        guard let pipeline = laserBeamPipelineState else { return }
+
+        let indexedBeams = ctx.lights.enumerated().filter {
+            $0.element.type == .laser && $0.element.isEnabled &&
+            $0.element.excludeBeamFromFeedback == excludedOnly
+        }
+        guard !indexedBeams.isEmpty else { return }
+
+        encoder.setRenderPipelineState(pipeline)
+        if let ds = laserBeamDepthState { encoder.setDepthStencilState(ds) }
+        encoder.setCullMode(.none)
+
+        let vp = ctx.viewProjection
+        for (slotIndex, laser) in indexedBeams {
+            let start = laser.position
+            // If the beam is hitting an object, stop it at the surface.
+            let effectiveRange = ctx.lasers.hits[slotIndex].map {
+                min(laser.range, $0.distance)
+            } ?? laser.range
+            let end   = start + simd_normalize(laser.direction) * effectiveRange
+            var u = LaserBeamUniforms(
+                viewProjectionMatrix: vp,
+                startWorld: SIMD4<Float>(start, 1),
+                endWorld:   SIMD4<Float>(end,   1),
+                color:      SIMD4<Float>(ctx.colorMode == .blackWhite ? SIMD3<Float>(repeating: 1) : laser.color, 1),
+                screenSize: ctx.screenSize,
+                thickness:  max(1.0, laser.beamThickness),
+                pad:        0
+            )
+            encoder.setVertexBytes(&u, length: MemoryLayout<LaserBeamUniforms>.stride, index: 0)
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        }
+    }
+
+    /// Hit-flare billboards for lasers that are striking a surface.  `excludedOnly`
+    /// mirrors the same flag on the associated laser light.
+    func encodeLaserHits(into encoder: MTLRenderCommandEncoder,
+                         excludedOnly: Bool,
+                         _ ctx: SceneRenderContext) {
+        guard let pipeline = laserHitPipelineState else { return }
+        let vp = ctx.viewProjection
+        var pipelineSet = false
+
+        for (i, laser) in ctx.lights.enumerated() {
+            guard laser.type == .laser, laser.isEnabled,
+                  laser.excludeBeamFromFeedback == excludedOnly,
+                  let hit = ctx.lasers.hits[i] else { continue }
+
+            if !pipelineSet {
+                encoder.setRenderPipelineState(pipeline)
+                if let ds = laserBeamDepthState { encoder.setDepthStencilState(ds) }
+                encoder.setCullMode(.none)
+                pipelineSet = true
+            }
+
+            var u = LaserHitUniforms(
+                viewProjectionMatrix: vp,
+                hitPoint:   SIMD4<Float>(hit.point, 1),
+                color:      SIMD4<Float>(ctx.colorMode == .blackWhite ? SIMD3<Float>(repeating: 1) : hit.color, 1),
+                screenSize: ctx.screenSize,
+                hitRadius:  60.0,
+                time:       ctx.hitEffectTime
+            )
+            encoder.setVertexBytes(&u, length: MemoryLayout<LaserHitUniforms>.stride, index: 0)
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        }
+    }
+
+    /// All live spark particles as instanced camera-facing billboards.
+    func encodeSparks(into encoder: MTLRenderCommandEncoder, _ ctx: SceneRenderContext) {
+        guard let pipeline = sparkPipelineState, !ctx.sparkGPUData.isEmpty else { return }
+
+        // Spark data is too large for setVertexBytes (>4 KB at 256 particles);
+        // create a transient shared buffer for this frame.
+        let byteCount = ctx.sparkGPUData.count * MemoryLayout<SparkParticleGPU>.stride
+        guard let sparkBuf = device.makeBuffer(bytes: ctx.sparkGPUData,
+                                               length: byteCount,
+                                               options: .storageModeShared) else { return }
+
+        encoder.setRenderPipelineState(pipeline)
+        if let ds = laserBeamDepthState { encoder.setDepthStencilState(ds) }
+        encoder.setCullMode(.none)
+
+        var su = SparkUniforms(
+            viewProjectionMatrix: ctx.viewProjection,
+            cameraRight: SIMD4<Float>(ctx.cameraRight, 0),
+            cameraUp:    SIMD4<Float>(ctx.cameraUp,    0),
+            colorMode:   UInt32(ctx.colorMode.rawValue)
+        )
+        encoder.setVertexBuffer(sparkBuf, offset: 0, index: 0)
+        encoder.setVertexBytes(&su, length: MemoryLayout<SparkUniforms>.stride, index: 1)
+        encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0,
+                               vertexCount: 4, instanceCount: ctx.sparkGPUData.count)
+    }
+
+    /// Excluded laser beams + their hit flares + all sparks in a single
+    /// post-feedback pass, reading the preserved depth texture for occlusion.  Its
+    /// own render pass; the caller gates this on feedback being active.
+    func encodeExcludedLaserBeams(commandBuffer: MTLCommandBuffer,
+                                  dest:          MTLTexture,
+                                  depthTex:      MTLTexture,
+                                  _ ctx:         SceneRenderContext) {
+        let excludedBeams = ctx.lights.enumerated().filter {
+            $0.element.type == .laser && $0.element.isEnabled && $0.element.excludeBeamFromFeedback
+        }
+        let hasBeams  = !excludedBeams.isEmpty
+        let hasHits   = excludedBeams.contains { ctx.lasers.hits[$0.offset] != nil }
+        let hasSparks = !ctx.sparkGPUData.isEmpty
+        guard hasBeams || hasHits || hasSparks else { return }
+
+        let passDesc = MTLRenderPassDescriptor()
+        passDesc.colorAttachments[0].texture     = dest
+        passDesc.colorAttachments[0].loadAction  = .load
+        passDesc.colorAttachments[0].storeAction = .store
+        passDesc.depthAttachment.texture         = depthTex
+        passDesc.depthAttachment.loadAction      = .load
+        passDesc.depthAttachment.storeAction     = .dontCare   // read-only
+
+        guard let enc = commandBuffer.makeRenderCommandEncoder(descriptor: passDesc) else { return }
+        encodeLaserBeams(into: enc, excludedOnly: true, ctx)
+        encodeLaserHits(into:  enc, excludedOnly: true, ctx)
+        encodeSparks(into:     enc, ctx)
+        enc.endEncoding()
     }
 }
