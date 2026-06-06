@@ -72,8 +72,11 @@ are Radiance `.hdr` (equirectangular) images.
 
 **File ▸ Export Scene to HDR File…** renders the current scene into a brand-new
 equirectangular `.hdr`, captured from the [Probe](Probe-Inspector.md)'s position. Use
-it to turn a scene you've built (geometry, lights, fog, a sky) into a reusable
+it to turn a scene you've built (geometry, lights, a sky) into a reusable
 lighting/background environment — then load it back via Open Lighting/Background HDR.
+
+> For a full walkthrough — including how to size and place objects so they read well
+> as a backdrop — see **[Creating & Exporting an HDR Background Scene](Creating-HDR-Backgrounds.md)**.
 
 **Workflow**
 
@@ -100,6 +103,6 @@ Lighting or Background HDR here, or in another tool.
 IBL intensity, both HDR paths, and the background mode / intensity / horizon are all
 saved with the project. Missing HDR files fall back to the bundled default on load.
 
-See also: [Lights & Background](Lights-and-Background.md) ·
-[Probe Inspector](Probe-Inspector.md) · [Settings](Settings.md) ·
-[Advanced guide](Advanced.md).
+See also: [Creating & Exporting an HDR Background Scene](Creating-HDR-Backgrounds.md) ·
+[Lights & Background](Lights-and-Background.md) · [Probe Inspector](Probe-Inspector.md) ·
+[Settings](Settings.md) · [Advanced guide](Advanced.md).

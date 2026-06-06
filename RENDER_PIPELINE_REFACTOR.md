@@ -86,18 +86,35 @@ This is the existing `SceneGeometryEncoder` pattern lifted from "just geometry" 
 
 ---
 
-## 4. Proposed interface (sketch — illustrative, not final)
+## 4. Proposed interface — granular per-pass methods (not a monolithic `render`)
 
-A render context carries everything a pass needs; flags express the driver/pass
-differences that are currently scattered as duplicated `if`s.
+**Design decision (settled):** `ScenePipeline` exposes **one encode method per pass**,
+all sharing a single set of pipeline states built once in `init`. It does **not**
+expose a single `render(ctx)` that owns the whole frame.
+
+Why not the monolithic form: the code today does **not** composite into one uniform
+pass. Two facts drive this:
+
+1. **The driver — not the effect code — owns the render target and pass descriptor.**
+   `Renderer.draw` (Renderer.swift:797–836) chooses between three targets per frame:
+   the drawable, the feedback scene-texture, or a fog-offscreen-depth variant. The
+   exporter chooses an offscreen private texture. A `ScenePipeline.render` that owned
+   a `colorTarget` would have to absorb all of that target juggling.
+2. **Passes split into two kinds, and that split is real:**
+   - **In-encoder passes** drawn into the driver's already-open main
+     `MTLRenderCommandEncoder`: background/skybox → holdout → opaque → transparent →
+     particles → lasers/hits/sparks.
+   - **Own-encoder post passes** that open their *own* command-buffer pass:
+     `drawFogVolume(commandBuffer:)` and `applyColorGrade(commandBuffer:)`
+     (plus the exporter-only `lumaAlpha` rewrite).
+
+Granular methods keep each migration step a clean one-pass move, let the drivers keep
+owning encoder/target creation, and still give the "one place per effect" payoff. A
+monolithic `render` can be reconsidered at the very end if target ownership ever
+simplifies — but we do not commit to it up front.
 
 ```swift
 struct SceneRenderContext {
-    // Targets
-    var colorTarget:      MTLTexture          // where the composite lands
-    var depthTarget:      MTLTexture
-    let commandBuffer:    MTLCommandBuffer
-
     // Camera / timing
     var viewProjection:   matrix_float4x4
     var eyePosition:      SIMD3<Float>
@@ -117,7 +134,6 @@ struct SceneRenderContext {
 
     // Mode / pass flags (replace today's duplicated branches)
     var colorMode:        RenderColorMode     // color / greyscale / B+W matte
-    var alphaMode:        AlphaMode           // none / lumaPremult / coverage  (export)
     var includeFX:        Bool                // fog/particles/lasers
     var suppressTransparent: Bool             // Background pass
     var isWireframe:      Bool
@@ -126,40 +142,72 @@ struct SceneRenderContext {
 final class ScenePipeline {
     init(device: MTLDevice, library: MTLLibrary)   // builds ALL effect pipelines once
 
-    /// Encodes the full ordered pass set into ctx.colorTarget. The ONLY place the
-    /// pass order and per-effect blend/depth state live.
-    func render(_ ctx: SceneRenderContext)
+    // ── In-encoder passes: caller passes its already-open encoder ──────────────
+    func encodeBackground(into encoder: MTLRenderCommandEncoder, _ ctx: SceneRenderContext)
+    func encodeParticles (into encoder: MTLRenderCommandEncoder, _ ctx: SceneRenderContext)
+    func encodeLasers    (into encoder: MTLRenderCommandEncoder, _ ctx: SceneRenderContext)
+
+    // ── Own-encoder post passes: caller passes the command buffer + targets ────
+    func encodeFogVolume (commandBuffer: MTLCommandBuffer, color: MTLTexture,
+                          sceneDepth: MTLTexture, _ ctx: SceneRenderContext)
+    func encodeColorGrade(commandBuffer: MTLCommandBuffer, color: MTLTexture,
+                          _ ctx: SceneRenderContext)
 }
 ```
+
+(Geometry + holdout already live in the shared `SceneGeometryEncoder`; `ScenePipeline`
+may *call* it but need not re-own it. The exact signatures above are illustrative —
+match the existing draw-function shapes when each pass actually moves.)
 
 Notes:
 - Overlays (gizmos/widgets/HUD) and export post (countdown/luma-alpha/writer) are
   **not** in `ScenePipeline` — they stay in their drivers.
-- `alphaMode`/`colorMode`/`suppress*`/`includeFX` are the knobs Export All already
-  toggles; centralizing them here removes the parallel logic in both files.
+- `colorMode`/`suppressTransparent`/`includeFX` are the knobs Export All already
+  toggles; centralizing them here removes the parallel logic in both files. (The
+  export luma-premult-vs-coverage *alpha* choice stays in the exporter — it's a
+  post-`ScenePipeline` rewrite, see §5 Phase 5.)
 - `LaserHitSystem` becomes a single instance owned by the driver and passed in (the
-  exporter's separate instance goes away).
+  exporter's separate instance at VideoExporter.swift:222 goes away).
 
 ---
 
 ## 5. Migration plan (incremental, verify after each step)
 
 Do this **one pass at a time**, keeping the app working and each diff reviewable.
-After every step, render the same scene live and exported and confirm they match.
+Build with `./make_app.sh` after each phase, then render the same scene live and
+exported and confirm they match (see §6).
 
-1. **Scaffold** `ScenePipeline` that does nothing but call the existing
-   `SceneGeometryEncoder` (geometry + holdout). Route `Renderer`'s geometry pass
-   through it. Verify viewport unchanged. Then route `VideoExporter` through it too.
-2. **Background + skybox** — move both pipelines + the draw into `ScenePipeline`;
-   delete the duplicated descriptors from `VideoExporter`.
-3. **Fog volume** — same.
-4. **Weather particles** — same (`ParticleManager` already shared as state).
-5. **Lasers** (beam + hit) — collapse the two `LaserHitSystem` instances into one
-   passed via context.
-6. **Color grade** — move the post pass; keep export's luma-alpha rewrite *after*
-   `ScenePipeline` in the exporter (it's export-only).
-7. **Cleanup** — delete now-dead pipeline fields from `VideoExporter`; update
-   `ARCHITECTURE.md` (§ Renderer and § Export Pipeline) to describe the shared core.
+**Phase 0 — Scaffold.** Create `ScenePipeline.swift`. Move the *construction* of the
+shared pipeline states (the `makeRenderPipelineState` calls + descriptors for
+background, skybox, fog, laserBeam, laserHit, spark, particleFX, colorGrade) out of
+both drivers and into `ScenePipeline.init`, built once. `Renderer` constructs the
+`ScenePipeline` and hands it to `VideoExporter` (extend the `VideoExporter` init,
+currently passing only `pipelineState`/`depthStencilState`/`holdout`/`transparent`).
+**No draw calls move yet** — both drivers still draw, but reference
+`scenePipeline.<state>` instead of their own stored fields. *Verify: viewport + export
+visually unchanged.*
+
+**Phase 1 — Background + skybox.** Move both drivers' inline background/skybox draw
+(Renderer.swift:838–874; VideoExporter.swift:~880–900) into
+`scenePipeline.encodeBackground(into:_:)`. Delete the exporter's duplicate descriptors.
+Safest, most self-contained.
+
+**Phase 2 — Fog volume.** Move `drawFogVolume(commandBuffer:)` into
+`encodeFogVolume(...)` (own-encoder post pass).
+
+**Phase 3 — Weather particles.** Move `drawParticleEffects` into `encodeParticles(...)`
+(`ParticleManager` already shared as state).
+
+**Phase 4 — Lasers (beam + hit + spark).** Move the laser/hit/spark draws; collapse the
+two `LaserHitSystem` instances into one passed via context (the exporter's instance at
+VideoExporter.swift:222 goes away).
+
+**Phase 5 — Color grade.** Move `applyColorGrade(commandBuffer:)` into
+`encodeColorGrade(...)`. Keep the exporter's `lumaAlpha` alpha-rewrite *after*
+`ScenePipeline` in the exporter — it's export-only.
+
+**Phase 6 — Cleanup.** Delete now-dead pipeline fields from `VideoExporter`; update
+`ARCHITECTURE.md` (§ Renderer and § Export Pipeline) to describe the shared core.
 
 Order rationale: start with the safest, most self-contained passes (background) and
 end with the most entangled (lasers, color grade), so risk rises only as confidence does.

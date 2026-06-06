@@ -156,10 +156,10 @@ final class VideoExporter {
     var marksVisible: Bool        = false
     private var widgetPipelineState: MTLRenderPipelineState?
 
-    // Background gradient pipeline (mirrors Renderer's background pipeline)
+    // Effect pipeline handles — all from the shared ScenePipeline (assigned in
+    // init) so export uses the exact same states as the live preview.
     private var backgroundPipelineState: MTLRenderPipelineState?
     private var backgroundDepthState:    MTLDepthStencilState?
-    // Environment skybox pipeline (mirrors Renderer's skybox pipeline)
     private var skyboxPipelineState:     MTLRenderPipelineState?
     private var dummyEquirect:           MTLTexture?
     /// Dedicated background HDR equirect, shared from the Renderer so export matches.
@@ -202,17 +202,13 @@ final class VideoExporter {
     // Gizmo pipeline — built lazily from the same Metal library as the scene pipeline
     private var gizmoPipelineState: MTLRenderPipelineState?
 
-    // Laser beam billboard pipeline (additive blend, depth test without write)
+    // Laser beam / hit / spark / color grade pipeline handles — from the shared
+    // ScenePipeline (assigned in init).  (laserBeamDepthState is also reused by
+    // the export's widget/gizmo overlay draws, matching the live renderer.)
     private var laserBeamPipelineState: MTLRenderPipelineState?
     private var laserBeamDepthState:    MTLDepthStencilState?
-
-    // Laser hit effect pipeline
     private var laserHitPipelineState:  MTLRenderPipelineState?
-
-    // Spark particle pipeline (additive, instanced billboards)
     private var sparkPipelineState:     MTLRenderPipelineState?
-
-    // Color grade pipeline (fullscreen B/C post-process)
     private var colorGradePipelineState: MTLRenderPipelineState?
 
     // Luma-alpha pipeline (fullscreen; rewrites alpha = Rec.709 luma for 4444 color)
@@ -233,6 +229,7 @@ final class VideoExporter {
           fps:               ExportFrameRate,
           pipelineState:     MTLRenderPipelineState,
           depthStencilState: MTLDepthStencilState,
+          scenePipeline:     ScenePipeline,
           holdoutPipelineState: MTLRenderPipelineState? = nil,
           transparentPipelineState: MTLRenderPipelineState? = nil,
           transparentDepthState:    MTLDepthStencilState?   = nil) {
@@ -253,6 +250,20 @@ final class VideoExporter {
         self.frameTimescale    = fps.timescale
         self.frameTicks        = fps.frameDuration
 
+        // Shared effect pipeline states, built once by the Renderer's ScenePipeline
+        // and reused here (Phase 0) so export matches preview by construction.  The
+        // driver-local fields below are thin handles into it.
+        self.backgroundPipelineState = scenePipeline.backgroundPipelineState
+        self.backgroundDepthState    = scenePipeline.backgroundDepthState
+        self.skyboxPipelineState     = scenePipeline.skyboxPipelineState
+        self.laserBeamPipelineState  = scenePipeline.laserBeamPipelineState
+        self.laserBeamDepthState     = scenePipeline.laserBeamDepthState
+        self.laserHitPipelineState   = scenePipeline.laserHitPipelineState
+        self.sparkPipelineState      = scenePipeline.sparkPipelineState
+        self.particleFXPipelineState = scenePipeline.particleFXPipelineState
+        self.fogVolumePipelineState  = scenePipeline.fogVolumePipelineState
+        self.colorGradePipelineState = scenePipeline.colorGradePipelineState
+
         // Dummy buffers for objects without UV / tangent data
         var dummyUV:  [Float] = [0, 0]
         var dummyTan: [Float] = [1, 0, 0, 1]
@@ -263,47 +274,13 @@ final class VideoExporter {
                                                length: 4 * MemoryLayout<Float>.stride,
                                                options: .storageModeShared)
 
-        // Background gradient pipeline — same shaders as the live renderer
-        if let library  = try? device.makeDefaultLibrary(bundle: Bundle.module),
-           let bgV      = library.makeFunction(name: "background_vertex"),
-           let bgF      = library.makeFunction(name: "background_fragment") {
-            let bgDesc = MTLRenderPipelineDescriptor()
-            bgDesc.label            = "BackgroundExport"
-            bgDesc.vertexFunction   = bgV
-            bgDesc.fragmentFunction = bgF
-            bgDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
-            bgDesc.depthAttachmentPixelFormat      = .depth32Float
-            backgroundPipelineState = try? device.makeRenderPipelineState(descriptor: bgDesc)
-
-            let bgDepthDesc = MTLDepthStencilDescriptor()
-            bgDepthDesc.depthCompareFunction = .always
-            bgDepthDesc.isDepthWriteEnabled  = false
-            backgroundDepthState = device.makeDepthStencilState(descriptor: bgDepthDesc)
-
-            if backgroundPipelineState != nil {
-                print("[DEBUG] VideoExporter: background pipeline created")
-            } else {
-                print("[DEBUG] VideoExporter: background pipeline makeRenderPipelineState failed")
-            }
-
-            // Environment skybox pipeline — mirrors the live renderer so export matches.
-            if let skyV = library.makeFunction(name: "skybox_vertex"),
-               let skyF = library.makeFunction(name: "skybox_fragment") {
-                let skyDesc = MTLRenderPipelineDescriptor()
-                skyDesc.label            = "SkyboxExport"
-                skyDesc.vertexFunction   = skyV
-                skyDesc.fragmentFunction = skyF
-                skyDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
-                skyDesc.depthAttachmentPixelFormat      = .depth32Float
-                skyboxPipelineState = try? device.makeRenderPipelineState(descriptor: skyDesc)
-            }
-            let dDesc = MTLTextureDescriptor.texture2DDescriptor(
-                pixelFormat: .rgba16Float, width: 1, height: 1, mipmapped: false)
-            dDesc.usage = [.shaderRead]
-            dummyEquirect = device.makeTexture(descriptor: dDesc)
-        } else {
-            print("[DEBUG] VideoExporter: background shaders not found in bundle")
-        }
+        // Background + skybox pipelines now come from the shared ScenePipeline
+        // (handles assigned above).  The skybox draw still needs a 1×1 placeholder
+        // for its equirect slot when the IBL has no equirect source.
+        let dDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba16Float, width: 1, height: 1, mipmapped: false)
+        dDesc.usage = [.shaderRead]
+        dummyEquirect = device.makeTexture(descriptor: dDesc)
 
         // Gizmo pipeline — same shaders as the live renderer
         if let library  = try? device.makeDefaultLibrary(bundle: Bundle.module),
@@ -346,153 +323,28 @@ final class VideoExporter {
                 + (widgetPipelineState != nil ? "created" : "FAILED"))
         }
 
-        // Laser beam billboard pipeline
-        if let library  = try? device.makeDefaultLibrary(bundle: Bundle.module),
-           let laserV   = library.makeFunction(name: "laser_beam_vertex"),
-           let laserF   = library.makeFunction(name: "laser_beam_fragment") {
-            let laserDesc = MTLRenderPipelineDescriptor()
-            laserDesc.label                           = "LaserBeamExport"
-            laserDesc.vertexFunction                  = laserV
-            laserDesc.fragmentFunction                = laserF
-            laserDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
-            laserDesc.depthAttachmentPixelFormat      = .depth32Float
-            let laserCA = laserDesc.colorAttachments[0]!
-            laserCA.isBlendingEnabled           = true
-            laserCA.sourceRGBBlendFactor        = .one
-            laserCA.destinationRGBBlendFactor   = .one
-            laserCA.rgbBlendOperation           = .add
-            laserCA.sourceAlphaBlendFactor      = .zero
-            laserCA.destinationAlphaBlendFactor = .one
-            laserCA.alphaBlendOperation         = .add
-            laserBeamPipelineState = try? device.makeRenderPipelineState(descriptor: laserDesc)
-            let laserDepthDesc = MTLDepthStencilDescriptor()
-            laserDepthDesc.depthCompareFunction = .lessEqual
-            laserDepthDesc.isDepthWriteEnabled  = false
-            laserBeamDepthState = device.makeDepthStencilState(descriptor: laserDepthDesc)
-            print("[DEBUG] VideoExporter: laser beam pipeline "
-                + (laserBeamPipelineState != nil ? "created" : "FAILED"))
-        }
+        // Laser beam/hit, spark, weather particle, fog volume, and color grade
+        // pipelines now come from the shared ScenePipeline (handles assigned above).
 
-        // Laser hit effect pipeline
-        if let library = try? device.makeDefaultLibrary(bundle: Bundle.module),
-           let hitV    = library.makeFunction(name: "laser_hit_vertex"),
-           let hitF    = library.makeFunction(name: "laser_hit_fragment") {
-            let hitDesc = MTLRenderPipelineDescriptor()
-            hitDesc.label            = "LaserHitExport"
-            hitDesc.vertexFunction   = hitV
-            hitDesc.fragmentFunction = hitF
-            hitDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
-            hitDesc.depthAttachmentPixelFormat      = .depth32Float
-            let hitCA = hitDesc.colorAttachments[0]!
-            hitCA.isBlendingEnabled           = true
-            hitCA.sourceRGBBlendFactor        = .one
-            hitCA.destinationRGBBlendFactor   = .one
-            hitCA.rgbBlendOperation           = .add
-            hitCA.sourceAlphaBlendFactor      = .zero
-            hitCA.destinationAlphaBlendFactor = .one
-            hitCA.alphaBlendOperation         = .add
-            laserHitPipelineState = try? device.makeRenderPipelineState(descriptor: hitDesc)
-            print("[DEBUG] VideoExporter: laser hit pipeline "
-                + (laserHitPipelineState != nil ? "created" : "FAILED"))
-        }
-
-        // Spark particle pipeline
-        if let library  = try? device.makeDefaultLibrary(bundle: Bundle.module),
-           let sparkV   = library.makeFunction(name: "spark_vertex"),
-           let sparkF   = library.makeFunction(name: "spark_fragment") {
-            let sparkDesc = MTLRenderPipelineDescriptor()
-            sparkDesc.label            = "SparkExport"
-            sparkDesc.vertexFunction   = sparkV
-            sparkDesc.fragmentFunction = sparkF
-            sparkDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
-            sparkDesc.depthAttachmentPixelFormat      = .depth32Float
-            let sparkCA = sparkDesc.colorAttachments[0]!
-            sparkCA.isBlendingEnabled           = true
-            sparkCA.sourceRGBBlendFactor        = .one
-            sparkCA.destinationRGBBlendFactor   = .one
-            sparkCA.rgbBlendOperation           = .add
-            sparkCA.sourceAlphaBlendFactor      = .zero
-            sparkCA.destinationAlphaBlendFactor = .one
-            sparkCA.alphaBlendOperation         = .add
-            sparkPipelineState = try? device.makeRenderPipelineState(descriptor: sparkDesc)
-            print("[DEBUG] VideoExporter: spark pipeline "
-                + (sparkPipelineState != nil ? "created" : "FAILED"))
-        }
-
-        // Weather particle pipeline (instanced billboards, alpha blend)
-        if let library = try? device.makeDefaultLibrary(bundle: Bundle.module),
-           let pVert   = library.makeFunction(name: "particlefx_vertex"),
-           let pFrag   = library.makeFunction(name: "particlefx_fragment") {
-            let pDesc = MTLRenderPipelineDescriptor()
-            pDesc.label                           = "ParticleFXExport"
-            pDesc.vertexFunction                  = pVert
-            pDesc.fragmentFunction                = pFrag
-            pDesc.depthAttachmentPixelFormat      = .depth32Float
-            let ca = pDesc.colorAttachments[0]!
-            ca.pixelFormat                 = .bgra8Unorm
-            ca.isBlendingEnabled           = true
-            ca.sourceRGBBlendFactor        = .sourceAlpha
-            ca.destinationRGBBlendFactor   = .oneMinusSourceAlpha
-            ca.rgbBlendOperation           = .add
-            ca.sourceAlphaBlendFactor      = .sourceAlpha
-            ca.destinationAlphaBlendFactor = .oneMinusSourceAlpha
-            ca.alphaBlendOperation         = .add
-            particleFXPipelineState = try? device.makeRenderPipelineState(descriptor: pDesc)
-            print("[DEBUG] VideoExporter: particle pipeline "
-                + (particleFXPipelineState != nil ? "created" : "FAILED"))
-        }
         // Static deterministic seed pool (identical to the live renderer's).
         let pSeeds = ParticleEffect.makeSeeds()
         particleSeedBuffer = device.makeBuffer(bytes: pSeeds,
                                                length: pSeeds.count * MemoryLayout<SIMD4<Float>>.stride,
                                                options: .storageModeShared)
 
-        // Fog volume pipeline (fullscreen raymarch, source-over blend)
-        if let library = try? device.makeDefaultLibrary(bundle: Bundle.module),
-           let fVert   = library.makeFunction(name: "fogvolume_vertex"),
-           let fFrag   = library.makeFunction(name: "fogvolume_fragment") {
-            let fDesc = MTLRenderPipelineDescriptor()
-            fDesc.label            = "FogVolumeExport"
-            fDesc.vertexFunction   = fVert
-            fDesc.fragmentFunction = fFrag
-            let ca = fDesc.colorAttachments[0]!
-            ca.pixelFormat                 = .bgra8Unorm
-            ca.isBlendingEnabled           = true
-            ca.sourceRGBBlendFactor        = .sourceAlpha
-            ca.destinationRGBBlendFactor   = .oneMinusSourceAlpha
-            ca.rgbBlendOperation           = .add
-            ca.sourceAlphaBlendFactor      = .one
-            ca.destinationAlphaBlendFactor = .oneMinusSourceAlpha
-            ca.alphaBlendOperation         = .add
-            fogVolumePipelineState = try? device.makeRenderPipelineState(descriptor: fDesc)
-            print("[DEBUG] VideoExporter: fog volume pipeline "
-                + (fogVolumePipelineState != nil ? "created" : "FAILED"))
-        }
-
-        // Color grade pipeline (no depth, no blend — overwrites every pixel)
-        if let library    = try? device.makeDefaultLibrary(bundle: Bundle.module),
+        // Luma-alpha pipeline (fullscreen alpha-rewrite) is export-only, so it
+        // stays here.  It reuses the color-grade fullscreen-quad vertex function.
+        if let library     = try? device.makeDefaultLibrary(bundle: Bundle.module),
            let gradeVertFn = library.makeFunction(name: "color_grade_vertex"),
-           let gradeFragFn = library.makeFunction(name: "color_grade_fragment") {
-            let gradeDesc = MTLRenderPipelineDescriptor()
-            gradeDesc.label                           = "ColorGradeExport"
-            gradeDesc.vertexFunction                  = gradeVertFn
-            gradeDesc.fragmentFunction                = gradeFragFn
-            gradeDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
-            colorGradePipelineState = try? device.makeRenderPipelineState(descriptor: gradeDesc)
-            print("[DEBUG] VideoExporter: color grade pipeline "
-                + (colorGradePipelineState != nil ? "created" : "FAILED"))
-
-            // Luma-alpha pipeline reuses the fullscreen-quad vertex function.
-            if let lumaFragFn = library.makeFunction(name: "luma_alpha_fragment") {
-                let lumaDesc = MTLRenderPipelineDescriptor()
-                lumaDesc.label                           = "LumaAlphaExport"
-                lumaDesc.vertexFunction                  = gradeVertFn
-                lumaDesc.fragmentFunction                = lumaFragFn
-                lumaDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
-                lumaAlphaPipelineState = try? device.makeRenderPipelineState(descriptor: lumaDesc)
-                print("[DEBUG] VideoExporter: luma-alpha pipeline "
-                    + (lumaAlphaPipelineState != nil ? "created" : "FAILED"))
-            }
+           let lumaFragFn  = library.makeFunction(name: "luma_alpha_fragment") {
+            let lumaDesc = MTLRenderPipelineDescriptor()
+            lumaDesc.label                           = "LumaAlphaExport"
+            lumaDesc.vertexFunction                  = gradeVertFn
+            lumaDesc.fragmentFunction                = lumaFragFn
+            lumaDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
+            lumaAlphaPipelineState = try? device.makeRenderPipelineState(descriptor: lumaDesc)
+            print("[DEBUG] VideoExporter: luma-alpha pipeline "
+                + (lumaAlphaPipelineState != nil ? "created" : "FAILED"))
         }
 
         print("[DEBUG] VideoExporter: initialized — duration="

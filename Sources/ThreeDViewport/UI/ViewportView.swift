@@ -1836,7 +1836,8 @@ final class ViewportView: MTKView {
         }
         guard let r = renderer,
               let pipeline = r.pipelineState,
-              let depth    = r.depthStencilState else {
+              let depth    = r.depthStencilState,
+              let scenePipeline = r.scenePipeline else {
             print("[DEBUG] ViewportView: startExport — renderer pipeline not ready")
             exportState.lastMessage = "Export failed: renderer not ready"
             return
@@ -1852,6 +1853,7 @@ final class ViewportView: MTKView {
             fps:               fps,
             pipelineState:     pipeline,
             depthStencilState: depth,
+            scenePipeline:     scenePipeline,
             holdoutPipelineState: r.holdoutPipelineState,
             transparentPipelineState: r.transparentPipelineState,
             transparentDepthState:    r.transparentDepthState

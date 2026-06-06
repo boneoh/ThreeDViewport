@@ -38,6 +38,11 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// use different HDRs.  Nil = mirror the lighting environment.
     var backgroundEquirect: MTLTexture?
 
+    /// Shared compositing core — builds the effect pipeline states once and is
+    /// handed to the `VideoExporter` so preview and export can't drift.  The
+    /// driver-local pipeline fields below are thin handles into this (Phase 0).
+    private(set) var scenePipeline: ScenePipeline?
+
     // Fallback buffers — bound when an object has no UVs or tangents so
     // buffer(4)/buffer(5) are always valid Metal bindings.
     private var dummyUVBuffer:      MTLBuffer?   // single float2
@@ -237,6 +242,23 @@ final class Renderer: NSObject, MTKViewDelegate {
             return
         }
 
+        // Shared effect pipeline states (background, skybox, lasers, particles,
+        // fog, color grade) are built once here and exposed via handles below so
+        // the export path reuses the exact same states.  Created before the
+        // driver-local pipelines so a later guard-return can't skip it.
+        let sp = ScenePipeline(device: device, library: library)
+        scenePipeline           = sp
+        backgroundPipelineState = sp.backgroundPipelineState
+        backgroundDepthState    = sp.backgroundDepthState
+        skyboxPipelineState     = sp.skyboxPipelineState
+        laserBeamPipelineState  = sp.laserBeamPipelineState
+        laserBeamDepthState     = sp.laserBeamDepthState
+        laserHitPipelineState   = sp.laserHitPipelineState
+        sparkPipelineState      = sp.sparkPipelineState
+        particleFXPipelineState = sp.particleFXPipelineState
+        fogVolumePipelineState  = sp.fogVolumePipelineState
+        colorGradePipeline      = sp.colorGradePipelineState
+
         // ── Scene geometry pipeline ───────────────────────────────────────────
         guard let vertexFn   = library.makeFunction(name: "vertex_main"),
               let fragmentFn = library.makeFunction(name: "fragment_main") else {
@@ -312,48 +334,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         tDepthDesc.isDepthWriteEnabled  = true
         transparentDepthState = device.makeDepthStencilState(descriptor: tDepthDesc)
 
-        // ── Background gradient pipeline ──────────────────────────────────────
-        guard let bgVertFn = library.makeFunction(name: "background_vertex"),
-              let bgFragFn = library.makeFunction(name: "background_fragment") else {
-            print("[DEBUG] Renderer: background shaders not found")
-            return
-        }
-
-        let bgDesc = MTLRenderPipelineDescriptor()
-        bgDesc.vertexFunction   = bgVertFn
-        bgDesc.fragmentFunction = bgFragFn
-        bgDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
-        bgDesc.depthAttachmentPixelFormat      = .depth32Float
-
-        do {
-            backgroundPipelineState = try device.makeRenderPipelineState(descriptor: bgDesc)
-            print("[DEBUG] Renderer: background pipeline created")
-        } catch {
-            print("[DEBUG] Renderer: background pipeline failed — " + error.localizedDescription)
-        }
-
-        let bgDepthDesc = MTLDepthStencilDescriptor()
-        bgDepthDesc.depthCompareFunction = .always
-        bgDepthDesc.isDepthWriteEnabled  = false
-        backgroundDepthState = device.makeDepthStencilState(descriptor: bgDepthDesc)
-
-        // ── Environment skybox pipeline ───────────────────────────────────────
-        if let skyVertFn = library.makeFunction(name: "skybox_vertex"),
-           let skyFragFn = library.makeFunction(name: "skybox_fragment") {
-            let skyDesc = MTLRenderPipelineDescriptor()
-            skyDesc.vertexFunction   = skyVertFn
-            skyDesc.fragmentFunction = skyFragFn
-            skyDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
-            skyDesc.depthAttachmentPixelFormat      = .depth32Float
-            do {
-                skyboxPipelineState = try device.makeRenderPipelineState(descriptor: skyDesc)
-                print("[DEBUG] Renderer: skybox pipeline created")
-            } catch {
-                print("[DEBUG] Renderer: skybox pipeline failed — " + error.localizedDescription)
-            }
-        } else {
-            print("[DEBUG] Renderer: skybox shaders not found")
-        }
+        // (Background gradient + environment skybox pipelines now built in
+        //  ScenePipeline; handles assigned at the top of buildPipeline.)
 
         // ── Axes gizmo pipeline ───────────────────────────────────────────────
         guard let gizmoVertFn = library.makeFunction(name: "gizmo_vertex"),
@@ -381,111 +363,8 @@ final class Renderer: NSObject, MTKViewDelegate {
             print("[DEBUG] Renderer: gizmo pipeline failed — " + error.localizedDescription)
         }
 
-        // ── Laser beam billboard pipeline ─────────────────────────────────────
-        guard let laserVertFn = library.makeFunction(name: "laser_beam_vertex"),
-              let laserFragFn = library.makeFunction(name: "laser_beam_fragment") else {
-            print("[DEBUG] Renderer: laser beam shaders not found")
-            return
-        }
-        let laserDesc = MTLRenderPipelineDescriptor()
-        laserDesc.label                           = "LaserBeam"
-        laserDesc.vertexFunction                  = laserVertFn
-        laserDesc.fragmentFunction                = laserFragFn
-        laserDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
-        laserDesc.depthAttachmentPixelFormat      = .depth32Float
-        // Additive RGB blend — beam brightens the scene; destination alpha preserved
-        let laserCA = laserDesc.colorAttachments[0]!
-        laserCA.isBlendingEnabled           = true
-        laserCA.sourceRGBBlendFactor        = .one
-        laserCA.destinationRGBBlendFactor   = .one
-        laserCA.rgbBlendOperation           = .add
-        laserCA.sourceAlphaBlendFactor      = .zero     // preserve dest alpha
-        laserCA.destinationAlphaBlendFactor = .one
-        laserCA.alphaBlendOperation         = .add
-        do {
-            laserBeamPipelineState = try device.makeRenderPipelineState(descriptor: laserDesc)
-            print("[DEBUG] Renderer: laser beam pipeline created")
-        } catch {
-            print("[DEBUG] Renderer: laser beam pipeline failed — " + error.localizedDescription)
-        }
-
-        let laserDepthDesc = MTLDepthStencilDescriptor()
-        laserDepthDesc.depthCompareFunction = .lessEqual
-        laserDepthDesc.isDepthWriteEnabled  = false   // read-only depth test
-        laserBeamDepthState = device.makeDepthStencilState(descriptor: laserDepthDesc)
-
-        // ── Laser hit effect pipeline ─────────────────────────────────────────
-        guard let hitVertFn = library.makeFunction(name: "laser_hit_vertex"),
-              let hitFragFn = library.makeFunction(name: "laser_hit_fragment") else {
-            print("[DEBUG] Renderer: laser hit shaders not found")
-            return
-        }
-        let hitDesc = MTLRenderPipelineDescriptor()
-        hitDesc.label          = "LaserHit"
-        hitDesc.vertexFunction   = hitVertFn
-        hitDesc.fragmentFunction = hitFragFn
-        hitDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
-        hitDesc.depthAttachmentPixelFormat      = .depth32Float
-        let hitCA = hitDesc.colorAttachments[0]!
-        hitCA.isBlendingEnabled           = true
-        hitCA.sourceRGBBlendFactor        = .one
-        hitCA.destinationRGBBlendFactor   = .one
-        hitCA.rgbBlendOperation           = .add
-        hitCA.sourceAlphaBlendFactor      = .zero
-        hitCA.destinationAlphaBlendFactor = .one
-        hitCA.alphaBlendOperation         = .add
-        do {
-            laserHitPipelineState = try device.makeRenderPipelineState(descriptor: hitDesc)
-            print("[DEBUG] Renderer: laser hit pipeline created")
-        } catch {
-            print("[DEBUG] Renderer: laser hit pipeline failed — " + error.localizedDescription)
-        }
-
-        // ── Spark particle pipeline ───────────────────────────────────────────
-        guard let sparkVertFn = library.makeFunction(name: "spark_vertex"),
-              let sparkFragFn = library.makeFunction(name: "spark_fragment") else {
-            print("[DEBUG] Renderer: spark shaders not found")
-            return
-        }
-        let sparkDesc = MTLRenderPipelineDescriptor()
-        sparkDesc.label          = "Spark"
-        sparkDesc.vertexFunction   = sparkVertFn
-        sparkDesc.fragmentFunction = sparkFragFn
-        sparkDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
-        sparkDesc.depthAttachmentPixelFormat      = .depth32Float
-        let sparkCA = sparkDesc.colorAttachments[0]!
-        sparkCA.isBlendingEnabled           = true
-        sparkCA.sourceRGBBlendFactor        = .one
-        sparkCA.destinationRGBBlendFactor   = .one
-        sparkCA.rgbBlendOperation           = .add
-        sparkCA.sourceAlphaBlendFactor      = .zero
-        sparkCA.destinationAlphaBlendFactor = .one
-        sparkCA.alphaBlendOperation         = .add
-        do {
-            sparkPipelineState = try device.makeRenderPipelineState(descriptor: sparkDesc)
-            print("[DEBUG] Renderer: spark pipeline created")
-        } catch {
-            print("[DEBUG] Renderer: spark pipeline failed — " + error.localizedDescription)
-        }
-
-        // ── Color grade pipeline (fullscreen pass, no depth) ──────────────────
-        guard let gradeVertFn = library.makeFunction(name: "color_grade_vertex"),
-              let gradeFragFn = library.makeFunction(name: "color_grade_fragment") else {
-            print("[DEBUG] Renderer: color_grade shaders not found")
-            return
-        }
-        let gradeDesc = MTLRenderPipelineDescriptor()
-        gradeDesc.label                             = "ColorGrade"
-        gradeDesc.vertexFunction                    = gradeVertFn
-        gradeDesc.fragmentFunction                  = gradeFragFn
-        gradeDesc.colorAttachments[0].pixelFormat   = .bgra8Unorm
-        // No depth attachment, no blending — every pixel is overwritten
-        do {
-            colorGradePipeline = try device.makeRenderPipelineState(descriptor: gradeDesc)
-            print("[DEBUG] Renderer: color grade pipeline created")
-        } catch {
-            print("[DEBUG] Renderer: color grade pipeline failed — " + error.localizedDescription)
-        }
+        // (Laser beam / hit, spark, and color grade pipelines now built in
+        //  ScenePipeline; handles assigned at the top of buildPipeline.)
 
         // ── Scene-mode widget pipeline (lines, depth-tested no write, no blend) ─
         guard let widgetVertFn = library.makeFunction(name: "widget_vertex"),
@@ -509,58 +388,8 @@ final class Renderer: NSObject, MTKViewDelegate {
             print("[DEBUG] Renderer: widget pipeline failed — " + error.localizedDescription)
         }
 
-        // ── Weather particle pipeline (instanced billboards, alpha blend) ──────
-        if let pVert = library.makeFunction(name: "particlefx_vertex"),
-           let pFrag = library.makeFunction(name: "particlefx_fragment") {
-            let pDesc = MTLRenderPipelineDescriptor()
-            pDesc.label                           = "ParticleFX"
-            pDesc.vertexFunction                  = pVert
-            pDesc.fragmentFunction                = pFrag
-            pDesc.depthAttachmentPixelFormat      = .depth32Float
-            let ca = pDesc.colorAttachments[0]!
-            ca.pixelFormat                 = .bgra8Unorm
-            ca.isBlendingEnabled           = true
-            ca.sourceRGBBlendFactor        = .sourceAlpha
-            ca.destinationRGBBlendFactor   = .oneMinusSourceAlpha
-            ca.rgbBlendOperation           = .add
-            ca.sourceAlphaBlendFactor      = .sourceAlpha
-            ca.destinationAlphaBlendFactor = .oneMinusSourceAlpha
-            ca.alphaBlendOperation         = .add
-            do {
-                particleFXPipelineState = try device.makeRenderPipelineState(descriptor: pDesc)
-                print("[DEBUG] Renderer: particle pipeline created")
-            } catch {
-                print("[DEBUG] Renderer: particle pipeline failed — " + error.localizedDescription)
-            }
-        } else {
-            print("[DEBUG] Renderer: particlefx shaders not found")
-        }
-
-        // ── Fog volume pipeline (fullscreen raymarch, source-over blend) ───────
-        if let fVert = library.makeFunction(name: "fogvolume_vertex"),
-           let fFrag = library.makeFunction(name: "fogvolume_fragment") {
-            let fDesc = MTLRenderPipelineDescriptor()
-            fDesc.label             = "FogVolume"
-            fDesc.vertexFunction    = fVert
-            fDesc.fragmentFunction  = fFrag
-            let ca = fDesc.colorAttachments[0]!
-            ca.pixelFormat                 = .bgra8Unorm
-            ca.isBlendingEnabled           = true
-            ca.sourceRGBBlendFactor        = .sourceAlpha
-            ca.destinationRGBBlendFactor   = .oneMinusSourceAlpha
-            ca.rgbBlendOperation           = .add
-            ca.sourceAlphaBlendFactor      = .one
-            ca.destinationAlphaBlendFactor = .oneMinusSourceAlpha
-            ca.alphaBlendOperation         = .add
-            do {
-                fogVolumePipelineState = try device.makeRenderPipelineState(descriptor: fDesc)
-                print("[DEBUG] Renderer: fog volume pipeline created")
-            } catch {
-                print("[DEBUG] Renderer: fog volume pipeline failed — " + error.localizedDescription)
-            }
-        } else {
-            print("[DEBUG] Renderer: fogvolume shaders not found")
-        }
+        // (Weather particle + fog volume pipelines now built in ScenePipeline;
+        //  handles assigned at the top of buildPipeline.)
     }
 
     private func buildDummyBuffers() {

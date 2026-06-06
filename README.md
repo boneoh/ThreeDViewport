@@ -89,7 +89,7 @@ Each panel has its own page under [`docs/`](docs/) with full controls, keystroke
 
 New here? The chapters above cover one feature each. For how they combine into real workflows — layered motion, and cutting a scene into clean compositing passes — read the **[Advanced guide](docs/Advanced.md)**.
 
-See also [Viewport-Navigation](docs/Viewport-Navigation.md), [Export](docs/Export.md), [Copy / Paste / Zero](docs/Coordinate-Clipboard.md), and [KEYBOARD_REFERENCE](KEYBOARD_REFERENCE.md).
+See also [Viewport-Navigation](docs/Viewport-Navigation.md), [Export](docs/Export.md), [Creating HDR Backgrounds](docs/Creating-HDR-Backgrounds.md), [Copy / Paste / Zero](docs/Coordinate-Clipboard.md), and [KEYBOARD_REFERENCE](KEYBOARD_REFERENCE.md).
 
 ---
 
