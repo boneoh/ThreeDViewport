@@ -597,7 +597,7 @@ final class ProjectFile {
                 print("[DEBUG] ProjectFile: model file not found at " + pathStr)
                 continue
             }
-            vp.addModelToScene(url: modelURL)
+            vp.addModelToScene(url: modelURL, allowDuplicate: true)
             loadedCount += 1
         }
 
@@ -1042,12 +1042,10 @@ final class ProjectFile {
         }
     }
 
-    // MARK: - Apply group keyframe tracks (v14 / Phase 2)
+    // MARK: - Apply rate-marker schedules (v35)
 
-    /// Restores group-level animation tracks saved in v14+ project files.
-    /// Tracks are keyed by source filename; we walk the live sceneManager to find
-    /// v35: rebuild the Spin / Orbit rate-marker schedule dictionaries from saved
-    /// data, matching tracks by identity (object by name, group by groupID, light by
+    /// Rebuilds the Spin / Orbit rate-marker schedule dictionaries from saved data,
+    /// matching tracks by identity (object by name, group by groupID, light by
     /// index, camera singleton).  Does NOT regenerate keyframes — those were already
     /// restored with the regular tracks; this only re-enables rate editing.
     private static func applyRateSchedules(_ data: ProjectData, to vp: ViewportView) {
@@ -1091,6 +1089,10 @@ final class ProjectFile {
         }
     }
 
+    // MARK: - Apply group keyframe tracks (v14 / Phase 2)
+
+    /// Restores group-level animation tracks saved in v14+ project files.
+    /// Tracks are keyed by source filename; we walk the live sceneManager to find
     /// the runtime groupID that corresponds to each saved filename.
     ///
     /// `substitutedFilenames` carries any renames the user did via the

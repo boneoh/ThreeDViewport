@@ -15,6 +15,8 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
     // The panel content height is clamped to this maximum so the timeline
     // doesn't grow taller than the screen; content beyond this scrolls.
     private static let maxPanelContentH: CGFloat = 420
+    /// Height of the bottom footer bar that holds the zoom controls.
+    private static let footerHeight: CGFloat = 34
 
     // MARK: - Init
 
@@ -39,7 +41,8 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
         // Camera + Fog are always shown (+2); plus one lane per particle emitter.
         let numTracks     = 2 + particleManager.emitters.count + visibleObjectRows + lightManager.lights.count
         let contentH      = Self.contentHeight(for: numTracks)
-        let panelContentH = min(contentH, Self.maxPanelContentH)
+        let scrollH       = min(contentH, Self.maxPanelContentH)
+        let panelContentH = scrollH + Self.footerHeight
 
         // Document view: full content height so everything is reachable by scrolling.
         let docRect   = NSRect(x: 0, y: 0, width: panelWidth, height: contentH)
@@ -53,13 +56,17 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
         editor.fogSettings         = fogSettings
         editor.particleManager     = particleManager
         editor.coordinateClipboard = coordinateClipboard
-        // Width follows the scroll view when the panel is resized horizontally.
-        editor.autoresizingMask = [.width]
+        // The document width is driven by the zoom level (updateDocumentWidth), not
+        // by autoresizing — so it can be wider than the viewport and scroll.
+        editor.autoresizingMask = []
         editorView = editor
 
-        let sv = NSScrollView(frame: panelRect)
+        // Scroll view fills the area above the footer.
+        let svRect = NSRect(x: 0, y: Self.footerHeight,
+                            width: panelWidth, height: scrollH)
+        let sv = NSScrollView(frame: svRect)
         sv.hasVerticalScroller   = true
-        sv.hasHorizontalScroller = false
+        sv.hasHorizontalScroller = true
         sv.autohidesScrollers    = true
         sv.drawsBackground       = false
         sv.documentView          = editor
@@ -70,12 +77,25 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
         sv.contentView.postsBoundsChangedNotifications = true
         scrollView = sv
 
-        let panel = NSPanel(
+        super.init(window: NSPanel(
             contentRect: panelRect,
             styleMask:   [.titled, .closable, .miniaturizable, .resizable, .utilityWindow],
             backing:     .buffered,
             defer:       false
-        )
+        ))
+
+        let footer = Self.makeFooter(width: panelWidth, target: self,
+                                     fit: #selector(zoomFitAction),
+                                     out: #selector(zoomOutAction),
+                                     inn: #selector(zoomInAction),
+                                     max: #selector(zoomMaxAction))
+
+        let container = NSView(frame: panelRect)
+        container.autoresizesSubviews = true
+        container.addSubview(sv)
+        container.addSubview(footer)
+
+        guard let panel = window as? NSPanel else { fatalError() }
         panel.title                  = "Timeline Editor"
         // Normal window level (not floating) so other applications can come on top
         // when they receive focus, instead of the editor always staying above them.
@@ -83,10 +103,8 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
         panel.level                  = .normal
         panel.becomesKeyOnlyIfNeeded = false   // must become key so arrow/delete/insert work
         panel.hidesOnDeactivate      = false
-        panel.minSize                = NSSize(width: 520, height: 80)
-        panel.contentView            = sv
-
-        super.init(window: panel)
+        panel.minSize                = NSSize(width: 520, height: 80 + Self.footerHeight)
+        panel.contentView            = container
         panel.delegate = self
 
         // Keep document view height and panel size in sync whenever the user
@@ -99,9 +117,66 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
             forName: NSView.boundsDidChangeNotification,
             object:  sv.contentView,
             queue:   .main
-        ) { [weak editor] _ in editor?.needsDisplay = true }
+        ) { [weak editor] _ in
+            // On resize the viewport width changes → recompute the fit/zoom document
+            // width; on scroll it's a no-op.  Always repaint for the floating header.
+            editor?.updateDocumentWidth()
+            editor?.needsDisplay = true
+        }
 
         print("[DEBUG] TimelineEditorWindowController: initialized")
+    }
+
+    // MARK: - Zoom actions (footer buttons)
+
+    @objc private func zoomFitAction() { editorView.zoomToFit() }
+    @objc private func zoomOutAction() { editorView.zoomOut() }
+    @objc private func zoomInAction()  { editorView.zoomIn() }
+    @objc private func zoomMaxAction() { editorView.zoomToMax() }
+
+    /// Builds the bottom footer bar with the zoom controls.
+    private static func makeFooter(width: CGFloat, target: AnyObject,
+                                   fit: Selector, out: Selector,
+                                   inn: Selector, max: Selector) -> NSView {
+        let footer = NSView(frame: NSRect(x: 0, y: 0, width: width, height: footerHeight))
+        footer.autoresizingMask = [.width]
+        footer.wantsLayer = true
+        footer.layer?.backgroundColor = NSColor(white: 0.16, alpha: 1).cgColor
+
+        func button(_ title: String, _ sel: Selector, _ tip: String) -> NSButton {
+            let b = NSButton(title: title, target: target, action: sel)
+            b.bezelStyle  = .rounded
+            b.controlSize = .small
+            b.font        = NSFont.systemFont(ofSize: 11)
+            b.toolTip     = tip
+            return b
+        }
+
+        let label = NSTextField(labelWithString: "Zoom")
+        label.font      = NSFont.systemFont(ofSize: 11)
+        label.textColor = NSColor(white: 0.70, alpha: 1)
+
+        let stack = NSStackView(views: [
+            label,
+            button("Fit", fit, "Fit the entire timeline"),
+            button("\u{2013}", out, "Zoom out"),
+            button("+",        inn, "Zoom in"),
+            button("1 s",      max, "Zoom in to about one second")
+        ])
+        stack.orientation = .horizontal
+        stack.spacing     = 6
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        footer.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 10),
+            stack.centerYAnchor.constraint(equalTo: footer.centerYAnchor)
+        ])
+
+        let divider = NSBox(frame: NSRect(x: 0, y: footerHeight - 1, width: width, height: 1))
+        divider.boxType          = .separator
+        divider.autoresizingMask = [.width]
+        footer.addSubview(divider)
+        return footer
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -116,6 +191,8 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
         super.showWindow(sender)
         window?.makeKeyAndOrderFront(sender)
         editorView.startRefreshTimer()
+        // Now that the view is in the window, size the document to the viewport.
+        DispatchQueue.main.async { [weak self] in self?.editorView.updateDocumentWidth() }
         print("[DEBUG] TimelineEditorWindowController: panel shown")
     }
 
@@ -145,10 +222,13 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
             editorView.frame     = docFrame
         }
 
-        // Resize panel up to maxPanelContentH, anchoring the top edge.
+        // Keep the document width in step with the (possibly new) duration.
+        editorView.updateDocumentWidth()
+
+        // Resize panel up to maxPanelContentH (+ footer), anchoring the top edge.
         // Never decrease the panel height — the user may have manually resized
         // the window taller and we don't want to undo that on collapse.
-        let newPanelContentH = min(newContentH, Self.maxPanelContentH)
+        let newPanelContentH = min(newContentH, Self.maxPanelContentH) + Self.footerHeight
         let sampleRect  = NSRect(x: 0, y: 0, width: panel.frame.width, height: newPanelContentH)
         let newFrameH   = panel.frameRect(forContentRect: sampleRect).height
         let currentH    = panel.frame.height

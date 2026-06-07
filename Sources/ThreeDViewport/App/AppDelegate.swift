@@ -1260,11 +1260,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 return
             }
             print("[DEBUG] AppDelegate: openModel — " + url.lastPathComponent)
-            self?.viewportView?.addModelToScene(url: url)
-            self?.markDirty()
-            self?.timelineEditorWC?.updateWindowHeight()
-            self?.refreshCameraFollowTargets()
+            // A duplicate file name is blocked (group animation + lookups are keyed
+            // by name, so two copies would collide on save/load); a load failure
+            // already shows its own error from addModelToScene.
+            switch self?.viewportView?.addModelToScene(url: url) {
+            case .added:
+                self?.markDirty()
+                self?.timelineEditorWC?.updateWindowHeight()
+                self?.refreshCameraFollowTargets()
+            case .duplicate:
+                self?.showDuplicateModelAlert(name: url.lastPathComponent)
+            case .failed, .none:
+                break
+            }
         }
+    }
+
+    /// Informational alert shown when the user tries to add a model file whose name
+    /// is already in the scene (blocked because identity is keyed by file name).
+    private func showDuplicateModelAlert(name: String) {
+        let alert = NSAlert()
+        alert.messageText = "“\(name)” is already in the scene."
+        alert.informativeText =
+            "Each model file can only be added once. Group animation and keyframes "
+            + "are tracked by file name, so a second copy would collide with the "
+            + "first when the project is saved.\n\n"
+            + "To place another instance, duplicate the file under a new name and "
+            + "add that."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     // MARK: - Add Model to Scene (Phase 6)

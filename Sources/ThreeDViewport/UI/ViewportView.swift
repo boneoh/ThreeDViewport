@@ -412,12 +412,31 @@ final class ViewportView: MTKView {
         }
     }
 
+    /// Outcome of an add-model attempt, so callers can tell a blocked duplicate
+    /// apart from a load failure (which already surfaces its own error alert).
+    enum AddModelResult { case added, duplicate, failed }
+
     // Phase 6: Adds a model to the existing scene without clearing it.
     // Camera is only repositioned when this is the very first object.
-    func addModelToScene(url: URL) {
+    //
+    // Returns `.duplicate` (without loading) when the same file name is already in
+    // the scene and `allowDuplicate` is false — group animation, base transforms,
+    // and lookups are all keyed by file name, so a second copy would collide with
+    // the first on save/load.  Project load passes `allowDuplicate: true` (its model
+    // list is authoritative); the user-facing add paths leave it false and alert on
+    // `.duplicate`.  Returns `.failed` if the device is nil or the file won't load.
+    @discardableResult
+    func addModelToScene(url: URL, allowDuplicate: Bool = false) -> AddModelResult {
         guard let dev = device else {
             print("[DEBUG] ViewportView: addModelToScene — device is nil")
-            return
+            return .failed
+        }
+
+        if !allowDuplicate,
+           sceneManager.objects.contains(where: { $0.sourceURL?.lastPathComponent == url.lastPathComponent }) {
+            print("[DEBUG] ViewportView: addModelToScene — duplicate '"
+                + url.lastPathComponent + "' skipped")
+            return .duplicate
         }
 
         print("[DEBUG] ViewportView: addModelToScene start — " + url.lastPathComponent)
@@ -460,11 +479,13 @@ final class ViewportView: MTKView {
             setControlMode(.object)
 
             print("[DEBUG] ViewportView: addModelToScene complete — total objects=\(sceneManager.objects.count) groupID=\(gid.map { String($0) } ?? "none")")
+            return .added
         } else {
             let filename = url.lastPathComponent
             let reason   = loader.lastError ?? "The file could not be read."
             print("[DEBUG] ViewportView: GLTFLoader returned nil for " + filename)
             showLoadError(filename: filename, reason: reason)
+            return .failed
         }
     }
 
@@ -903,6 +924,28 @@ final class ViewportView: MTKView {
         alert.alertStyle     = .warning
         alert.messageText    = "Could not open \"\(filename)\""
         alert.informativeText = reason
+        alert.addButton(withTitle: "OK")
+        if let window = window {
+            alert.beginSheetModal(for: window)
+        } else {
+            alert.runModal()
+        }
+    }
+
+    /// Alert shown when one or more dropped model files are already in the scene.
+    /// (Identity is keyed by file name, so a second copy would collide on save/load.)
+    private func showDuplicateModelAlert(names: [String]) {
+        let list = names.map { "“\($0)”" }.joined(separator: ", ")
+        let alert = NSAlert()
+        alert.alertStyle      = .informational
+        alert.messageText     = names.count == 1
+            ? "\(list) is already in the scene."
+            : "These models are already in the scene: \(list)."
+        alert.informativeText =
+            "Each model file can only be added once — group animation and keyframes "
+            + "are tracked by file name, so a second copy would collide with the "
+            + "first when the project is saved. Duplicate the file under a new name "
+            + "to place another instance."
         alert.addButton(withTitle: "OK")
         if let window = window {
             alert.beginSheetModal(for: window)
@@ -3185,14 +3228,21 @@ final class ViewportView: MTKView {
             return true
         }
 
-        // Load all model files (project files ignored in mixed drops).
+        // Load all model files (project files ignored in mixed drops).  Skip — and
+        // collect — any whose file name is already in the scene (would collide on
+        // save/load); load failures surface their own error from addModelToScene.
         var anyLoaded = false
+        var duplicates: [String] = []
         for url in modelURLs {
-            addModelToScene(url: url)
-            anyLoaded = true
+            switch addModelToScene(url: url) {
+            case .added:     anyLoaded = true
+            case .duplicate: duplicates.append(url.lastPathComponent)
+            case .failed:    break
+            }
         }
         if anyLoaded { onModelDropped?() }
-        return anyLoaded
+        if !duplicates.isEmpty { showDuplicateModelAlert(names: duplicates) }
+        return anyLoaded || !duplicates.isEmpty
     }
 }
 

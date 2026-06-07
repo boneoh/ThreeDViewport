@@ -194,13 +194,98 @@ final class TimelineEditorView: NSView {
     /// on group-header rows.  Clicking inside this zone toggles group expansion.
     /// Clicking elsewhere on the header row only selects the lane (no expand/collapse).
     private let triangleZone:    CGFloat = 22
+    /// Width of each lane's easing-mode dropdown in the right of the label column.
+    private let easingPopupW:    CGFloat = 58
 
-    /// Pixels per second — computed from view width and duration so the full
-    /// timeline always fits without horizontal scrolling.
-    private var pxPerSecond: CGFloat {
-        let trackWidth = max(1, bounds.width - labelWidth - rightPad)
+    /// Zoom: pixels per second.  `nil` = fit the whole timeline into the visible
+    /// width (no horizontal scrolling).  Non-nil = a fixed scale that can be wider
+    /// than the viewport, in which case the horizontal scroller appears.
+    private var userPixelsPerSecond: CGFloat? = nil
+
+    /// Width of the visible track viewport (the scroll view's clip view), not the
+    /// document view — which can be wider than the viewport when zoomed in.
+    private var viewportWidth: CGFloat {
+        enclosingScrollView?.contentView.bounds.width ?? bounds.width
+    }
+
+    /// Fit-to-window scale: the whole timeline spans the visible track area.
+    private var fitPxPerSecond: CGFloat {
+        let trackWidth = max(1, viewportWidth - labelWidth - rightPad)
         let dur        = max(0.001, timeline?.duration ?? 10.0)
         return trackWidth / CGFloat(dur)
+    }
+
+    /// Tightest zoom: ~1 second fills the visible track area.
+    private var maxPxPerSecond: CGFloat {
+        max(fitPxPerSecond, max(1, viewportWidth - labelWidth - rightPad))
+    }
+
+    /// Effective pixels-per-second used by all time↔x mapping.
+    private var pxPerSecond: CGFloat {
+        if let pps = userPixelsPerSecond { return min(maxPxPerSecond, max(fitPxPerSecond, pps)) }
+        return fitPxPerSecond
+    }
+
+    /// Left edge (in document coords) of the frozen label column — the scroll
+    /// view's current horizontal offset, so the labels stay pinned while panning.
+    private var labelOriginX: CGFloat { visibleRect.minX }
+    /// Right edge of the frozen label column in document coords (label↔track boundary).
+    private var labelRightX:  CGFloat { visibleRect.minX + labelWidth }
+
+    // MARK: - Zoom
+
+    private let zoomStep: CGFloat = 1.6
+
+    /// Resizes the document view so its width matches the current zoom (label column
+    /// + timeline at `pxPerSecond` + right pad), or the viewport width when that is
+    /// larger (fit zoom).  Drives whether the horizontal scroller appears.
+    func updateDocumentWidth() {
+        let dur     = max(0.001, timeline?.duration ?? 10.0)
+        let needed  = labelWidth + CGFloat(dur) * pxPerSecond + rightPad
+        let target  = max(viewportWidth, needed)
+        if abs(frame.width - target) > 0.5 {
+            var f = frame; f.size.width = target; frame = f
+        }
+    }
+
+    func zoomIn() {
+        userPixelsPerSecond = min(maxPxPerSecond, pxPerSecond * zoomStep)
+        applyZoom(centerPlayhead: true)
+    }
+
+    func zoomOut() {
+        let next = pxPerSecond / zoomStep
+        userPixelsPerSecond = next <= fitPxPerSecond ? nil : next   // snap back to fit
+        applyZoom(centerPlayhead: true)
+    }
+
+    /// Zoom out until the whole timeline fits the viewport (no horizontal scroll).
+    func zoomToFit() {
+        userPixelsPerSecond = nil
+        applyZoom(centerPlayhead: false)
+        scrollToVisible(NSRect(x: 0, y: visibleRect.minY, width: 1, height: visibleRect.height))
+    }
+
+    /// Zoom in to the tightest level (~1 second across the track area).
+    func zoomToMax() {
+        userPixelsPerSecond = maxPxPerSecond
+        applyZoom(centerPlayhead: true)
+    }
+
+    private func applyZoom(centerPlayhead: Bool) {
+        updateDocumentWidth()
+        if centerPlayhead { scrollPlayheadToCenter() }
+        needsDisplay = true
+    }
+
+    /// Scrolls horizontally so the playhead sits near the middle of the track area
+    /// (clamped to the document), keeping the current vertical position.
+    private func scrollPlayheadToCenter() {
+        let phX     = timeToX(timeline?.currentTime ?? 0)
+        let half    = max(0, (viewportWidth - labelWidth) / 2)
+        let targetX = max(0, phX - labelWidth - half)
+        scrollToVisible(NSRect(x: targetX + labelWidth, y: visibleRect.minY,
+                               width: viewportWidth - labelWidth, height: visibleRect.height))
     }
 
     // ── Selection state ───────────────────────────────────────────────────────
@@ -333,6 +418,7 @@ final class TimelineEditorView: NSView {
         // Using .common mode so this timer also fires while the user drags a slider.
         let t = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
             self?.syncEasingPopupsIfNeeded()
+            self?.updateDocumentWidth()   // tracks duration / viewport changes (guarded, cheap)
             self?.needsDisplay = true
         }
         RunLoop.main.add(t, forMode: .common)
@@ -529,11 +615,9 @@ final class TimelineEditorView: NSView {
         NSColor(white: 0.18, alpha: 1).setFill()
         NSBezierPath.fill(bounds)
 
-        // ── Label column ──────────────────────────────────────────────────────
-        NSColor(white: 0.22, alpha: 1).setFill()
-        NSBezierPath.fill(NSRect(x: 0, y: 0, width: labelWidth, height: totalH))
-
-        // ── Lane rows ─────────────────────────────────────────────────────────
+        // ── Lane rows (track area) ──────────────────────────────────────────────
+        // The label column is drawn LAST (drawLabelColumn) so it stays frozen at the
+        // left while the track area scrolls horizontally.
         for (i, row) in tracks.enumerated() {
             let isHeader   = row.isGroupHeader
             let isSelected = (i == selectedTrackIndex)
@@ -567,68 +651,6 @@ final class TimelineEditorView: NSView {
             NSColor(white: isHeader ? 0.11 : 0.13, alpha: 1).setFill()
             NSBezierPath.fill(NSRect(x: 0, y: laneTop(i) + laneHeight - 1,
                                      width: w, height: 1))
-        }
-
-        // ── Label column separator ────────────────────────────────────────────
-        NSColor(white: 0.12, alpha: 1).setFill()
-        NSBezierPath.fill(NSRect(x: labelWidth - 1, y: 0, width: 1, height: totalH))
-
-        // ── Track name labels ─────────────────────────────────────────────────
-        let nameAttrs: [NSAttributedString.Key: Any] = [
-            .font:            NSFont.systemFont(ofSize: 11, weight: .regular),
-            .foregroundColor: NSColor(white: 0.80, alpha: 1)
-        ]
-        let headerAttrs: [NSAttributedString.Key: Any] = [
-            .font:            NSFont.systemFont(ofSize: 11, weight: .semibold),
-            .foregroundColor: NSColor(white: 0.88, alpha: 1)
-        ]
-        // Object rows share the label column with the easing popup (right ~66 px).
-        // Clip name drawing so it doesn't bleed into the popup area.
-        let popupReserved: CGFloat = 64   // matches popup width (58) + right margin (3) + gap (3)
-
-        for (i, row) in tracks.enumerated() {
-            // ── Disclosure triangle for group headers ─────────────────────────
-            if row.isGroupHeader, let gid = row.groupID {
-                let isExpanded = expandedGroups.contains(gid)
-                let triStr  = (isExpanded ? "▼" : "▶") as NSString
-                let triAttrs: [NSAttributedString.Key: Any] = [
-                    .font:            NSFont.systemFont(ofSize: 12, weight: .bold),
-                    .foregroundColor: NSColor(white: 0.92, alpha: 1)
-                ]
-                let triSize = triStr.size(withAttributes: triAttrs)
-                triStr.draw(at: NSPoint(x: 7, y: laneCenter(i) - triSize.height / 2),
-                            withAttributes: triAttrs)
-            }
-
-            // ── Name label ────────────────────────────────────────────────────
-            let attrs    = row.isGroupHeader ? headerAttrs : nameAttrs
-            let nameX: CGFloat
-            let maxNameW: CGFloat
-            if row.isGroupHeader {
-                nameX    = triangleZone
-                maxNameW = labelWidth - triangleZone - 4
-            } else if case .object = row.ref {
-                // Object rows (standalone or indented part) share the label column
-                // with an easing popup in the right portion.  Indented rows are
-                // inset by an extra 12 px to show hierarchy visually.
-                nameX    = row.isIndented ? 20 : 8
-                // Subtract nameX so the name area ends a 3-px gap before the popup,
-                // even for indented rows (otherwise the indent eats into the gap).
-                maxNameW = labelWidth - popupReserved - nameX
-            } else {
-                nameX    = 8
-                maxNameW = labelWidth - 12
-            }
-
-            let str  = row.name as NSString
-            let size = str.size(withAttributes: attrs)
-            let y    = laneCenter(i) - size.height / 2
-
-            NSGraphicsContext.current?.saveGraphicsState()
-            NSBezierPath.clip(NSRect(x: nameX, y: laneTop(i),
-                                     width: maxNameW, height: laneHeight))
-            str.draw(at: NSPoint(x: nameX, y: y), withAttributes: attrs)
-            NSGraphicsContext.current?.restoreGraphicsState()
         }
 
         // ── Duration end marker ───────────────────────────────────────────────
@@ -733,6 +755,11 @@ final class TimelineEditorView: NSView {
             bandPath.stroke()
         }
 
+        // ── Frozen label column ───────────────────────────────────────────────
+        // Drawn after the track content so the names/popups stay pinned at the left
+        // while the track area scrolls horizontally (mirrors the floating ruler).
+        drawLabelColumn(tracks: tracks, totalH: totalH)
+
         // ── Floating ruler header ─────────────────────────────────────────────
         // Drawn last, offset to the top of the scroll view's visible area, so the
         // ruler (ticks, time labels, playhead marker, EDITING badge) stays pinned
@@ -742,6 +769,104 @@ final class TimelineEditorView: NSView {
         // Easing dropdowns are real subviews and render above the drawn header,
         // so hide any that have scrolled up under it.
         updateEasingPopupOcclusion()
+    }
+
+    /// Per-lane background colour for the label column (matches the lane-row fill).
+    private func laneBackgroundColor(index i: Int, isHeader: Bool, isSelected: Bool) -> NSColor {
+        if isSelected {
+            if isEditingKeyframe { return NSColor(red: 0.30, green: 0.22, blue: 0.08, alpha: 1) }
+            if isHeader          { return NSColor(red: 0.22, green: 0.42, blue: 0.68, alpha: 1) }
+            return NSColor(red: 0.14, green: 0.30, blue: 0.52, alpha: 1)
+        }
+        if isHeader { return NSColor(white: 0.26, alpha: 1) }
+        return NSColor(white: i % 2 == 0 ? 0.18 : 0.21, alpha: 1)
+    }
+
+    /// Draws the frozen label column (backgrounds, separator, names, triangles) at
+    /// the current horizontal scroll offset so track names stay visible while the
+    /// timeline scrolls.  Also re-pins the easing popups to the column.
+    private func drawLabelColumn(tracks: TrackList, totalH: CGFloat) {
+        let lx = labelOriginX   // = visibleRect.minX
+
+        // Per-row backgrounds + separators (so selection/header colour shows here).
+        for (i, row) in tracks.enumerated() {
+            laneBackgroundColor(index: i, isHeader: row.isGroupHeader,
+                                isSelected: i == selectedTrackIndex).setFill()
+            NSBezierPath.fill(NSRect(x: lx, y: laneTop(i), width: labelWidth, height: laneHeight))
+            NSColor(white: row.isGroupHeader ? 0.11 : 0.13, alpha: 1).setFill()
+            NSBezierPath.fill(NSRect(x: lx, y: laneTop(i) + laneHeight - 1,
+                                     width: labelWidth, height: 1))
+        }
+
+        // Column right separator.
+        NSColor(white: 0.12, alpha: 1).setFill()
+        NSBezierPath.fill(NSRect(x: lx + labelWidth - 1, y: 0, width: 1, height: totalH))
+
+        // ── Names + disclosure triangles ──────────────────────────────────────
+        let nameAttrs: [NSAttributedString.Key: Any] = [
+            .font:            NSFont.systemFont(ofSize: 11, weight: .regular),
+            .foregroundColor: NSColor(white: 0.80, alpha: 1)
+        ]
+        let headerAttrs: [NSAttributedString.Key: Any] = [
+            .font:            NSFont.systemFont(ofSize: 11, weight: .semibold),
+            .foregroundColor: NSColor(white: 0.88, alpha: 1)
+        ]
+        // Reserve the right portion of the column for the easing popup so a long
+        // model / group name never overlaps the dropdown.
+        let popupReserved: CGFloat = 64   // popup width (58) + right margin (3) + gap (3)
+
+        for (i, row) in tracks.enumerated() {
+            if row.isGroupHeader, let gid = row.groupID {
+                let triStr  = (expandedGroups.contains(gid) ? "▼" : "▶") as NSString
+                let triAttrs: [NSAttributedString.Key: Any] = [
+                    .font:            NSFont.systemFont(ofSize: 12, weight: .bold),
+                    .foregroundColor: NSColor(white: 0.92, alpha: 1)
+                ]
+                let triSize = triStr.size(withAttributes: triAttrs)
+                triStr.draw(at: NSPoint(x: lx + 7, y: laneCenter(i) - triSize.height / 2),
+                            withAttributes: triAttrs)
+            }
+
+            let attrs = row.isGroupHeader ? headerAttrs : nameAttrs
+            let nameX: CGFloat
+            let maxNameW: CGFloat
+            // Rows that carry an easing popup (group headers, standalone objects,
+            // camera/light/fog/particles) reserve the popup zone; indented child
+            // part rows have no popup but still reserve it (harmless, keeps names short).
+            if row.isGroupHeader {
+                nameX    = triangleZone
+                maxNameW = labelWidth - popupReserved - nameX
+            } else if case .object = row.ref {
+                nameX    = row.isIndented ? 20 : 8
+                maxNameW = labelWidth - popupReserved - nameX
+            } else {
+                nameX    = 8
+                maxNameW = labelWidth - popupReserved - nameX
+            }
+
+            let str  = row.name as NSString
+            let size = str.size(withAttributes: attrs)
+            let y    = laneCenter(i) - size.height / 2
+
+            NSGraphicsContext.current?.saveGraphicsState()
+            NSBezierPath.clip(NSRect(x: lx + nameX, y: laneTop(i),
+                                     width: max(0, maxNameW), height: laneHeight))
+            str.draw(at: NSPoint(x: lx + nameX, y: y), withAttributes: attrs)
+            NSGraphicsContext.current?.restoreGraphicsState()
+        }
+
+        // Re-pin the easing popups to the frozen column.
+        layoutEasingPopups(offsetX: lx)
+    }
+
+    /// Positions each easing popup's x to follow the frozen label column.
+    private func layoutEasingPopups(offsetX: CGFloat) {
+        let baseX = labelWidth - easingPopupW - 3
+        for b in easingPopups {
+            var f = b.popup.frame
+            let newX = offsetX + baseX
+            if abs(f.origin.x - newX) > 0.5 { f.origin.x = newX; b.popup.frame = f }
+        }
     }
 
     /// Hides easing popups whose row has scrolled under the floating ruler header
@@ -770,7 +895,7 @@ final class TimelineEditorView: NSView {
         var t: Double = 0
         while t <= duration + 0.0001 {
             let x = timeToX(t)
-            if x >= labelWidth - 1 && x <= w + 1 {
+            if x >= labelRightX - 1 && x <= w + 1 {
                 let isFive = Int(round(t)) % 5 == 0
                 let tickH: CGFloat = isFive ? 10 : 6
                 let tick  = NSBezierPath()
@@ -792,7 +917,7 @@ final class TimelineEditorView: NSView {
 
         // ── Playhead marker (triangle + connector within the ruler band) ──────
         let phX = timeToX(curTime)
-        if phX >= labelWidth - 1 && phX <= w + 1 {
+        if phX >= labelRightX - 1 && phX <= w + 1 {
             let tri = NSBezierPath()
             tri.move(to: NSPoint(x: phX - 5, y: originY))
             tri.line(to: NSPoint(x: phX + 5, y: originY))
@@ -822,7 +947,7 @@ final class TimelineEditorView: NSView {
             ]
             let badgeSize = badge.size(withAttributes: badgeAttrs)
             badge.draw(
-                at: NSPoint(x: labelWidth + 8, y: originY + (rulerHeight - badgeSize.height) / 2),
+                at: NSPoint(x: labelRightX + 8, y: originY + (rulerHeight - badgeSize.height) / 2),
                 withAttributes: badgeAttrs
             )
         }
@@ -842,7 +967,7 @@ final class TimelineEditorView: NSView {
         let isControl = event.modifierFlags.contains(.control)
 
         // ── Ctrl+click in track area → start rubber-band selection ────────────
-        if isControl && pt.y >= rulerHeight && pt.x >= labelWidth {
+        if isControl && pt.y >= rulerHeight && pt.x >= labelRightX {
             isRubberBanding   = true
             rubberBandStart   = pt
             rubberBandCurrent = pt
@@ -852,7 +977,7 @@ final class TimelineEditorView: NSView {
         // Ruler click → scrub.
         // Clear any selected diamond and multi-selection so a subsequent drag
         // into the track area never accidentally moves a keyframe instead of scrubbing.
-        if pt.y < rulerHeight && pt.x >= labelWidth {
+        if pt.y < rulerHeight && pt.x >= labelRightX {
             multiSelectedDiamonds.removeAll()
             selectedKFIndex = nil
             scrubToX(pt.x)
@@ -920,7 +1045,7 @@ final class TimelineEditorView: NSView {
 
             if row.isGroupHeader, let gid = row.groupID {
                 // Toggle expansion only via the disclosure triangle.
-                if pt.x < triangleZone {
+                if pt.x - labelOriginX < triangleZone {
                     if expandedGroups.contains(gid) {
                         expandedGroups.remove(gid)
                     } else {
@@ -931,13 +1056,13 @@ final class TimelineEditorView: NSView {
                 }
                 select(trackIndex: lane, kfIndex: nil)
                 onLaneSelected?(row.ref)
-                if pt.x >= labelWidth { scrubToX(pt.x) }
+                if pt.x >= labelRightX { scrubToX(pt.x) }
                 return
             }
 
             select(trackIndex: lane, kfIndex: nil)
             onLaneSelected?(row.ref)
-            if pt.x >= labelWidth { scrubToX(pt.x) }
+            if pt.x >= labelRightX { scrubToX(pt.x) }
             return
         }
 
@@ -960,7 +1085,7 @@ final class TimelineEditorView: NSView {
         }
 
         // Ruler drag → always scrub (highest priority).
-        if !isDragging && pt.y < rulerHeight && pt.x >= labelWidth {
+        if !isDragging && pt.y < rulerHeight && pt.x >= labelRightX {
             scrubToX(pt.x)
             return
         }
@@ -968,7 +1093,7 @@ final class TimelineEditorView: NSView {
         // If the gesture did NOT start on a diamond, scrub the playhead while dragging
         // in the track area — so the user can click-and-drag to position the playhead.
         if !mouseDownOnDiamond {
-            if pt.x >= labelWidth { scrubToX(pt.x) }
+            if pt.x >= labelRightX { scrubToX(pt.x) }
             return
         }
 
@@ -2145,9 +2270,11 @@ final class TimelineEditorView: NSView {
         guard let sm = sceneManager else { return }
 
         // Layout constants — popup sits in the right portion of the label column.
-        let popupW: CGFloat = 58   // slightly narrower than before to fit wider labelWidth
+        // popupX is the un-scrolled base; layoutEasingPopups() offsets it by the
+        // horizontal scroll so the dropdowns stay pinned to the frozen column.
+        let popupW: CGFloat = easingPopupW
         let popupH: CGFloat = 18
-        let popupX: CGFloat = labelWidth - popupW - 3
+        let popupX: CGFloat = labelOriginX + labelWidth - popupW - 3
 
         // Walk the current track list and attach a popup to:
         //   • single-mesh object rows (no groupID) — drives `obj.keyframeTrack`.
