@@ -59,7 +59,10 @@ Available in the main viewport (no modifier unless noted).
 | **⌘⇧S** | File | Save Project As… |
 
 No-shortcut Window items: **Probe Inspector…**, **Show Marks** (toggle; the **K** key
-also toggles), and **Path Animator ▸ Rotation… / Linear…**.
+also toggles), **Effects**, and **Path Animator ▸ Orbit… / Linear… / Curve… / Spin…**.
+
+No-shortcut ThreeDViewport-menu item: **New Instance** (launches a second app
+instance for cross-instance copy/paste).
 
 <div style="page-break-after: always;"></div>
 

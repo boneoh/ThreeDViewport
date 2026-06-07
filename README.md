@@ -83,9 +83,11 @@ Each panel has its own page under [`docs/`](docs/) with full controls, keystroke
 | Probe Inspector (+ Marks) | Window → Probe Inspector… | [Probe-Inspector](docs/Probe-Inspector.md) |
 | Path Animator — Orbit | Window → Path Animator → Orbit… | [Orbit-Path-Animator](docs/Orbit-Path-Animator.md) |
 | Path Animator — Linear | Window → Path Animator → Linear… | [Linear-Path-Animator](docs/Linear-Path-Animator.md) |
+| Path Animator — Curve | Window → Path Animator → Curve… | [Curve-Path-Animator](docs/Curve-Path-Animator.md) |
 | Path Animator — Spin | Window → Path Animator → Spin… | [Spin-Path-Animator](docs/Spin-Path-Animator.md) |
 | Glue (Envelopes) | Edit → Glue Objects… | [Glue](docs/Glue.md) |
 | Settings | ThreeDViewport → Settings… · ⌘, | [Settings](docs/Settings.md) |
+| New Instance | ThreeDViewport → New Instance | [Settings](docs/Settings.md#new-instance) |
 
 New here? The chapters above cover one feature each. For how they combine into real workflows — layered motion, and cutting a scene into clean compositing passes — read the **[Advanced guide](docs/Advanced.md)**.
 
@@ -101,7 +103,7 @@ Open `.glb` (single binary) or `.gltf` + `.bin` (JSON + sidecar) via **File → 
 
 ### Animate with keyframes
 
-Stamp keyframes with **I** for whichever mode is active — Object (`O`), Model group (`M`), Camera, or Light (`L`) — then refine them in the [Timeline Editor](docs/Timeline-Editor.md), which supports retiming, copy/paste, multi-select, and per-track easing (linear or Catmull-Rom spline tiers). For smooth generated motion, the [Orbit](docs/Orbit-Path-Animator.md), [Linear](docs/Linear-Path-Animator.md), and [Spin](docs/Spin-Path-Animator.md) Path Animators build whole orbit / arc / dolly paths and wobble-free self-spins from a couple of Probe points or a time window.
+Stamp keyframes with **I** for whichever mode is active — Object (`O`), Model group (`M`), Camera, or Light (`L`) — then refine them in the [Timeline Editor](docs/Timeline-Editor.md), which supports retiming, copy/paste (including [across two app instances](docs/Coordinate-Clipboard.md#across-two-app-instances)), multi-select, and per-track easing (linear or Catmull-Rom spline tiers). For smooth generated motion, the Path Animators build whole moves from a couple of Probe points: [Linear](docs/Linear-Path-Animator.md) dollies and [Curve](docs/Curve-Path-Animator.md) spiral arcs over a time window, while [Orbit](docs/Orbit-Path-Animator.md) turntables and wobble-free [Spin](docs/Spin-Path-Animator.md) self-spins are driven by **rate markers** — set a rev/s rate, drop a keyframe, and it holds that rate until the next one.
 
 ### Camera follow
 

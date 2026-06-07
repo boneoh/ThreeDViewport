@@ -32,3 +32,10 @@ Default locations used by file pickers and Export:
 
 Settings are written to a JSON file in the app's support location, independent of
 any project.
+
+## New Instance
+
+Just below **Settings…** in the **ThreeDViewport** menu, **New Instance** launches a
+second, independent copy of the app in its own window. Use it to copy coordinates or
+keyframes between two projects — see
+[Across two app instances](Coordinate-Clipboard.md#across-two-app-instances).

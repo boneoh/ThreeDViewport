@@ -164,17 +164,22 @@ envelope's.** That's what lets you build compound motion cleanly.
 
 ### The Path Animators — generated motion without the wobble
 
-Three generators build whole keyframe tracks so you don't hand-key arcs:
+Four generators build whole keyframe tracks so you don't hand-key arcs:
 
-- **[Orbit](Orbit-Path-Animator.md)** — moves an object along a helix / arc /
-  corkscrew around a **world-space** Probe axis, aiming as it goes. Great for
-  circling, rising spirals, sweeping camera moves.
+- **[Orbit](Orbit-Path-Animator.md)** — circles an object on a **planar** (constant-
+  height) ring around a **world-space** Probe axis, aiming at the centre. Driven by
+  **rate markers**: set a rev/s rate, drop a keyframe, and it holds that rate until
+  the next marker (rate 0 stops). Great for turntables and sweeping fly-arounds.
 - **[Linear](Linear-Path-Animator.md)** — a straight constant-velocity run between
   two points; shape the accel/decel with the track's easing.
+- **[Curve](Curve-Path-Animator.md)** — a flat spiral arc from a start to an end
+  point *around* an aim point, easing its radius in or out — for arcing reveals and
+  swooping moves that also travel across the scene.
 - **[Spin](Spin-Path-Animator.md)** — a constant, **wobble-free self-spin** about
-  the object's own local axis. It writes pure-rotation keyframes and forces linear
-  easing, so the spin is dead steady (hand-keyed rotations drift off-axis and the
-  spline easing overshoots — that's the wobble Spin avoids).
+  the object's own local axis, also driven by **rate markers**. It writes pure-
+  rotation keyframes and forces linear easing, so the spin is dead steady (hand-keyed
+  rotations drift off-axis and the spline easing overshoots — that's the wobble Spin
+  avoids).
 
 ### Layering them: B orbits A *and* spins
 

@@ -1,48 +1,65 @@
 # Orbit Path Animator
 
-Generates keyframes that move the selected camera, light, or object along a
-**helix / arc / corkscrew** around an axis. Great for orbits and graceful curved
-moves that are tedious to hand-key.
+Spins the selected camera, light, or object in a **circular orbit** around an axis —
+great for turntables, fly-arounds, and graceful circular moves that are tedious to
+hand-key.
 
-> For making an object **spin on its own axis** (rotate in place), use the
-> [Spin Path Animator](Spin-Path-Animator.md) instead — it produces a clean,
-> constant, wobble-free self-spin.
+You drive it with **rate markers**: set an orbit **rate** (revolutions per second),
+drop a keyframe, and the target keeps orbiting at that rate until the next marker.
+Change the rate by dropping another marker; stop with a marker at rate **0**. The
+orbit is **planar** — a constant-height circle (no climb) — so to adjust speed you
+just edit a rate instead of re-keying a whole sweep.
+
+> For a corkscrew / spiral that **moves through the scene** (a flat arc that eases
+> its radius), use the [Curve Path Animator](Curve-Path-Animator.md). For making an
+> object **spin on its own axis** (rotate in place), use the
+> [Spin Path Animator](Spin-Path-Animator.md).
 
 **Open:** Window ▸ Path Animator ▸ Orbit…
 
 ## Workflow
 
-1. **Axis (Probe):** position the [Probe](Probe-Inspector.md) at the axis start →
-   **Capture Axis Start**; move it to the axis end → **Capture Axis End**. (Copy /
-   paste / zero icons mirror the Probe Inspector, sharing the same clipboard.)
-2. **Track & time:** select a camera / light / object lane in the
-   [Timeline Editor](Timeline-Editor.md), scrub to the start → **Capture Start**;
-   scrub to the end → **Capture End**.
-3. **Parameters:** Radius · Start angle (°) · End angle (°) · Revolutions
-   (fractional ok) · Keyframes / rev.
-4. **Create Keyframes.**
+1. **Axis (Probe):** position the [Probe](Probe-Inspector.md) at the orbit **centre**
+   → **Capture Axis Start**; move it along the desired tilt → **Capture Axis End**
+   (the same point = a level, world-up orbit). The plane's normal is the
+   start → end direction. (Copy / paste / zero icons share the Probe clipboard.)
+2. **Target:** pick a camera / light / object from the **Target** dropdown.
+3. **Orbit Rate:** set the **Radius**, **Rate (rev/s)** (negative reverses
+   direction), and **Keyframes / rev**.
+4. Scrub the playhead to where the rate should take effect, then **Add Rate
+   Keyframe**.
+5. Repeat to change the rate over time; add a **Rate 0** marker to stop.
+
+Each marker is listed under **Rate Keyframes** (time · rate) with an **×** to delete
+it, plus **Clear All**. The axis and radius are **shared by the whole track** —
+after changing them, click **Apply Radius / Axis** to re-bake the existing markers
+with the new geometry. The schedule is saved with the project.
 
 ## Geometry
 
-- Angle swept: `Δθ = (end − start) + revolutions·360°`.
-- Position: `P(s) = A + s·(B−A) + radius·(cos θ·u + sin θ·v)` for s from 0→1 over
-  the time window. `A == B` with a fractional revolution gives a flat **arc**; a
-  real axis with whole revolutions gives a **corkscrew**.
-- **Aim:** camera and lights aim at a **fixed point** (the axis midpoint); objects
-  aim at the **same-height** axis point (so they turn to follow the column as they
-  rise). Object −Z is treated as "forward."
+- A constant-height circle: `P(θ) = C + radius·(cos θ·u + sin θ·v)`, where `C` is the
+  captured **Axis Start** and `u`, `v` span the plane perpendicular to the
+  start → end direction (world-up when the two axis points coincide). There is **no
+  climb** along the axis — for that, use the corkscrew in the
+  [Curve Path Animator](Curve-Path-Animator.md).
+- The swept angle is **continuous across markers**, so segments at different rates
+  join without a jump.
+- **Aim:** the camera and lights aim at the orbit **centre** (`C`); an object turns
+  to face the centre as it circles (object −Z is "forward").
 - The axis is **world-relative** — both Capture Axis points are world-space Probe
-  positions, so the orbit is laid out in world coordinates.
+  positions.
 
 ## Notes
 
-- **Create Keyframes** deletes the track's existing keyframes within the captured
-  time window and inserts the generated ones.
+- Adding the first marker (or editing the schedule) replaces the track's keyframes
+  from the **first marker onward** and sets the track to **linear** easing (exact
+  constant speed). Hand-keyed frames *before* the first marker are left alone.
+- A marker with **rate 0** holds position — the target parks on the circle until a
+  later marker resumes the orbit.
 - Object keyframes **preserve the object's current scale**.
-- Camera/light aim points are per-keyframe, so you can nudge them afterwards.
 - The generated keyframes write a **world** pose, so this is intended for **root**
   objects (cameras, lights, ungrouped models). For two [glued](Glue.md) objects,
   drive the **orbit on the envelope** and add the **spin on the child** with the
   [Spin Path Animator](Spin-Path-Animator.md).
 
-See also: [Spin Path Animator](Spin-Path-Animator.md) · [Linear Path Animator](Linear-Path-Animator.md).
+See also: [Spin Path Animator](Spin-Path-Animator.md) · [Linear Path Animator](Linear-Path-Animator.md) · [Curve Path Animator](Curve-Path-Animator.md).

@@ -125,16 +125,29 @@ probe gizmo itself is editor-only and never exported.
 
 Pure geometry that generates keyframes for the selected camera, light, or object:
 
-- **Rotation** — a helix / arc / corkscrew around a Probe-defined axis (radius,
-  start/end angle, fractional revolutions). Camera/lights aim at the axis midpoint;
-  objects aim at the same-height axis point.
-- **Linear** — a straight line between two Probe points. Camera/lights keep their
-  current orientation (parallel dolly); objects face the direction of travel.
+- **Orbit** — a constant-height **planar** circle around a Probe-defined axis,
+  driven by **rate markers** (rev/s). Camera/lights aim at the orbit centre; objects
+  turn to face it.
+- **Linear** — a straight line between two Probe points (`linearSamples`).
+  Camera/lights keep their current orientation (parallel dolly); objects face the
+  direction of travel.
+- **Curve** — a flat spiral arc that sweeps from a start to an end point around an
+  aim point, easing its radius in/out (`curveSamples`).
+- **Spin** — a constant, wobble-free **self-spin** about the object's (or model's)
+  own local axis, also driven by **rate markers**; pure-rotation, in place.
 
-Both convert a world-space path point into the appropriate track representation
-(camera orbit params, light position+target, or an object delta on `baseTransform`
-that preserves the object's scale), then replace the track's keyframes within the
-captured time window. Euler/transform math lives in `TransformMath.swift`.
+Linear and Curve convert each world-space path point into the appropriate track
+representation (camera orbit params, light position+target, or an object delta on
+`baseTransform` that preserves scale) and replace the track's keyframes within the
+captured time window.
+
+Orbit and Spin instead keep an editable **rate schedule** per track
+(`Animation/RateSchedule.swift`, stored on `ViewportView` keyed by `TrackRef`): each
+marker holds a rate that runs until the next marker (the last to the timeline end;
+rate 0 = stop). `ViewportView.setSpinSchedule` / `setOrbitSchedule` regenerate the
+dense keyframes from the markers (continuous angle across segments, forced linear
+easing), so playback and export are unchanged. The schedules persist in the project
+file (v35). Euler/transform math lives in `TransformMath.swift`.
 
 ---
 
