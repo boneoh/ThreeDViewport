@@ -44,6 +44,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // Linear Path Animator helper panel.
     private var linearPathPanel: NSPanel?
 
+    // Curve Path Animator helper panel.
+    private var curvePathPanel: NSPanel?
+
     // Spin Animator helper panel.
     private var spinPanel: NSPanel?
 
@@ -943,6 +946,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         )
         linearPathItem.target = self
         pathSubmenu.addItem(linearPathItem)
+        let curvePathItem = NSMenuItem(
+            title: "Curve…",
+            action: #selector(showCurvePathAnimator(_:)),
+            keyEquivalent: ""
+        )
+        curvePathItem.target = self
+        pathSubmenu.addItem(curvePathItem)
         let spinItem = NSMenuItem(
             title: "Spin…",
             action: #selector(showSpinAnimator(_:)),
@@ -2714,6 +2724,111 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         markDirty()
         state.status = "Created \(samples.count) keyframes for \(pathAnimatorTrackLabel(ref))."
         print("[DEBUG] AppDelegate: linear path animator created \(samples.count) keyframes")
+    }
+
+    // MARK: - Curve Path Animator
+
+    @objc private func showCurvePathAnimator(_ sender: Any) {
+        guard let viewport = viewportView else { return }
+        let state = viewport.curvePathState
+        state.targets = pathAnimatorTargets(camera: true, lights: true, objects: true, groups: false)
+        if state.startTime == nil { state.startTime = 0 }
+        if state.endTime   == nil { state.endTime   = viewport.timeline.duration }
+        if let ref = state.capturedRef, !state.targets.contains(where: { $0.ref == ref }) {
+            state.capturedRef = nil   // previously-selected target no longer exists
+        }
+
+        if let panel = curvePathPanel {
+            panel.isVisible ? panel.orderOut(nil) : panel.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        let panel = KeyForwardingPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 300, height: 520),
+            styleMask:   [.titled, .closable, .miniaturizable, .resizable, .utilityWindow, .nonactivatingPanel],
+            backing:     .buffered,
+            defer:       false
+        )
+        panel.title                  = "Curve Path Animator"
+        panel.isFloatingPanel        = true
+        panel.becomesKeyOnlyIfNeeded = false
+        panel.forwardTarget          = viewport
+        panel.level                  = .normal
+        panel.hidesOnDeactivate      = false
+
+        panel.contentView = FirstClickHostingView(rootView: CurvePathAnimatorPanel(
+            state: state,
+            clipboard: viewport.coordinateClipboard,
+            captureStartPoint: { [weak viewport] in
+                state.startPoint = viewport?.probeConfig.position
+                state.status = "Captured start point."
+            },
+            captureEndPoint: { [weak viewport] in
+                state.endPoint = viewport?.probeConfig.position
+                state.status = "Captured end point."
+            },
+            captureAim: { [weak viewport] in
+                state.aimPoint = viewport?.probeConfig.position
+                state.status = "Captured aim point."
+            },
+            captureStart: { [weak self] in self?.curvePathCaptureStart() },
+            captureEnd:   { [weak self] in self?.curvePathCaptureEnd() },
+            create:       { [weak self] in self?.curvePathCreate() }
+        ))
+
+        if let win = window {
+            let f = win.frame
+            panel.setFrameOrigin(NSPoint(x: f.minX + 20, y: f.maxY - panel.frame.height - 40))
+        } else {
+            panel.center()
+        }
+
+        curvePathPanel = panel
+        panel.makeKeyAndOrderFront(nil)
+        print("[DEBUG] AppDelegate: curve path animator panel opened")
+    }
+
+    private func curvePathCaptureStart() {
+        guard let viewport = viewportView else { return }
+        viewport.curvePathState.startTime = viewport.timeline.currentTime
+        viewport.curvePathState.status    = "Captured start time."
+    }
+
+    private func curvePathCaptureEnd() {
+        guard let viewport = viewportView else { return }
+        viewport.curvePathState.endTime = viewport.timeline.currentTime
+        viewport.curvePathState.status  = "Captured end time."
+    }
+
+    private func curvePathCreate() {
+        guard let viewport = viewportView else { return }
+        let state = viewport.curvePathState
+
+        guard let s = state.startPoint, let e = state.endPoint, let aim = state.aimPoint else {
+            state.validationAlert = "Capture the start, end, and aim points first."; return
+        }
+        guard let ref = state.capturedRef, let t0 = state.startTime, let t1 = state.endTime else {
+            state.validationAlert = "Select a target from the dropdown first."; return
+        }
+        guard abs(t1 - t0) > 1e-4 else {
+            state.validationAlert = "Start and end times must differ."; return
+        }
+        guard let count = Int(state.keyframes), count >= 2 else {
+            state.validationAlert = "Keyframes must be a whole number ≥ 2."; return
+        }
+
+        let samples = PathGenerator.curveSamples(
+            start: s, end: e, target: aim, longArc: state.useLongArc,
+            startTime: min(t0, t1), endTime: max(t0, t1), count: count)
+        guard !samples.isEmpty else {
+            state.validationAlert = "Start and End must each differ from the Aim point."; return
+        }
+        viewport.generatePath(ref: ref, samples: samples, fixedAim: aim)
+
+        timelineEditorWC?.editorView.needsDisplay = true
+        markDirty()
+        state.status = "Created \(samples.count) keyframes for \(pathAnimatorTrackLabel(ref))."
+        print("[DEBUG] AppDelegate: curve path animator created \(samples.count) keyframes")
     }
 
     // MARK: - Orbit Path Animator

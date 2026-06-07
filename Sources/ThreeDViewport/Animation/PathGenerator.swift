@@ -59,6 +59,51 @@ enum PathGenerator {
         return out
     }
 
+    /// Samples a flat spiral arc: the entity sweeps from `start` to `end` around
+    /// `target` (the pivot it also aims at), in the plane of the three points, with
+    /// the radius easing from |start−target| to |end−target| (so it spirals in/out).
+    /// `longArc` picks the long way (>180°) vs the short way around the pivot.
+    /// Returns [] if start or end coincides with the target (no radius/angle).
+    static func curveSamples(start S: SIMD3<Float>,
+                             end   E: SIMD3<Float>,
+                             target T: SIMD3<Float>,
+                             longArc:   Bool,
+                             startTime: Double,
+                             endTime:   Double,
+                             count:     Int) -> [Sample] {
+        let u = S - T, v = E - T
+        let rS = simd_length(u), rE = simd_length(v)
+        guard rS > 1e-5, rE > 1e-5 else { return [] }
+        let uh = u / rS, vh = v / rE
+
+        // Plane normal; fall back to a perpendicular of û when S/E are collinear with T.
+        var n = simd_cross(uh, vh)
+        if simd_length(n) < 1e-5 {
+            var perp = simd_cross(uh, SIMD3<Float>(0, 1, 0))
+            if simd_length(perp) < 1e-4 { perp = simd_cross(uh, SIMD3<Float>(1, 0, 0)) }
+            n = perp
+        }
+        n = simd_normalize(n)
+
+        // Short-arc sweep is +θ around n (rotates û onto v̂); the long way goes the
+        // other direction, θ − 2π, landing on the same v̂.
+        let theta = acos(max(-1, min(1, simd_dot(uh, vh))))
+        let sweep = longArc ? (theta - 2 * Float.pi) : theta
+
+        let n2 = max(2, count)
+        var out: [Sample] = []
+        out.reserveCapacity(n2)
+        for i in 0..<n2 {
+            let s    = Float(i) / Float(n2 - 1)
+            let dir  = simd_quatf(angle: sweep * s, axis: n).act(uh)
+            let r    = rS + (rE - rS) * s
+            let pos  = T + r * dir
+            let time = startTime + Double(s) * (endTime - startTime)
+            out.append(Sample(time: time, position: pos, axisPoint: T))
+        }
+        return out
+    }
+
     /// Samples a straight line from `start` to `end` into `count` (≥2) evenly-spaced
     /// points with matching evenly-spaced times.  Constant velocity — shape accel /
     /// decel via the track's easing mode.

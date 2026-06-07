@@ -92,6 +92,8 @@ final class ViewportView: MTKView {
     let orbitPathState  = OrbitPathAnimatorState()
     // Linear Path Animator helper state.
     let linearPathState    = LinearPathAnimatorState()
+    // Curve Path Animator helper state.
+    let curvePathState     = CurvePathAnimatorState()
     // Spin Animator helper state.
     let spinAnimatorState  = SpinAnimatorState()
     private var playbackCancellable: AnyCancellable?
