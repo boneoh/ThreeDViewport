@@ -141,7 +141,10 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
         let footer = NSView(frame: NSRect(x: 0, y: 0, width: width, height: footerHeight))
         footer.autoresizingMask = [.width]
         footer.wantsLayer = true
-        footer.layer?.backgroundColor = NSColor(white: 0.16, alpha: 1).cgColor
+        footer.layer?.backgroundColor = NSColor(white: 0.20, alpha: 1).cgColor
+        // Render the buttons/label in dark mode so they don't disappear into the
+        // dark footer (matches the easing dropdowns, which also force darkAqua).
+        footer.appearance = NSAppearance(named: .darkAqua)
 
         func button(_ title: String, _ sel: Selector, _ tip: String) -> NSButton {
             let b = NSButton(title: title, target: target, action: sel)
@@ -159,8 +162,8 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
         let stack = NSStackView(views: [
             label,
             button("Fit", fit, "Fit the entire timeline"),
-            button("\u{2013}", out, "Zoom out"),
             button("+",        inn, "Zoom in"),
+            button("\u{2013}", out, "Zoom out"),
             button("1 s",      max, "Zoom in to about one second")
         ])
         stack.orientation = .horizontal

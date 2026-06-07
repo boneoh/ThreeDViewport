@@ -202,6 +202,13 @@ final class TimelineEditorView: NSView {
     /// than the viewport, in which case the horizontal scroller appears.
     private var userPixelsPerSecond: CGFloat? = nil
 
+    /// True while a mouse button is held down inside the editor, so playhead-follow
+    /// auto-scroll stays out of the way of drag-scrubbing / diamond drags.
+    private var isMouseDownInView = false
+    /// Last playhead time the auto-scroll acted on, so it only follows when the
+    /// playhead actually moves (lets the user pan freely while paused).
+    private var lastFollowTime: Double = .nan
+
     /// Width of the visible track viewport (the scroll view's clip view), not the
     /// document view — which can be wider than the viewport when zoomed in.
     private var viewportWidth: CGFloat {
@@ -275,7 +282,40 @@ final class TimelineEditorView: NSView {
     private func applyZoom(centerPlayhead: Bool) {
         updateDocumentWidth()
         if centerPlayhead { scrollPlayheadToCenter() }
+        lastFollowTime = .nan        // re-arm follow after a zoom
         needsDisplay = true
+    }
+
+    /// Keeps the playhead on screen while it MOVES (playback or scrubbing from the
+    /// transport bar), by scrolling the track area horizontally.  Skipped while the
+    /// user is interacting inside the editor (so drag-scrubbing isn't fought) and
+    /// while paused with a still playhead (so panning around stays put).
+    func followPlayheadIfNeeded() {
+        guard !isMouseDownInView, let t = timeline?.currentTime else { return }
+        guard t != lastFollowTime else { return }       // only when the playhead moved
+        lastFollowTime = t
+        guard frame.width > viewportWidth + 1 else { return }   // only when scrollable
+
+        let phX       = timeToX(t)
+        let leftEdge  = visibleRect.minX + labelWidth
+        let rightEdge = visibleRect.maxX
+        let margin: CGFloat = 24
+        guard phX < leftEdge + margin || phX > rightEdge - margin else { return }
+
+        // Page the view so the playhead sits ~20% in from the left of the track area.
+        let trackW   = max(1, viewportWidth - labelWidth)
+        let maxOrigin = max(0, frame.width - viewportWidth)
+        let originX  = min(maxOrigin, max(0, phX - labelWidth - trackW * 0.2))
+        scrollHorizontally(to: originX)
+    }
+
+    private func scrollHorizontally(to originX: CGFloat) {
+        guard let clip = enclosingScrollView?.contentView else { return }
+        var o = clip.bounds.origin
+        guard abs(o.x - originX) > 0.5 else { return }
+        o.x = originX
+        clip.scroll(to: o)
+        enclosingScrollView?.reflectScrolledClipView(clip)
     }
 
     /// Scrolls horizontally so the playhead sits near the middle of the track area
@@ -419,6 +459,7 @@ final class TimelineEditorView: NSView {
         let t = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
             self?.syncEasingPopupsIfNeeded()
             self?.updateDocumentWidth()   // tracks duration / viewport changes (guarded, cheap)
+            self?.followPlayheadIfNeeded()
             self?.needsDisplay = true
         }
         RunLoop.main.add(t, forMode: .common)
@@ -960,6 +1001,7 @@ final class TimelineEditorView: NSView {
         guard !isEditingKeyframe else { return }
 
         window?.makeFirstResponder(self)
+        isMouseDownInView  = true
         mouseDownOnDiamond = false   // reset each gesture
         let pt        = convert(event.locationInWindow, from: nil)
         let tracks    = buildTracks()
@@ -1153,6 +1195,7 @@ final class TimelineEditorView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        isMouseDownInView = false
         // Finalise rubber-band: compute which diamonds fall inside the rect.
         if isRubberBanding {
             finalizeRubberBandSelection(tracks: buildTracks())
