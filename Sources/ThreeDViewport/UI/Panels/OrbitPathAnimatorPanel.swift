@@ -1,30 +1,29 @@
 import SwiftUI
 import simd
 
-// Floating helper panel that generates a helix / arc / corkscrew of keyframes for
-// the Timeline-selected camera, light, or object.
+// Floating helper panel that drives a constant planar orbit for the Timeline-
+// selected camera, light, or object via rate markers.  The orbit geometry — a
+// constant-height circle of `radius` around the Probe axis start, tilted so its
+// plane normal is axisStart → axisEnd — is shared across the track.  Each marker
+// sets an orbit rate (revolutions / second, signed) that holds until the next
+// marker; the last marker runs to the end of the timeline, and a rate-0 marker
+// stops the orbit.  The dense keyframes are regenerated from the markers.
 //
 // Workflow:
-//   1. Place the Probe at the axis start, click "Capture Axis Start"; repeat for end.
-//      (Probe Inspector has the sliders; copy/paste/zero icons here mirror it.)
-//   2. Select a track in the Timeline Editor, scrub to the start time, click
-//      "Capture Start"; scrub to the end time, click "Capture End".
-//   3. Enter radius, start/end angle, revolutions, keyframes-per-rev.
-//   4. "Create Keyframes" replaces existing keyframes in [start, end] with the path.
+//   1. Place the Probe at the orbit centre, click "Capture Axis Start"; place it
+//      along the desired tilt and click "Capture Axis End" (same point = level).
+//   2. Pick a target, set radius + rate, scrub the playhead, "Add Rate Keyframe".
+//   3. Add more markers to change rate over time; rate 0 stops it.
 
 /// Observable state, held on the ViewportView so captures + field values survive
 /// panel hide/show.
 final class OrbitPathAnimatorState: ObservableObject {
     @Published var axisStart:  SIMD3<Float>? = nil
     @Published var axisEnd:    SIMD3<Float>? = nil
-    @Published var startTime:  Double?        = nil
-    @Published var endTime:    Double?        = nil
 
-    @Published var radius:      String = "3"
-    @Published var startAngle:  String = "0"
-    @Published var endAngle:    String = "0"
-    @Published var revolutions: String = "1"
-    @Published var perRev:      String = "12"
+    @Published var radius: String = "3"
+    @Published var rate:   String = "0.25"   // revolutions / second, signed
+    @Published var perRev: String = "12"     // keyframe density
 
     @Published var status: String = ""
     /// Blocking validation error → raised as an alert (see .validationAlert).
@@ -33,6 +32,9 @@ final class OrbitPathAnimatorState: ObservableObject {
     /// Selectable targets + the chosen one (driven by the panel's Target dropdown).
     @Published var targets: [PathTarget] = []
     @Published var capturedRef: TrackRef? = nil
+
+    /// Rate markers for the currently-selected target (mirrors the persisted schedule).
+    @Published var markers: [OrbitRateMarker] = []
 }
 
 struct OrbitPathAnimatorPanel: View {
@@ -41,17 +43,15 @@ struct OrbitPathAnimatorPanel: View {
 
     let captureAxisStart: () -> Void
     let captureAxisEnd:   () -> Void
-    let captureStart:     () -> Void
-    let captureEnd:       () -> Void
-    let create:           () -> Void
+    let addMarker:        () -> Void
+    let applyGeometry:    () -> Void
+    let deleteMarker:     (UUID) -> Void
+    let clearMarkers:     () -> Void
+    let selectTarget:     () -> Void
 
     private func vecText(_ v: SIMD3<Float>?) -> String {
         guard let v = v else { return "—" }
         return String(format: "%.2f, %.2f, %.2f", v.x, v.y, v.z)
-    }
-    private func timeText(_ t: Double?) -> String {
-        guard let t = t else { return "—" }
-        return String(format: "%.3f s", t)
     }
 
     var body: some View {
@@ -74,43 +74,68 @@ struct OrbitPathAnimatorPanel: View {
                 .padding(4)
             }
 
-            // ── Target + time window ──────────────────────────────────────────
-            GroupBox(label: Text("Target & Time").font(.headline)) {
+            // ── Target ────────────────────────────────────────────────────────
+            GroupBox(label: Text("Target").font(.headline)) {
+                TargetPicker(targets: state.targets, selection: $state.capturedRef)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(4)
+                    .onChange(of: state.capturedRef) { _, _ in selectTarget() }
+            }
+
+            // ── Rate ──────────────────────────────────────────────────────────
+            GroupBox(label: Text("Orbit Rate").font(.headline)) {
                 VStack(alignment: .leading, spacing: 6) {
-                    TargetPicker(targets: state.targets, selection: $state.capturedRef)
-                    HStack {
-                        Button("Capture Start", action: captureStart)
-                        Spacer()
-                        Text(timeText(state.startTime)).font(.system(.caption, design: .monospaced))
-                            .foregroundColor(.secondary)
+                    field("Radius",          $state.radius)
+                    field("Rate (rev/s)",    $state.rate)
+                    field("Keyframes / rev", $state.perRev)
+                    Text("Signed rate sets direction. Rate 0 stops the orbit. "
+                       + "Keyframes/rev ≥ 1.")
+                        .font(.caption).foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Button(action: addMarker) {
+                        Text("Add Rate Keyframe").frame(maxWidth: .infinity)
                     }
-                    HStack {
-                        Button("Capture End", action: captureEnd)
-                        Spacer()
-                        Text(timeText(state.endTime)).font(.system(.caption, design: .monospaced))
-                            .foregroundColor(.secondary)
+                    .keyboardShortcut(.defaultAction)
+                    if !state.markers.isEmpty {
+                        Button("Apply Radius / Axis", action: applyGeometry)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .padding(4)
+            }
+
+            // ── Markers ───────────────────────────────────────────────────────
+            GroupBox(label: Text("Rate Keyframes").font(.headline)) {
+                VStack(alignment: .leading, spacing: 4) {
+                    if state.markers.isEmpty {
+                        Text("No rate keyframes yet.")
+                            .font(.caption).foregroundColor(.secondary)
+                    } else {
+                        ForEach(state.markers.sorted { $0.time < $1.time }) { m in
+                            HStack {
+                                Text(String(format: "%.3f s", m.time))
+                                    .font(.system(.caption, design: .monospaced))
+                                    .frame(width: 70, alignment: .leading)
+                                Text(String(format: "%+.3g rev/s", m.rate))
+                                    .font(.system(.caption, design: .monospaced))
+                                Spacer()
+                                Button {
+                                    deleteMarker(m.id)
+                                } label: {
+                                    Image(systemName: "xmark.circle")
+                                }
+                                .buttonStyle(.borderless)
+                            }
+                        }
+                        Divider()
+                        Button("Clear All", action: clearMarkers)
+                            .buttonStyle(.borderless)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(4)
             }
-
-            // ── Parameters ────────────────────────────────────────────────────
-            GroupBox(label: Text("Parameters").font(.headline)) {
-                VStack(alignment: .leading, spacing: 6) {
-                    field("Radius",          $state.radius)
-                    field("Start angle (°)", $state.startAngle)
-                    field("End angle (°)",   $state.endAngle)
-                    field("Revolutions",     $state.revolutions)
-                    field("Keyframes / rev", $state.perRev)
-                }
-                .padding(4)
-            }
-
-            Button(action: create) {
-                Text("Create Keyframes").frame(maxWidth: .infinity)
-            }
-            .keyboardShortcut(.defaultAction)
 
             if !state.status.isEmpty {
                 Text(state.status).font(.caption).foregroundColor(.secondary)

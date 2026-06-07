@@ -27,10 +27,10 @@ vertex FbQuadOut feedback_vertex(uint vid [[vertex_id]]) {
 // ── Blend-mode uniform (matches Swift FeedbackUniforms layout exactly) ────────
 
 struct FeedbackUniforms {
-    float decay;        // 0=pure scene, 1=full blend result
-    uint  blendMode;    // BlendMode raw value (0=normal … 23=luminosity)
-    uint  swapLayers;   // 0=scene on top, 1=feedback on top
-    uint  padding;
+    float decay;             // 0=pure scene, 1=full blend result
+    uint  blendMode;         // BlendMode raw value (0=normal … 23=luminosity)
+    uint  swapLayers;        // 0=scene on top, 1=feedback on top
+    uint  excludeBackground; // 1=foreground-only premultiplied (bg drawn fresh behind)
 };
 
 // ── HSL helpers (Rec.709 luminance) ─────────────────────────────────────────
@@ -200,6 +200,23 @@ fragment float4 feedback_blend_fragment(
     //            blend mode is NOT applied against the background colour so
     //            darkening modes don't kill the trail.
     float contentMask = scene.a;
+
+    // ── Environment excluded from feedback ────────────────────────────────────
+    // The scene texture holds the foreground ONLY (no skybox); empties are
+    // transparent black.  Output premultiplied colour + a coverage alpha so the
+    // caller can composite this over a freshly-drawn skybox.  Geometry is opaque;
+    // trails over empty space fade toward transparent (both colour and coverage),
+    // revealing the crisp background underneath as they age.
+    if (u.excludeBackground != 0u) {
+        float3 fg = (u.swapLayers != 0) ? feedback.rgb : scene.rgb;
+        float3 bg = (u.swapLayers != 0) ? scene.rgb    : feedback.rgb;
+        float3 geoRGB  = mix(scene.rgb, applyBlend(fg, bg, u.blendMode), u.decay);
+        float3 trailRGB = feedback.rgb * u.decay;     // scene is transparent black here
+        float  trailA   = feedback.a   * u.decay;
+        float3 rgb = mix(trailRGB, geoRGB, contentMask);
+        float  a   = mix(trailA,   1.0,    contentMask);
+        return float4(rgb, a);
+    }
 
     // ── Geometry pixels: apply the chosen blend mode ──────────────────────────
     float3 fg = (u.swapLayers != 0) ? feedback.rgb : scene.rgb;

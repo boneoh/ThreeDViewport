@@ -256,7 +256,8 @@ final class ProjectFile {
             gradBottomB: bg.gradientBottom.z,
             environmentIntensity: bg.environmentIntensity,
             backgroundHDRPath:    bg.backgroundHDRPath,
-            environmentHorizon:   bg.environmentHorizon
+            environmentHorizon:   bg.environmentHorizon,
+            excludeEnvironmentFromFeedback: bg.excludeEnvironmentFromFeedback
         )
 
         // ── Color grade (v12; exposure v16) ───────────────────────────────────
@@ -334,8 +335,48 @@ final class ProjectFile {
             )
         }
 
+        // v35: rate-marker schedules (Spin / Orbit animators).
+        var spinSchedData: [SpinRateScheduleData] = []
+        for (ref, markers) in vp.spinRateSchedules where !markers.isEmpty {
+            let md = markers.map { SpinRateMarkerData(time: $0.time, rate: $0.rate, axisIndex: $0.axisIndex) }
+            switch ref {
+            case .object(let i):
+                guard i >= 0, i < vp.sceneManager.objects.count else { continue }
+                spinSchedData.append(SpinRateScheduleData(
+                    targetKind: 2, targetName: vp.sceneManager.objects[i].name, targetIndex: 0, markers: md))
+            case .group(let gid):
+                spinSchedData.append(SpinRateScheduleData(
+                    targetKind: 3, targetName: "", targetIndex: gid, markers: md))
+            default:
+                continue
+            }
+        }
+        var orbitSchedData: [OrbitRateScheduleData] = []
+        for (ref, sched) in vp.orbitRateSchedules where !sched.markers.isEmpty {
+            let md = sched.markers.map { OrbitRateMarkerData(time: $0.time, rate: $0.rate) }
+            let aS = [sched.axisStart.x, sched.axisStart.y, sched.axisStart.z]
+            let aE = [sched.axisEnd.x,   sched.axisEnd.y,   sched.axisEnd.z]
+            switch ref {
+            case .camera:
+                orbitSchedData.append(OrbitRateScheduleData(
+                    targetKind: 0, targetName: "", targetIndex: -1,
+                    axisStart: aS, axisEnd: aE, radius: sched.radius, markers: md))
+            case .light(let i):
+                orbitSchedData.append(OrbitRateScheduleData(
+                    targetKind: 1, targetName: "", targetIndex: i,
+                    axisStart: aS, axisEnd: aE, radius: sched.radius, markers: md))
+            case .object(let i):
+                guard i >= 0, i < vp.sceneManager.objects.count else { continue }
+                orbitSchedData.append(OrbitRateScheduleData(
+                    targetKind: 2, targetName: vp.sceneManager.objects[i].name, targetIndex: -1,
+                    axisStart: aS, axisEnd: aE, radius: sched.radius, markers: md))
+            default:
+                continue
+            }
+        }
+
         return ProjectData(
-            version:             34,   // v34: Glue envelopes
+            version:             35,   // v35: rate-marker schedules (Spin / Orbit)
             modelPath:           nil,           // v3+ uses modelPaths instead
             modelPaths:          modelPaths,
             timeline:            timelineData,
@@ -386,7 +427,9 @@ final class ProjectFile {
             lightEasingModes:    lm.keyframeTracks.map { ($0?.easingMode ?? .linear).rawValue },
             fogEasingMode:       (vp.fogSettings.keyframeTrack?.easingMode ?? .linear).rawValue,
             particleEmitterEasingModes: vp.particleManager.emitters.map { ($0.keyframeTrack?.easingMode ?? .linear).rawValue },
-            envelopes:           envelopeData
+            envelopes:           envelopeData,
+            spinRateSchedules:   spinSchedData,
+            orbitRateSchedules:  orbitSchedData
         )
     }
 
@@ -590,6 +633,7 @@ final class ProjectFile {
         vp.backgroundConfig.gradientBottom = SIMD3<Float>(bd.gradBottomR, bd.gradBottomG, bd.gradBottomB)
         vp.backgroundConfig.environmentIntensity = bd.environmentIntensity
         vp.backgroundConfig.environmentHorizon   = bd.environmentHorizon
+        vp.backgroundConfig.excludeEnvironmentFromFeedback = bd.excludeEnvironmentFromFeedback
         // v28: dedicated Background HDR (empty = mirror lighting; missing → fall back).
         vp.backgroundConfig.backgroundHDRPath = bd.backgroundHDRPath
         let bgURL = bd.backgroundHDRPath.isEmpty ? nil : AppSettings.expand(bd.backgroundHDRPath)
@@ -667,6 +711,12 @@ final class ProjectFile {
         // so this restore is a no-op for them.
         applyGroupBaseTransforms(data.groupBaseTransforms, to: vp,
                                  substitutedFilenames: substitutedFilenames)
+
+        // ── Rate-marker schedules (v35) ───────────────────────────────────────
+        // Restore the editable Spin / Orbit markers.  The baked keyframes they
+        // produced are already restored with the regular tracks above, so we only
+        // rebuild the schedule dictionaries (no regeneration) for later editing.
+        applyRateSchedules(data, to: vp)
 
         // Sync HUD with restored scene.
         vp.syncOverlayState()
@@ -930,6 +980,51 @@ final class ProjectFile {
 
     /// Restores group-level animation tracks saved in v14+ project files.
     /// Tracks are keyed by source filename; we walk the live sceneManager to find
+    /// v35: rebuild the Spin / Orbit rate-marker schedule dictionaries from saved
+    /// data, matching tracks by identity (object by name, group by groupID, light by
+    /// index, camera singleton).  Does NOT regenerate keyframes — those were already
+    /// restored with the regular tracks; this only re-enables rate editing.
+    private static func applyRateSchedules(_ data: ProjectData, to vp: ViewportView) {
+        vp.spinRateSchedules  = [:]
+        vp.orbitRateSchedules = [:]
+
+        for sd in data.spinRateSchedules {
+            let markers = sd.markers.map { SpinRateMarker(time: $0.time, rate: $0.rate, axisIndex: $0.axisIndex) }
+            guard !markers.isEmpty else { continue }
+            switch sd.targetKind {
+            case 2:
+                if let i = vp.sceneManager.objects.firstIndex(where: { $0.name == sd.targetName }) {
+                    vp.spinRateSchedules[.object(i)] = markers
+                }
+            case 3:
+                vp.spinRateSchedules[.group(sd.targetIndex)] = markers
+            default:
+                break
+            }
+        }
+
+        for od in data.orbitRateSchedules {
+            let markers = od.markers.map { OrbitRateMarker(time: $0.time, rate: $0.rate) }
+            guard !markers.isEmpty, od.axisStart.count == 3, od.axisEnd.count == 3 else { continue }
+            let sched = OrbitRateSchedule(
+                axisStart: SIMD3<Float>(od.axisStart[0], od.axisStart[1], od.axisStart[2]),
+                axisEnd:   SIMD3<Float>(od.axisEnd[0],   od.axisEnd[1],   od.axisEnd[2]),
+                radius:    od.radius, markers: markers)
+            switch od.targetKind {
+            case 0:
+                vp.orbitRateSchedules[.camera] = sched
+            case 1:
+                vp.orbitRateSchedules[.light(od.targetIndex)] = sched
+            case 2:
+                if let i = vp.sceneManager.objects.firstIndex(where: { $0.name == od.targetName }) {
+                    vp.orbitRateSchedules[.object(i)] = sched
+                }
+            default:
+                break
+            }
+        }
+    }
+
     /// the runtime groupID that corresponds to each saved filename.
     ///
     /// `substitutedFilenames` carries any renames the user did via the

@@ -141,6 +141,16 @@ struct LightsInspectorPanel: View {
                 Text("Uses the IBL environment as a backdrop. Horizon shifts it "
                     + "vertically (backdrop only, not the lighting).")
                     .font(.caption2).foregroundStyle(.secondary)
+
+                Toggle(isOn: $backgroundConfig.excludeEnvironmentFromFeedback) {
+                    Text("Exclude from feedback")
+                        .font(.caption)
+                        .foregroundColor(backgroundConfig.excludeEnvironmentFromFeedback ? .green : .primary)
+                }
+                .toggleStyle(.switch).tint(.green)
+                .environment(\.controlActiveState, .active)
+                .help("Keep the skybox crisp behind the trailing foreground when "
+                    + "feedback is on, instead of letting it smear with camera motion.")
             }
         }
     }

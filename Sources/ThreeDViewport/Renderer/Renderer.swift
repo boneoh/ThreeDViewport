@@ -601,6 +601,13 @@ final class Renderer: NSObject, MTKViewDelegate {
         let feedbackActive = (feedbackSettings?.isEnabled == true)
                            && (feedbackProcessor?.sceneTexture != nil)
 
+        // Environment excluded from feedback: render the foreground only into the
+        // feedback texture (transparent empties), draw the skybox fresh onto the
+        // drawable, and composite the foreground/trails over it (no skybox smear).
+        let excludeBg = feedbackActive
+                     && backgroundConfig.mode == .environment
+                     && backgroundConfig.excludeEnvironmentFromFeedback
+
         // Fog volume: the raymarch needs sampleable scene depth.  When feedback is
         // OFF we render the scene to the drawable with a dedicated sampleable depth
         // texture (useFogOffscreen).  When feedback is ON the scene already renders
@@ -624,9 +631,12 @@ final class Renderer: NSObject, MTKViewDelegate {
             desc.colorAttachments[0].storeAction = .store
             // alpha=0 marks cleared pixels as background so the feedback blend
             // shader can use scene.a as a content mask (geometry writes alpha=1).
+            // When excluding the environment we render foreground only, so empties
+            // must be transparent black (premultiplied) rather than the bg colour.
             let bc = backgroundConfig.clearColor
-            desc.colorAttachments[0].clearColor  = MTLClearColor(
-                red: bc.red, green: bc.green, blue: bc.blue, alpha: 0.0)
+            desc.colorAttachments[0].clearColor  = excludeBg
+                ? MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0.0)
+                : MTLClearColor(red: bc.red, green: bc.green, blue: bc.blue, alpha: 0.0)
             desc.depthAttachment.texture         = depthTex
             desc.depthAttachment.loadAction      = .clear
             // Store depth so the excluded-laser post-pass can depth-test against it.
@@ -680,7 +690,12 @@ final class Renderer: NSObject, MTKViewDelegate {
             sparkGPUData:       [])
 
         // ── Background gradient / environment skybox ──────────────────────────
-        scenePipeline?.encodeBackground(into: encoder, sceneCtx)
+        // When excluding the environment from feedback the skybox is NOT drawn into
+        // the feedback texture; it's drawn fresh onto the drawable after the scene
+        // pass (below), so the foreground/trails composite over a crisp backdrop.
+        if !excludeBg {
+            scenePipeline?.encodeBackground(into: encoder, sceneCtx)
+        }
 
         // ── Scene geometry ────────────────────────────────────────────────────
         // Do NOT early-return here: even an empty scene must go through the
@@ -805,6 +820,20 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         encoder.endEncoding()
 
+        // Environment-excluded-from-feedback: draw the skybox fresh onto the drawable
+        // first, so the feedback composite (premultiplied, source-over) lands over it.
+        if excludeBg {
+            let bgPass = MTLRenderPassDescriptor()
+            bgPass.colorAttachments[0].texture     = drawable.texture
+            bgPass.colorAttachments[0].loadAction  = .clear
+            bgPass.colorAttachments[0].clearColor  = backgroundConfig.clearColor
+            bgPass.colorAttachments[0].storeAction = .store
+            if let bgEnc = commandBuffer.makeRenderCommandEncoder(descriptor: bgPass) {
+                scenePipeline?.encodeBackground(into: bgEnc, sceneCtx)
+                bgEnc.endEncoding()
+            }
+        }
+
         // Feedback composite + blit to drawable.
         // Only run the queue/blend logic while the timeline is playing so the
         // feedback freezes (and the raw scene stays visible) when paused or
@@ -813,9 +842,11 @@ final class Renderer: NSObject, MTKViewDelegate {
             if timeline.isPlaying {
                 fp.process(commandBuffer: commandBuffer,
                            dest:          drawable.texture,
-                           settings:      fs)
+                           settings:      fs,
+                           excludeBackground: excludeBg)
             } else {
-                fp.blitLastOutput(commandBuffer: commandBuffer, dest: drawable.texture)
+                fp.blitLastOutput(commandBuffer: commandBuffer, dest: drawable.texture,
+                                  excludeBackground: excludeBg)
             }
         }
 

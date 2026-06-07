@@ -29,7 +29,7 @@ struct FeedbackUniforms {
     var decay:      Float   // blend weight 0–1
     var blendMode:  UInt32  // BlendMode.rawValue
     var swapLayers: UInt32  // 0 = scene on top, 1 = feedback on top
-    var padding:    UInt32  // keeps struct 16-byte aligned
+    var excludeBackground: UInt32  // 1 = foreground-only premultiplied (bg drawn fresh behind)
 }
 
 final class FeedbackProcessor {
@@ -53,7 +53,11 @@ final class FeedbackProcessor {
     // ── Pipeline states ───────────────────────────────────────────────────────
 
     private var blendPipeline: MTLRenderPipelineState?  // scene + feedback → output
-    private var blitPipeline:  MTLRenderPipelineState?  // texture → arbitrary dest
+    private var blitPipeline:  MTLRenderPipelineState?  // texture → dest (overwrite)
+    /// Premultiplied source-over variant of the blit, used when the environment is
+    /// excluded from feedback so the foreground/trail composites over the freshly
+    /// drawn skybox already on the destination.
+    private var blitOverPipeline: MTLRenderPipelineState?
 
     // ── Playback state ────────────────────────────────────────────────────────
 
@@ -110,9 +114,25 @@ final class FeedbackProcessor {
         blitDesc.fragmentFunction                  = blitFn
         blitDesc.colorAttachments[0].pixelFormat   = .bgra8Unorm
 
+        // Premultiplied source-over blit (composites over the destination's contents).
+        let overDesc = MTLRenderPipelineDescriptor()
+        overDesc.label                             = "FeedbackBlitOver"
+        overDesc.vertexFunction                    = vertFn
+        overDesc.fragmentFunction                  = blitFn
+        let oca = overDesc.colorAttachments[0]!
+        oca.pixelFormat                 = .bgra8Unorm
+        oca.isBlendingEnabled           = true
+        oca.rgbBlendOperation           = .add
+        oca.alphaBlendOperation         = .add
+        oca.sourceRGBBlendFactor        = .one                  // premultiplied
+        oca.destinationRGBBlendFactor   = .oneMinusSourceAlpha
+        oca.sourceAlphaBlendFactor      = .one
+        oca.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+
         do {
-            blendPipeline = try device.makeRenderPipelineState(descriptor: blendDesc)
-            blitPipeline  = try device.makeRenderPipelineState(descriptor: blitDesc)
+            blendPipeline    = try device.makeRenderPipelineState(descriptor: blendDesc)
+            blitPipeline     = try device.makeRenderPipelineState(descriptor: blitDesc)
+            blitOverPipeline = try device.makeRenderPipelineState(descriptor: overDesc)
             print("[DEBUG] FeedbackProcessor: pipelines created")
         } catch {
             print("[DEBUG] FeedbackProcessor: pipeline creation failed — "
@@ -184,14 +204,18 @@ final class FeedbackProcessor {
     ///   - dest:          Destination texture — drawable.texture for live view,
     ///                    colorTex for export.
     ///   - settings:      Current feedback parameters.
+    /// `excludeBackground`: when true the scene texture holds the foreground only
+    /// (premultiplied, transparent where empty) and the caller has already drawn the
+    /// skybox onto `dest`, so every display blit composites over it (source-over).
     func process(commandBuffer: MTLCommandBuffer,
                  dest:          MTLTexture,
-                 settings:      FeedbackSettings) {
+                 settings:      FeedbackSettings,
+                 excludeBackground: Bool = false) {
 
         guard settings.isEnabled, let scene = sceneTexture else {
             // Feedback disabled or textures not ready: straight blit to dest
             if let scene = sceneTexture {
-                blitToTexture(commandBuffer: commandBuffer, source: scene, dest: dest)
+                blitToTexture(commandBuffer: commandBuffer, source: scene, dest: dest, over: excludeBackground)
             }
             return
         }
@@ -209,7 +233,7 @@ final class FeedbackProcessor {
         }
 
         guard !queue.isEmpty else {
-            blitToTexture(commandBuffer: commandBuffer, source: scene, dest: dest)
+            blitToTexture(commandBuffer: commandBuffer, source: scene, dest: dest, over: excludeBackground)
             return
         }
 
@@ -222,9 +246,9 @@ final class FeedbackProcessor {
             // flash between ticks.  Fall back to the raw scene while priming or
             // before the first blend pass has written to outputTexture.
             if isFull && hasOutput, let output = outputTexture {
-                blitToTexture(commandBuffer: commandBuffer, source: output, dest: dest)
+                blitToTexture(commandBuffer: commandBuffer, source: output, dest: dest, over: excludeBackground)
             } else {
-                blitToTexture(commandBuffer: commandBuffer, source: scene, dest: dest)
+                blitToTexture(commandBuffer: commandBuffer, source: scene, dest: dest, over: excludeBackground)
             }
             return
         }
@@ -235,7 +259,8 @@ final class FeedbackProcessor {
                          sceneTex:     scene,
                          feedbackTex:  queue[writeIndex],
                          outputTex:    output,
-                         settings:     settings)
+                         settings:     settings,
+                         excludeBackground: excludeBackground)
 
             hasOutput = true
 
@@ -243,14 +268,14 @@ final class FeedbackProcessor {
             copyTexture(commandBuffer: commandBuffer, from: output, to: queue[writeIndex])
 
             // Display the blended output
-            blitToTexture(commandBuffer: commandBuffer, source: output, dest: dest)
+            blitToTexture(commandBuffer: commandBuffer, source: output, dest: dest, over: excludeBackground)
 
         } else {
             // ── Priming: fill queue with raw scene frames ─────────────────────
             copyTexture(commandBuffer: commandBuffer, from: scene, to: queue[writeIndex])
 
             // Display scene unchanged during priming
-            blitToTexture(commandBuffer: commandBuffer, source: scene, dest: dest)
+            blitToTexture(commandBuffer: commandBuffer, source: scene, dest: dest, over: excludeBackground)
         }
 
         // Advance write index; set isFull on first wrap-around
@@ -266,13 +291,14 @@ final class FeedbackProcessor {
     /// Blits the most recent visible frame to `dest` without touching the queue.
     /// Call this when the timeline is paused or has reached the end so the last
     /// feedback output (or raw scene while priming) stays on screen.
-    func blitLastOutput(commandBuffer: MTLCommandBuffer, dest: MTLTexture) {
+    func blitLastOutput(commandBuffer: MTLCommandBuffer, dest: MTLTexture,
+                        excludeBackground: Bool = false) {
         if isFull && hasOutput, let output = outputTexture {
             // Feedback active and at least one blend has run: keep the last blended result.
-            blitToTexture(commandBuffer: commandBuffer, source: output, dest: dest)
+            blitToTexture(commandBuffer: commandBuffer, source: output, dest: dest, over: excludeBackground)
         } else if let scene = sceneTexture {
             // Still priming, or isFull but first blend not yet run: show the raw scene.
-            blitToTexture(commandBuffer: commandBuffer, source: scene, dest: dest)
+            blitToTexture(commandBuffer: commandBuffer, source: scene, dest: dest, over: excludeBackground)
         }
     }
 
@@ -282,7 +308,8 @@ final class FeedbackProcessor {
                                sceneTex:     MTLTexture,
                                feedbackTex:  MTLTexture,
                                outputTex:    MTLTexture,
-                               settings:     FeedbackSettings) {
+                               settings:     FeedbackSettings,
+                               excludeBackground: Bool) {
         guard let pipeline = blendPipeline else { return }
 
         let passDesc = MTLRenderPassDescriptor()
@@ -298,21 +325,24 @@ final class FeedbackProcessor {
             decay:      settings.decay,
             blendMode:  UInt32(settings.blendMode.rawValue),
             swapLayers: settings.swapLayers ? 1 : 0,
-            padding:    0
+            excludeBackground: excludeBackground ? 1 : 0
         )
         enc.setFragmentBytes(&u, length: MemoryLayout<FeedbackUniforms>.stride, index: 0)
         enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         enc.endEncoding()
     }
 
+    /// `over`: composite the source over the destination (premultiplied source-over,
+    /// preserving what's already there) instead of overwriting it.
     private func blitToTexture(commandBuffer: MTLCommandBuffer,
                                 source: MTLTexture,
-                                dest:   MTLTexture) {
-        guard let pipeline = blitPipeline else { return }
+                                dest:   MTLTexture,
+                                over:   Bool = false) {
+        guard let pipeline = over ? blitOverPipeline : blitPipeline else { return }
 
         let passDesc = MTLRenderPassDescriptor()
         passDesc.colorAttachments[0].texture     = dest
-        passDesc.colorAttachments[0].loadAction  = .dontCare
+        passDesc.colorAttachments[0].loadAction  = over ? .load : .dontCare
         passDesc.colorAttachments[0].storeAction = .store
 
         guard let enc = commandBuffer.makeRenderCommandEncoder(descriptor: passDesc) else { return }

@@ -76,6 +76,10 @@ struct ProjectData: Codable {
     /// v34: Glue envelopes — geometryless null nodes that parent member objects so
     /// they animate as a unit.  Empty for older files, which load unchanged.
     var envelopes:              [EnvelopeData] = []
+    /// v35: rate-marker schedules for the Spin / Orbit animators (the editable source
+    /// of truth behind the baked keyframes).  Empty for older files.
+    var spinRateSchedules:      [SpinRateScheduleData]  = []
+    var orbitRateSchedules:     [OrbitRateScheduleData] = []
 
     // MARK: - Memberwise init (required because we define init(from:) below)
 
@@ -112,7 +116,9 @@ struct ProjectData: Codable {
          lightEasingModes:    [Int]                   = [],
          fogEasingMode:       Int                     = 0,
          particleEmitterEasingModes: [Int]            = [],
-         envelopes:           [EnvelopeData]          = []) {
+         envelopes:           [EnvelopeData]          = [],
+         spinRateSchedules:   [SpinRateScheduleData]  = [],
+         orbitRateSchedules:  [OrbitRateScheduleData] = []) {
         self.version             = version
         self.modelPath           = modelPath
         self.modelPaths          = modelPaths
@@ -147,6 +153,8 @@ struct ProjectData: Codable {
         self.fogEasingMode       = fogEasingMode
         self.particleEmitterEasingModes = particleEmitterEasingModes
         self.envelopes           = envelopes
+        self.spinRateSchedules   = spinRateSchedules
+        self.orbitRateSchedules  = orbitRateSchedules
     }
 
     // MARK: - Custom decoder
@@ -195,7 +203,41 @@ struct ProjectData: Codable {
         fogEasingMode       = (try? c.decode(Int.self,   forKey: .fogEasingMode))       ?? 0
         particleEmitterEasingModes = (try? c.decode([Int].self, forKey: .particleEmitterEasingModes)) ?? []
         envelopes           = (try? c.decode([EnvelopeData].self, forKey: .envelopes)) ?? []
+        spinRateSchedules   = (try? c.decode([SpinRateScheduleData].self,  forKey: .spinRateSchedules))  ?? []
+        orbitRateSchedules  = (try? c.decode([OrbitRateScheduleData].self, forKey: .orbitRateSchedules)) ?? []
     }
+}
+
+// v35: rate-marker schedules for the Spin / Orbit animators.  Tracks are matched
+// on load by identity: object by name, group by groupID, light by index, camera is
+// the singleton.  The baked keyframes themselves persist in the regular tracks;
+// these structs only preserve the editable rate markers.
+struct SpinRateMarkerData: Codable {
+    var time:      Double
+    var rate:      Double
+    var axisIndex: Int
+}
+
+struct SpinRateScheduleData: Codable {
+    var targetKind:  Int    // 2 = object, 3 = group
+    var targetName:  String // object name (kind 2)
+    var targetIndex: Int    // groupID (kind 3)
+    var markers:     [SpinRateMarkerData]
+}
+
+struct OrbitRateMarkerData: Codable {
+    var time: Double
+    var rate: Double
+}
+
+struct OrbitRateScheduleData: Codable {
+    var targetKind:  Int      // 0 = camera, 1 = light, 2 = object
+    var targetName:  String   // object name (kind 2)
+    var targetIndex: Int      // light index (kind 1)
+    var axisStart:   [Float]  // 3 floats
+    var axisEnd:     [Float]  // 3 floats
+    var radius:      Float
+    var markers:     [OrbitRateMarkerData]
 }
 
 // v34: One Glue envelope.  `transform` is the column-major 4×4 origin matrix (16
@@ -410,6 +452,44 @@ struct BackgroundData: Codable {
     var backgroundHDRPath:    String = ""
     // v30: vertical shift of the skybox backdrop (positive = up)
     var environmentHorizon:   Float = 0.0
+    // Environment skybox excluded from the feedback loop (drawn fresh each frame).
+    var excludeEnvironmentFromFeedback: Bool = false
+
+    // Custom decoder so adding fields doesn't reset the whole background for older
+    // files — each key is optional and falls back to its default when missing.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        mode                 = (try? c.decode(Int.self,    forKey: .mode))                 ?? 0
+        solidR               = (try? c.decode(Float.self,  forKey: .solidR))               ?? 0
+        solidG               = (try? c.decode(Float.self,  forKey: .solidG))               ?? 0
+        solidB               = (try? c.decode(Float.self,  forKey: .solidB))               ?? 0
+        gradTopR             = (try? c.decode(Float.self,  forKey: .gradTopR))             ?? 0.05
+        gradTopG             = (try? c.decode(Float.self,  forKey: .gradTopG))             ?? 0.06
+        gradTopB             = (try? c.decode(Float.self,  forKey: .gradTopB))             ?? 0.14
+        gradBottomR          = (try? c.decode(Float.self,  forKey: .gradBottomR))          ?? 0
+        gradBottomG          = (try? c.decode(Float.self,  forKey: .gradBottomG))          ?? 0
+        gradBottomB          = (try? c.decode(Float.self,  forKey: .gradBottomB))          ?? 0
+        environmentIntensity = (try? c.decode(Float.self,  forKey: .environmentIntensity)) ?? 1.0
+        backgroundHDRPath    = (try? c.decode(String.self, forKey: .backgroundHDRPath))    ?? ""
+        environmentHorizon   = (try? c.decode(Float.self,  forKey: .environmentHorizon))   ?? 0.0
+        excludeEnvironmentFromFeedback =
+            (try? c.decode(Bool.self, forKey: .excludeEnvironmentFromFeedback)) ?? false
+    }
+
+    init(mode: Int = 0, solidR: Float = 0, solidG: Float = 0, solidB: Float = 0,
+         gradTopR: Float = 0.05, gradTopG: Float = 0.06, gradTopB: Float = 0.14,
+         gradBottomR: Float = 0, gradBottomG: Float = 0, gradBottomB: Float = 0,
+         environmentIntensity: Float = 1.0, backgroundHDRPath: String = "",
+         environmentHorizon: Float = 0.0, excludeEnvironmentFromFeedback: Bool = false) {
+        self.mode = mode
+        self.solidR = solidR; self.solidG = solidG; self.solidB = solidB
+        self.gradTopR = gradTopR; self.gradTopG = gradTopG; self.gradTopB = gradTopB
+        self.gradBottomR = gradBottomR; self.gradBottomG = gradBottomG; self.gradBottomB = gradBottomB
+        self.environmentIntensity = environmentIntensity
+        self.backgroundHDRPath = backgroundHDRPath
+        self.environmentHorizon = environmentHorizon
+        self.excludeEnvironmentFromFeedback = excludeEnvironmentFromFeedback
+    }
 }
 
 // v5: Feedback delay-line settings.  Defaults match FeedbackSettings initial values

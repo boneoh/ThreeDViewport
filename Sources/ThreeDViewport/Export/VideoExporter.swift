@@ -738,6 +738,11 @@ final class VideoExporter {
                            && (feedbackProc?.sceneTexture != nil)
         let renderTarget = feedbackActive ? (feedbackProc!.sceneTexture ?? colorTex) : colorTex
         let renderDepth  = feedbackActive ? (feedbackProc!.depthTexture ?? depthTex)  : depthTex
+        // Environment excluded from feedback: foreground-only into the feedback
+        // texture, skybox drawn fresh onto colorTex, composite over it (matches live).
+        let excludeBg = feedbackActive
+                     && backgroundConfig.mode == .environment
+                     && backgroundConfig.excludeEnvironmentFromFeedback
 
         // Per-frame context shared by every ScenePipeline pass this frame.  Export
         // always reads the keyframe track (playing = true); fog time matches the
@@ -772,8 +777,9 @@ final class VideoExporter {
         // background/skybox shaders and holdout write 0).  Also the content mask
         // the feedback compositor uses.  RGB clear stays the background colour.
         let bc = backgroundConfig.clearColor
-        passDesc.colorAttachments[0].clearColor  =
-            MTLClearColor(red: bc.red, green: bc.green, blue: bc.blue, alpha: 0.0)
+        passDesc.colorAttachments[0].clearColor  = excludeBg
+            ? MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0.0)   // foreground-only
+            : MTLClearColor(red: bc.red, green: bc.green, blue: bc.blue, alpha: 0.0)
         passDesc.depthAttachment.texture          = renderDepth
         passDesc.depthAttachment.loadAction       = .clear
         passDesc.depthAttachment.storeAction      = .store   // preserved for excluded-laser post-pass
@@ -796,7 +802,11 @@ final class VideoExporter {
         if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: passDesc) {
 
             // ── Background gradient / environment skybox ──────────────────────
-            scenePipeline.encodeBackground(into: encoder, sceneCtx)
+            // Skybox skipped here when excluding from feedback — drawn fresh onto
+            // colorTex after the scene pass so the foreground composites over it.
+            if !excludeBg {
+                scenePipeline.encodeBackground(into: encoder, sceneCtx)
+            }
 
             // ── Scene geometry ────────────────────────────────────────────────
             // Shared with the live Renderer via SceneGeometryEncoder so material,
@@ -862,9 +872,24 @@ final class VideoExporter {
             encoder.endEncoding()
         }
 
+        // Environment-excluded-from-feedback: draw the skybox fresh onto colorTex
+        // first, so the feedback composite lands over it (matches the live preview).
+        if excludeBg {
+            let bgPass = MTLRenderPassDescriptor()
+            bgPass.colorAttachments[0].texture     = colorTex
+            bgPass.colorAttachments[0].loadAction  = .clear
+            bgPass.colorAttachments[0].clearColor  = backgroundConfig.clearColor
+            bgPass.colorAttachments[0].storeAction = .store
+            if let bgEnc = commandBuffer.makeRenderCommandEncoder(descriptor: bgPass) {
+                scenePipeline.encodeBackground(into: bgEnc, sceneCtx)
+                bgEnc.endEncoding()
+            }
+        }
+
         // ── Feedback composite → colorTex ─────────────────────────────────────
         if feedbackActive, let fp = feedbackProc, let fs = feedbackSettings {
-            fp.process(commandBuffer: commandBuffer, dest: colorTex, settings: fs)
+            fp.process(commandBuffer: commandBuffer, dest: colorTex, settings: fs,
+                       excludeBackground: excludeBg)
         }
 
         // ── Feedback-off geometry (after composite, so no trails) ─────────────

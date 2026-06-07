@@ -2837,11 +2837,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let viewport = viewportView else { return }
         let state = viewport.orbitPathState
         state.targets = pathAnimatorTargets(camera: true, lights: true, objects: true, groups: false)
-        if state.startTime == nil { state.startTime = 0 }
-        if state.endTime   == nil { state.endTime   = viewport.timeline.duration }
         if let ref = state.capturedRef, !state.targets.contains(where: { $0.ref == ref }) {
             state.capturedRef = nil   // previously-selected target no longer exists
         }
+        orbitReloadFromSchedule()
 
         if let panel = orbitPathPanel {
             panel.isVisible ? panel.orderOut(nil) : panel.makeKeyAndOrderFront(nil)
@@ -2872,9 +2871,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 state.axisEnd = viewport?.probeConfig.position
                 state.status = "Captured axis end."
             },
-            captureStart: { [weak self] in self?.orbitPathCaptureStart() },
-            captureEnd:   { [weak self] in self?.orbitPathCaptureEnd() },
-            create:       { [weak self] in self?.orbitPathCreate() }
+            addMarker:     { [weak self] in self?.orbitAddMarker() },
+            applyGeometry: { [weak self] in self?.orbitApplyGeometry() },
+            deleteMarker:  { [weak self] in self?.orbitDeleteMarker($0) },
+            clearMarkers:  { [weak self] in self?.orbitClearMarkers() },
+            selectTarget:  { [weak self] in self?.orbitReloadFromSchedule() }
         ))
 
         if let win = window {
@@ -2935,53 +2936,85 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         return result
     }
 
-    private func orbitPathCaptureStart() {
-        guard let viewport = viewportView else { return }
-        viewport.orbitPathState.startTime = viewport.timeline.currentTime
-        viewport.orbitPathState.status    = "Captured start time."
-    }
-
-    private func orbitPathCaptureEnd() {
+    /// Loads the selected target's persisted orbit schedule into the panel fields
+    /// (geometry + markers), or clears them when the target has none.
+    private func orbitReloadFromSchedule() {
         guard let viewport = viewportView else { return }
         let state = viewport.orbitPathState
-        state.endTime = viewport.timeline.currentTime
-        state.status  = "Captured end time."
+        guard let ref = state.capturedRef, let sched = viewport.orbitRateSchedules[ref] else {
+            state.markers = []
+            return
+        }
+        state.axisStart = sched.axisStart
+        state.axisEnd   = sched.axisEnd
+        state.radius    = String(sched.radius)
+        state.markers   = sched.markers
     }
 
-    private func orbitPathCreate() {
-        guard let viewport = viewportView else { return }
+    /// Reads the panel's axis / radius / per-rev fields into a validated tuple.
+    private func orbitGeometry() -> (axisStart: SIMD3<Float>, axisEnd: SIMD3<Float>,
+                                     radius: Float, perRev: Float, ref: TrackRef)? {
+        guard let viewport = viewportView else { return nil }
         let state = viewport.orbitPathState
-
+        guard let ref = state.capturedRef else {
+            state.validationAlert = "Select a target from the dropdown first."; return nil
+        }
         guard let a = state.axisStart, let b = state.axisEnd else {
-            state.validationAlert = "Capture both axis points first."; return
+            state.validationAlert = "Capture both axis points first."; return nil
         }
-        guard let ref = state.capturedRef, let t0 = state.startTime, let t1 = state.endTime else {
-            state.validationAlert = "Select a target from the dropdown first."; return
+        guard let radius = Float(state.radius), radius > 0 else {
+            state.validationAlert = "Radius must be a positive number."; return nil
         }
-        guard abs(t1 - t0) > 1e-4 else {
-            state.validationAlert = "Start and end times must differ."; return
+        guard let perRev = Float(state.perRev), perRev >= 1 else {
+            state.validationAlert = "Keyframes / rev must be ≥ 1."; return nil
         }
-        guard let radius = Float(state.radius),
-              let startA = Float(state.startAngle),
-              let endA   = Float(state.endAngle),
-              let revs   = Float(state.revolutions),
-              let perRev = Float(state.perRev), perRev >= 1 else {
-            state.validationAlert = "Check the numeric fields (keyframes/rev ≥ 1)."; return
-        }
+        return (a, b, radius, perRev, ref)
+    }
 
-        let samples = PathGenerator.samples(
-            axisStart: a, axisEnd: b, radius: radius,
-            startAngleDeg: startA, endAngleDeg: endA, revolutions: revs,
-            startTime: min(t0, t1), endTime: max(t0, t1),
-            keyframesPerRevolution: perRev)
-
-        let fixedAim = (a + b) * 0.5
-        viewport.generatePath(ref: ref, samples: samples, fixedAim: fixedAim)
-
+    private func orbitApply(markers: [OrbitRateMarker]) {
+        guard let viewport = viewportView, let g = orbitGeometry() else { return }
+        let state = viewport.orbitPathState
+        let sched = markers.isEmpty ? nil : OrbitRateSchedule(
+            axisStart: g.axisStart, axisEnd: g.axisEnd, radius: g.radius, markers: markers)
+        viewport.setOrbitSchedule(ref: g.ref, schedule: sched, keyframesPerRevolution: g.perRev)
+        state.markers = markers
         timelineEditorWC?.editorView.needsDisplay = true
         markDirty()
-        state.status = "Created \(samples.count) keyframes for \(pathAnimatorTrackLabel(ref))."
-        print("[DEBUG] AppDelegate: path animator created \(samples.count) keyframes")
+    }
+
+    private func orbitAddMarker() {
+        guard let viewport = viewportView else { return }
+        let state = viewport.orbitPathState
+        guard let _ = orbitGeometry() else { return }
+        guard let rate = Double(state.rate) else {
+            state.validationAlert = "Rate must be a number (rev/s)."; return
+        }
+        let t = viewport.timeline.currentTime
+        var markers = state.markers.filter { abs($0.time - t) >= 1e-3 }
+        markers.append(OrbitRateMarker(time: t, rate: rate))
+        markers.sort { $0.time < $1.time }
+        orbitApply(markers: markers)
+        state.status = "Added rate keyframe at \(String(format: "%.3f", t)) s."
+    }
+
+    private func orbitApplyGeometry() {
+        guard let viewport = viewportView else { return }
+        orbitApply(markers: viewport.orbitPathState.markers)
+        viewport.orbitPathState.status = "Updated radius / axis."
+    }
+
+    private func orbitDeleteMarker(_ id: UUID) {
+        guard let viewport = viewportView else { return }
+        orbitApply(markers: viewport.orbitPathState.markers.filter { $0.id != id })
+    }
+
+    private func orbitClearMarkers() {
+        guard let viewport = viewportView, let ref = viewport.orbitPathState.capturedRef else { return }
+        let perRev = Float(viewport.orbitPathState.perRev) ?? 12
+        viewport.setOrbitSchedule(ref: ref, schedule: nil, keyframesPerRevolution: perRev)
+        viewport.orbitPathState.markers = []
+        timelineEditorWC?.editorView.needsDisplay = true
+        markDirty()
     }
 
     // MARK: - Spin Animator
@@ -2990,11 +3023,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let viewport = viewportView else { return }
         let state = viewport.spinAnimatorState
         state.targets = pathAnimatorTargets(camera: false, lights: false, objects: true, groups: true)
-        if state.startTime == nil { state.startTime = 0 }
-        if state.endTime   == nil { state.endTime   = viewport.timeline.duration }
         if let ref = state.capturedRef, !state.targets.contains(where: { $0.ref == ref }) {
             state.capturedRef = nil   // previously-selected target no longer exists
         }
+        spinReloadFromSchedule()
 
         if let panel = spinPanel {
             panel.isVisible ? panel.orderOut(nil) : panel.makeKeyAndOrderFront(nil)
@@ -3016,9 +3048,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         panel.contentView = FirstClickHostingView(rootView: SpinAnimatorPanel(
             state: state,
-            captureStart: { [weak self] in self?.spinCaptureStart() },
-            captureEnd:   { [weak self] in self?.spinCaptureEnd() },
-            create:       { [weak self] in self?.spinCreate() }
+            addMarker:    { [weak self] in self?.spinAddMarker() },
+            deleteMarker: { [weak self] in self?.spinDeleteMarker($0) },
+            clearMarkers: { [weak self] in self?.spinClearMarkers() },
+            selectTarget: { [weak self] in self?.spinReloadFromSchedule() }
         ))
 
         if let win = window {
@@ -3033,44 +3066,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         print("[DEBUG] AppDelegate: spin animator panel opened")
     }
 
-    private func spinCaptureStart() {
-        guard let viewport = viewportView else { return }
-        viewport.spinAnimatorState.startTime = viewport.timeline.currentTime
-        viewport.spinAnimatorState.status    = "Captured start time."
-    }
-
-    private func spinCaptureEnd() {
+    /// Loads the selected target's persisted spin markers into the panel.
+    private func spinReloadFromSchedule() {
         guard let viewport = viewportView else { return }
         let state = viewport.spinAnimatorState
-        state.endTime = viewport.timeline.currentTime
-        state.status  = "Captured end time."
+        if let ref = state.capturedRef {
+            state.markers = viewport.spinRateSchedules[ref] ?? []
+        } else {
+            state.markers = []
+        }
     }
 
-    private func spinCreate() {
+    private func spinAddMarker() {
         guard let viewport = viewportView else { return }
         let state = viewport.spinAnimatorState
-
-        guard let ref = state.capturedRef, let t0 = state.startTime, let t1 = state.endTime else {
+        guard let ref = state.capturedRef else {
             state.validationAlert = "Select a target from the dropdown first."; return
         }
-        guard abs(t1 - t0) > 1e-4 else {
-            state.validationAlert = "Start and end times must differ."; return
-        }
-        guard let revs = Float(state.revolutions), revs != 0 else {
-            state.validationAlert = "Revolutions must be a non-zero number."; return
+        guard let rate = Double(state.rate) else {
+            state.validationAlert = "Rate must be a number (rev/s)."; return
         }
         guard let perRev = Float(state.perRev), perRev >= 3 else {
             state.validationAlert = "Keyframes / rev must be ≥ 3."; return
         }
-
-        viewport.generateSpin(ref: ref, axisIndex: state.axisIndex,
-                              revolutions: revs, keyframesPerRevolution: perRev,
-                              startTime: t0, endTime: t1)
-
+        let t = viewport.timeline.currentTime
+        var markers = (viewport.spinRateSchedules[ref] ?? []).filter { abs($0.time - t) >= 1e-3 }
+        markers.append(SpinRateMarker(time: t, rate: rate, axisIndex: state.axisIndex))
+        markers.sort { $0.time < $1.time }
+        viewport.setSpinSchedule(ref: ref, markers: markers, keyframesPerRevolution: perRev)
+        state.markers = markers
         timelineEditorWC?.editorView.needsDisplay = true
         markDirty()
-        state.status = "Created spin for \(pathAnimatorTrackLabel(ref))."
-        print("[DEBUG] AppDelegate: spin animator created keyframes")
+        state.status = "Added rate keyframe at \(String(format: "%.3f", t)) s."
+    }
+
+    private func spinDeleteMarker(_ id: UUID) {
+        guard let viewport = viewportView, let ref = viewport.spinAnimatorState.capturedRef else { return }
+        let perRev = Float(viewport.spinAnimatorState.perRev) ?? 12
+        let markers = (viewport.spinRateSchedules[ref] ?? []).filter { $0.id != id }
+        viewport.setSpinSchedule(ref: ref, markers: markers, keyframesPerRevolution: perRev)
+        viewport.spinAnimatorState.markers = markers
+        timelineEditorWC?.editorView.needsDisplay = true
+        markDirty()
+    }
+
+    private func spinClearMarkers() {
+        guard let viewport = viewportView, let ref = viewport.spinAnimatorState.capturedRef else { return }
+        let perRev = Float(viewport.spinAnimatorState.perRev) ?? 12
+        viewport.setSpinSchedule(ref: ref, markers: [], keyframesPerRevolution: perRev)
+        viewport.spinAnimatorState.markers = []
+        timelineEditorWC?.editorView.needsDisplay = true
+        markDirty()
     }
 
     // MARK: - Timeline Duration

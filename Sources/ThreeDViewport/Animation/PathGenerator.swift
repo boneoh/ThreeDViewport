@@ -59,6 +59,43 @@ enum PathGenerator {
         return out
     }
 
+    /// Samples a constant-height circle (planar orbit) of `radius` around `center`,
+    /// in the plane whose normal is `axisDir` (world-up when `axisDir` is ~zero).
+    /// Unlike `samples`, there is no climb along the axis — every `axisPoint` is
+    /// `center`, so an orbiting object keeps aiming at the same pivot.  `θ` sweeps
+    /// from `startAngleDeg` to `endAngleDeg`; pass a continuous angle run across
+    /// segments to keep adjacent rate segments seamless.
+    static func planarSamples(center C: SIMD3<Float>,
+                              axisDir:       SIMD3<Float>,
+                              radius:        Float,
+                              startAngleDeg: Float,
+                              endAngleDeg:   Float,
+                              startTime:     Double,
+                              endTime:       Double,
+                              count:         Int) -> [Sample] {
+        let len = simd_length(axisDir)
+        let d   = len > 1e-6 ? axisDir / len : SIMD3<Float>(0, 1, 0)
+
+        let worldUp = SIMD3<Float>(0, 1, 0)
+        var u = simd_cross(worldUp, d)
+        if simd_length(u) < 1e-4 { u = simd_cross(SIMD3<Float>(1, 0, 0), d) }
+        u = simd_normalize(u)
+        let v = simd_normalize(simd_cross(d, u))
+
+        let deg2rad = Float.pi / 180.0
+        let n = max(2, count)
+        var out: [Sample] = []
+        out.reserveCapacity(n)
+        for i in 0..<n {
+            let s     = Float(i) / Float(n - 1)
+            let theta = (startAngleDeg + s * (endAngleDeg - startAngleDeg)) * deg2rad
+            let pos   = C + radius * (cos(theta) * u + sin(theta) * v)
+            let time  = startTime + Double(s) * (endTime - startTime)
+            out.append(Sample(time: time, position: pos, axisPoint: C))
+        }
+        return out
+    }
+
     /// Samples a flat spiral arc: the entity sweeps from `start` to `end` around
     /// `target` (the pivot it also aims at), in the plane of the three points, with
     /// the radius easing from |start−target| to |end−target| (so it spirals in/out).

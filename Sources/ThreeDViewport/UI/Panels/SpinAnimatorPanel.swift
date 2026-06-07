@@ -1,73 +1,60 @@
 import SwiftUI
 import simd
 
-// Floating helper panel that generates a constant, wobble-free self-spin for the
-// Timeline-selected object — evenly-spaced, single-axis rotation keyframes about
-// the object's own local X/Y/Z axis.  Unlike the Orbit Path Animator (which
-// orbits around an external Probe axis), this spins the object in place, so it
-// composes under a glued envelope's orbit.
+// Floating helper panel that drives a constant, wobble-free self-spin for the
+// Timeline-selected object via rate markers.  Each marker sets a spin rate
+// (revolutions / second, signed) about the object's own local X/Y/Z axis; the
+// spin holds that rate until the next marker, and the last marker runs to the end
+// of the timeline.  A marker with rate 0 stops the spin from that point.  The
+// dense pose keyframes are regenerated from the markers, so adjusting a rate is
+// just editing one marker.
 //
 // Workflow:
-//   1. Select an object track in the Timeline Editor.
-//   2. Scrub to the start time, click "Capture Start"; scrub to the end, "Capture End".
-//   3. Pick the local axis, revolutions (negative reverses), and keyframes/rev.
-//   4. "Create Keyframes" replaces existing keyframes in [start, end] with the spin.
+//   1. Pick a target (object or model) from the dropdown.
+//   2. Set the rate + local axis, scrub the playhead, click "Add Rate Keyframe".
+//   3. Add more markers to change rate over time; rate 0 stops it.
 
 /// Observable state, held on the ViewportView so field values survive panel hide/show.
 final class SpinAnimatorState: ObservableObject {
-    @Published var axisIndex:  Int    = 1        // 0 = X, 1 = Y, 2 = Z
-    @Published var revolutions: String = "1"
-    @Published var perRev:      String = "4"
+    @Published var axisIndex:   Int    = 1        // 0 = X, 1 = Y, 2 = Z
+    @Published var rate:        String = "0.5"    // revolutions / second, signed
+    @Published var perRev:      String = "12"     // keyframe density
 
-    @Published var startTime:  Double? = nil
-    @Published var endTime:    Double? = nil
-    @Published var status:     String  = ""
+    @Published var status:          String = ""
     /// Blocking validation error → raised as an alert (see .validationAlert).
     @Published var validationAlert: String? = nil
 
     /// Selectable targets + the chosen one (driven by the panel's Target dropdown).
     @Published var targets: [PathTarget] = []
     @Published var capturedRef: TrackRef? = nil
+
+    /// Rate markers for the currently-selected target (mirrors the persisted schedule).
+    @Published var markers: [SpinRateMarker] = []
 }
 
 struct SpinAnimatorPanel: View {
     @ObservedObject var state: SpinAnimatorState
 
-    let captureStart: () -> Void
-    let captureEnd:   () -> Void
-    let create:       () -> Void
+    let addMarker:    () -> Void
+    let deleteMarker: (UUID) -> Void
+    let clearMarkers: () -> Void
+    let selectTarget: () -> Void
 
-    private func timeText(_ t: Double?) -> String {
-        guard let t = t else { return "—" }
-        return String(format: "%.3f s", t)
-    }
+    private func axisLabel(_ i: Int) -> String { ["X", "Y", "Z"][max(0, min(2, i))] }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
 
-            // ── Target + time window ──────────────────────────────────────────
-            GroupBox(label: Text("Target & Time").font(.headline)) {
-                VStack(alignment: .leading, spacing: 6) {
-                    TargetPicker(targets: state.targets, selection: $state.capturedRef)
-                    HStack {
-                        Button("Capture Start", action: captureStart)
-                        Spacer()
-                        Text(timeText(state.startTime)).font(.system(.caption, design: .monospaced))
-                            .foregroundColor(.secondary)
-                    }
-                    HStack {
-                        Button("Capture End", action: captureEnd)
-                        Spacer()
-                        Text(timeText(state.endTime)).font(.system(.caption, design: .monospaced))
-                            .foregroundColor(.secondary)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(4)
+            // ── Target ────────────────────────────────────────────────────────
+            GroupBox(label: Text("Target").font(.headline)) {
+                TargetPicker(targets: state.targets, selection: $state.capturedRef)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(4)
+                    .onChange(of: state.capturedRef) { _, _ in selectTarget() }
             }
 
-            // ── Parameters ────────────────────────────────────────────────────
-            GroupBox(label: Text("Spin").font(.headline)) {
+            // ── Rate ──────────────────────────────────────────────────────────
+            GroupBox(label: Text("Spin Rate").font(.headline)) {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
                         Text("Local axis").frame(width: 120, alignment: .leading)
@@ -80,19 +67,54 @@ struct SpinAnimatorPanel: View {
                         .pickerStyle(.segmented)
                         .frame(width: 120)
                     }
-                    field("Revolutions",     $state.revolutions)
+                    field("Rate (rev/s)",    $state.rate)
                     field("Keyframes / rev", $state.perRev)
-                    Text("Negative revolutions reverse direction. Keyframes/rev ≥ 3.")
+                    Text("Signed rate sets direction. Rate 0 stops the spin. "
+                       + "Keyframes/rev ≥ 3.")
                         .font(.caption).foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+
+                    Button(action: addMarker) {
+                        Text("Add Rate Keyframe").frame(maxWidth: .infinity)
+                    }
+                    .keyboardShortcut(.defaultAction)
                 }
                 .padding(4)
             }
 
-            Button(action: create) {
-                Text("Create Keyframes").frame(maxWidth: .infinity)
+            // ── Markers ───────────────────────────────────────────────────────
+            GroupBox(label: Text("Rate Keyframes").font(.headline)) {
+                VStack(alignment: .leading, spacing: 4) {
+                    if state.markers.isEmpty {
+                        Text("No rate keyframes yet.")
+                            .font(.caption).foregroundColor(.secondary)
+                    } else {
+                        ForEach(state.markers.sorted { $0.time < $1.time }) { m in
+                            HStack {
+                                Text(String(format: "%.3f s", m.time))
+                                    .font(.system(.caption, design: .monospaced))
+                                    .frame(width: 70, alignment: .leading)
+                                Text(String(format: "%+.3g rev/s", m.rate))
+                                    .font(.system(.caption, design: .monospaced))
+                                Text(axisLabel(m.axisIndex))
+                                    .font(.caption).foregroundColor(.secondary)
+                                Spacer()
+                                Button {
+                                    deleteMarker(m.id)
+                                } label: {
+                                    Image(systemName: "xmark.circle")
+                                }
+                                .buttonStyle(.borderless)
+                            }
+                        }
+                        Divider()
+                        Button("Clear All", action: clearMarkers)
+                            .buttonStyle(.borderless)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(4)
             }
-            .keyboardShortcut(.defaultAction)
 
             if !state.status.isEmpty {
                 Text(state.status).font(.caption).foregroundColor(.secondary)

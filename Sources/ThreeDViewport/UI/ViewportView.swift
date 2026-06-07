@@ -96,6 +96,13 @@ final class ViewportView: MTKView {
     let curvePathState     = CurvePathAnimatorState()
     // Spin Animator helper state.
     let spinAnimatorState  = SpinAnimatorState()
+
+    // Rate-marker schedules (Spin / Orbit animators), keyed by track.  These are the
+    // editable source of truth; the dense pose keyframes are regenerated from them.
+    // Persisted in the project file (identity-keyed) so rates stay adjustable.
+    var spinRateSchedules:  [TrackRef: [SpinRateMarker]]   = [:]
+    var orbitRateSchedules: [TrackRef: OrbitRateSchedule]  = [:]
+
     private var playbackCancellable: AnyCancellable?
 
     // Phase 6: HUD observable state — AppDelegate embeds the SwiftUI overlay using this.
@@ -1457,113 +1464,233 @@ final class ViewportView: MTKView {
         }
     }
 
-    // MARK: - Spin Animator
+    // MARK: - Rate-marker schedules
 
-    /// Replaces an object **or model** track's keyframes in [start, end] with a
-    /// constant, wobble-free self-spin about its own local X/Y/Z axis.
-    ///
-    /// **Object** (`.object`): the object's CURRENT pose is baked into every keyframe
-    /// so the spin preserves its position and scale (delta = inverse(base) × current,
-    /// `current` = localTransform for a glued child, transform for a root); the spin is
-    /// post-multiplied onto the delta's rotation so it turns about its own local axis
-    /// without drifting to the origin or resetting scale.
-    ///
-    /// **Model** (`.group`): writes the group-level track, spinning the whole model
-    /// about its own world-space **centre**.  A pivot rotation `T(P)·R·T(-P)` is
-    /// pre-multiplied onto the current group transform G0 (so θ=0 reproduces G0 — no
-    /// pop), and the spin axis follows the model's current orientation.
-    ///
-    /// Either way the track is forced to LINEAR easing: slerp between equal-angle
-    /// steps is exact constant-velocity rotation (no spline overshoot).  `axisIndex`
-    /// 0/1/2 = local X/Y/Z.  Signed `revolutions` sets direction.
-    func generateSpin(ref: TrackRef,
-                      axisIndex:  Int,
-                      revolutions: Float,
-                      keyframesPerRevolution: Float,
-                      startTime: Double,
-                      endTime:   Double) {
-        let lo = min(startTime, endTime) - 1e-6
-        let hi = max(startTime, endTime) + 1e-6
+    /// Replaces an object/model spin schedule and rebakes its keyframes.  Passing an
+    /// empty `markers` clears the schedule and the keyframes it owned.
+    func setSpinSchedule(ref: TrackRef, markers: [SpinRateMarker],
+                         keyframesPerRevolution: Float) {
+        let oldFirst  = spinRateSchedules[ref]?.map(\.time).min()
+        let newFirst  = markers.map(\.time).min()
+        let clearFrom = [oldFirst, newFirst].compactMap { $0 }.min() ?? 0
+        let cleaned   = markers.isEmpty ? nil : markers.sorted { $0.time < $1.time }
+        spinRateSchedules[ref] = cleaned
+        regenerateSpinRate(ref: ref, markers: cleaned ?? [],
+                           keyframesPerRevolution: keyframesPerRevolution, clearFrom: clearFrom)
+    }
 
-        let axis: SIMD3<Float>
-        switch axisIndex {
-        case 0:  axis = SIMD3<Float>(1, 0, 0)
-        case 2:  axis = SIMD3<Float>(0, 0, 1)
-        default: axis = SIMD3<Float>(0, 1, 0)
-        }
+    /// Replaces a camera/light/object orbit schedule and rebakes its keyframes.
+    /// Passing `nil` (or an empty marker list) clears the schedule and its keyframes.
+    func setOrbitSchedule(ref: TrackRef, schedule: OrbitRateSchedule?,
+                          keyframesPerRevolution: Float) {
+        let oldFirst  = orbitRateSchedules[ref]?.markers.map(\.time).min()
+        let newFirst  = schedule?.markers.map(\.time).min()
+        let clearFrom = [oldFirst, newFirst].compactMap { $0 }.min() ?? 0
+        let cleaned: OrbitRateSchedule? = (schedule?.markers.isEmpty ?? true) ? nil : schedule
+        orbitRateSchedules[ref] = cleaned
+        regenerateOrbitRate(ref: ref, schedule: cleaned,
+                            keyframesPerRevolution: keyframesPerRevolution, clearFrom: clearFrom)
+    }
 
-        let perRev = max(3.0, keyframesPerRevolution)   // <180° steps → correct short-arc slerp
-        let count  = max(2, Int((abs(revolutions) * perRev).rounded(.up)) + 1)
+    /// Rebuilds an object/model spin track from its rate markers.  Clears the owned
+    /// region [clearFrom, timeline end] and bakes a constant-velocity spin per
+    /// segment; orientation is carried continuously across segment (and axis)
+    /// changes via an accumulated rotation.  `keyframesPerRevolution` sets density;
+    /// a rate-0 segment holds still.  Forces LINEAR easing for exact constant speed.
+    private func regenerateSpinRate(ref: TrackRef, markers: [SpinRateMarker],
+                                    keyframesPerRevolution: Float, clearFrom: Double) {
+        let sorted  = markers.sorted { $0.time < $1.time }
+        let perRev  = max(3.0, Double(keyframesPerRevolution))
         let deg2rad = Float.pi / 180.0
-        let tStart = min(startTime, endTime)
-        let tEnd   = max(startTime, endTime)
-        // Even angle/time steps over the window: s ∈ [0, 1], angle starts at 0 (no pop).
-        func angle(_ s: Float) -> Float  { revolutions * 360.0 * s * deg2rad }
-        func time(_ s: Float)  -> Double { tStart + Double(s) * (tEnd - tStart) }
+        let end     = timeline.duration
+
+        func axisVec(_ idx: Int) -> SIMD3<Float> {
+            switch idx {
+            case 0:  return SIMD3<Float>(1, 0, 0)
+            case 2:  return SIMD3<Float>(0, 0, 1)
+            default: return SIMD3<Float>(0, 1, 0)
+            }
+        }
+        func segCount(rate: Double, revs: Double) -> Int {
+            rate == 0 ? 2 : max(2, Int((abs(revs) * perRev).rounded(.up)) + 1)
+        }
 
         switch ref {
         case .object(let i):
             guard i >= 0, i < sceneManager.objects.count else { return }
             let obj = sceneManager.objects[i]
-            if obj.keyframeTrack == nil { obj.keyframeTrack = KeyframeTrack() }
+            if obj.keyframeTrack == nil {
+                if sorted.isEmpty { return }
+                obj.keyframeTrack = KeyframeTrack()
+            }
             obj.keyframeTrack?.easingMode = .linear
-            obj.keyframeTrack?.keyframes.removeAll { $0.time >= lo && $0.time <= hi }
+            obj.keyframeTrack?.keyframes.removeAll { $0.time >= clearFrom - 1e-6 && $0.time <= end + 1e-6 }
 
-            // Bake the object's current pose (relative to baseTransform) so the spin
-            // keeps its live position and scale instead of snapping to the base.
             let baseInv = simd_inverse(obj.baseTransform)
             let current = (obj.parentIndex != nil) ? obj.localTransform : obj.transform
             let (baseT, baseR, baseS) = PathGenerator.decompose(baseInv * current)
             let opacity = obj.material.opacity
 
-            for k in 0..<count {
-                let s    = Float(k) / Float(count - 1)
-                let spin = simd_quatf(angle: angle(s), axis: axis)   // about own local axis
-                obj.keyframeTrack?.addKeyframe(TransformKeyframe(
-                    time:        time(s),
-                    translation: baseT,                  // keep current position
-                    rotation:    simd_normalize(baseR * spin),
-                    scale:       baseS,                  // keep current scale
-                    opacity:     opacity))
+            var accum = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+            for (idx, m) in sorted.enumerated() {
+                let t0 = m.time
+                let t1 = (idx + 1 < sorted.count) ? sorted[idx + 1].time : end
+                guard t1 > t0 + 1e-6 else { continue }
+                let dur  = t1 - t0
+                let revs = m.rate * dur
+                let axis = axisVec(m.axisIndex)
+                let count = segCount(rate: m.rate, revs: revs)
+                for k in (idx == 0 ? 0 : 1)..<count {
+                    let s   = Float(k) / Float(count - 1)
+                    let ang = Float(revs) * 360.0 * deg2rad * s
+                    let q   = simd_normalize(accum * simd_quatf(angle: ang, axis: axis))
+                    obj.keyframeTrack?.addKeyframe(TransformKeyframe(
+                        time: t0 + Double(s) * dur, translation: baseT,
+                        rotation: simd_normalize(baseR * q), scale: baseS, opacity: opacity))
+                }
+                accum = simd_normalize(accum * simd_quatf(angle: Float(revs) * 360.0 * deg2rad, axis: axis))
             }
             onKeyframeStamped?(.object(i))
-            print("[DEBUG] ViewportView: generateSpin — \(count) keyframes for object '\(obj.name)'"
-                + " axis=\(axisIndex) revs=\(revolutions)")
 
         case .group(let gid):
             let parts = sceneManager.objects(inGroup: gid)
             guard !parts.isEmpty else { return }
             if sceneManager.groupKeyframeTracks[gid] == nil {
+                if sorted.isEmpty { return }
                 sceneManager.groupKeyframeTracks[gid] = KeyframeTrack()
             }
             let track = sceneManager.groupKeyframeTracks[gid]
             track?.easingMode = .linear
-            track?.keyframes.removeAll { $0.time >= lo && $0.time <= hi }
+            track?.keyframes.removeAll { $0.time >= clearFrom - 1e-6 && $0.time <= end + 1e-6 }
 
-            // Spin the model about its own world centre.  The group track stores the
-            // full groupTransform (rendered as groupT × part.transform); pre-multiplying
-            // a pivot rotation about that centre keeps the model in place.
             let g0    = sceneManager.groupTransforms[gid] ?? matrix_identity_float4x4
             let pivot = groupCenter(parts)
-            // Spin about the model's own axis = current group orientation × axis.
-            let r0        = PathGenerator.decompose(g0).rotation
-            let axisWorld = simd_act(r0, axis)
+            let r0    = PathGenerator.decompose(g0).rotation
             var tFwd = matrix_identity_float4x4; tFwd.columns.3 = SIMD4<Float>( pivot, 1)
             var tInv = matrix_identity_float4x4; tInv.columns.3 = SIMD4<Float>(-pivot, 1)
 
-            for k in 0..<count {
-                let s   = Float(k) / Float(count - 1)
-                let rot = rotationMatrix4x4(simd_quatf(angle: angle(s), axis: axisWorld))
-                let (t, r, sc) = PathGenerator.decompose(tFwd * rot * tInv * g0)
-                track?.addKeyframe(TransformKeyframe(
-                    time: time(s), translation: t, rotation: r, scale: sc))
+            var accum = matrix_identity_float4x4
+            for (idx, m) in sorted.enumerated() {
+                let t0 = m.time
+                let t1 = (idx + 1 < sorted.count) ? sorted[idx + 1].time : end
+                guard t1 > t0 + 1e-6 else { continue }
+                let dur  = t1 - t0
+                let revs = m.rate * dur
+                let axisWorld = simd_act(r0, axisVec(m.axisIndex))
+                let count = segCount(rate: m.rate, revs: revs)
+                for k in (idx == 0 ? 0 : 1)..<count {
+                    let s   = Float(k) / Float(count - 1)
+                    let ang = Float(revs) * 360.0 * deg2rad * s
+                    let rot = accum * rotationMatrix4x4(simd_quatf(angle: ang, axis: axisWorld))
+                    let (t, r, sc) = PathGenerator.decompose(tFwd * rot * tInv * g0)
+                    track?.addKeyframe(TransformKeyframe(
+                        time: t0 + Double(s) * dur, translation: t, rotation: r, scale: sc))
+                }
+                accum = accum * rotationMatrix4x4(simd_quatf(angle: Float(revs) * 360.0 * deg2rad, axis: axisWorld))
             }
             onKeyframeStamped?(.group(gid))
-            print("[DEBUG] ViewportView: generateSpin — \(count) keyframes for model gid=\(gid)"
-                + " axis=\(axisIndex) revs=\(revolutions)")
 
         default:
             return
+        }
+    }
+
+    /// Rebuilds a camera / light / object orbit track from its rate schedule: a
+    /// constant-height planar circle around `schedule.axisStart`, swept at the
+    /// markers' rates with a continuous angle across segments.  Clears the owned
+    /// region [clearFrom, timeline end].  A `nil` schedule just clears.  LINEAR easing.
+    private func regenerateOrbitRate(ref: TrackRef, schedule: OrbitRateSchedule?,
+                                     keyframesPerRevolution: Float, clearFrom: Double) {
+        let perRev = max(1.0, Double(keyframesPerRevolution))
+        let end    = timeline.duration
+        let center = schedule?.axisStart ?? .zero
+
+        // Build one continuous-angle sample list spanning all segments.
+        var samples: [PathGenerator.Sample] = []
+        if let schedule = schedule {
+            let sorted  = schedule.markers.sorted { $0.time < $1.time }
+            let axisDir = schedule.axisEnd - schedule.axisStart
+            let radius  = schedule.radius
+            var accAngle: Float = 0
+            for (idx, m) in sorted.enumerated() {
+                let t0 = m.time
+                let t1 = (idx + 1 < sorted.count) ? sorted[idx + 1].time : end
+                guard t1 > t0 + 1e-6 else { continue }
+                let dur   = t1 - t0
+                let revs  = Float(m.rate * dur)
+                let endA  = accAngle + revs * 360.0
+                let count = (m.rate == 0) ? 2 : max(2, Int((abs(Double(revs)) * perRev).rounded(.up)) + 1)
+                let seg = PathGenerator.planarSamples(
+                    center: schedule.axisStart, axisDir: axisDir, radius: radius,
+                    startAngleDeg: accAngle, endAngleDeg: endA,
+                    startTime: t0, endTime: t1, count: count)
+                samples.append(contentsOf: idx == 0 ? seg : Array(seg.dropFirst()))
+                accAngle = endA
+            }
+        }
+        let lo = clearFrom - 1e-6
+        let hi = end + 1e-6
+
+        switch ref {
+        case .camera:
+            if camera.keyframeTrack == nil {
+                if samples.isEmpty { return }
+                camera.keyframeTrack = CameraKeyframeTrack()
+            }
+            camera.keyframeTrack?.easingMode = .linear
+            camera.keyframeTrack?.keyframes.removeAll { $0.time >= lo && $0.time <= hi }
+            for s in samples {
+                let dir   = s.position - center
+                let dist  = max(0.05, min(5000, simd_length(dir)))
+                let pitch = asin(max(-1, min(1, dir.y / dist)))
+                let yaw   = atan2(dir.x, dir.z)
+                camera.keyframeTrack?.addKeyframe(CameraKeyframe(
+                    time: s.time, yaw: yaw, pitch: pitch, distance: dist,
+                    target: center, fov: camera.fovYRadians))
+            }
+            onKeyframeStamped?(.camera)
+
+        case .light(let i):
+            guard i >= 0, i < lightManager.lights.count else { return }
+            let light = lightManager.lights[i]
+            while lightManager.keyframeTracks.count <= i { lightManager.keyframeTracks.append(nil) }
+            if lightManager.keyframeTracks[i] == nil {
+                if samples.isEmpty { return }
+                lightManager.keyframeTracks[i] = LightKeyframeTrack()
+            }
+            lightManager.keyframeTracks[i]?.easingMode = .linear
+            lightManager.keyframeTracks[i]?.keyframes.removeAll { $0.time >= lo && $0.time <= hi }
+            for s in samples {
+                lightManager.keyframeTracks[i]?.addKeyframe(LightKeyframe(
+                    time: s.time, intensity: light.intensity, color: light.color,
+                    target: center, position: s.position,
+                    range: light.range, beamThickness: light.beamThickness))
+            }
+            onKeyframeStamped?(.light(i))
+
+        case .object(let i):
+            guard i >= 0, i < sceneManager.objects.count else { return }
+            let obj = sceneManager.objects[i]
+            if obj.keyframeTrack == nil {
+                if samples.isEmpty { return }
+                obj.keyframeTrack = KeyframeTrack()
+            }
+            obj.keyframeTrack?.easingMode = .linear
+            obj.keyframeTrack?.keyframes.removeAll { $0.time >= lo && $0.time <= hi }
+            let baseInv  = simd_inverse(obj.baseTransform)
+            let opacity  = obj.material.opacity
+            let objScale = TransformMath.scale(of: obj.transform)
+            for s in samples {
+                let worldRot = PathGenerator.lookAtRotation(from: s.position, to: s.axisPoint)
+                let world    = PathGenerator.makeTransform(translation: s.position, rotation: worldRot, scale: objScale)
+                let (t, r, sc) = PathGenerator.decompose(baseInv * world)
+                obj.keyframeTrack?.addKeyframe(TransformKeyframe(
+                    time: s.time, translation: t, rotation: r, scale: sc, opacity: opacity))
+            }
+            onKeyframeStamped?(.object(i))
+
+        default:
+            break
         }
     }
 

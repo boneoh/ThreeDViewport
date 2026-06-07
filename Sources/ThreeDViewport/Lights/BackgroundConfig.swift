@@ -33,6 +33,10 @@ final class BackgroundConfig: ObservableObject {
     /// Per-project Background HDR file path (drives the visible skybox, separate
     /// from lighting).  Empty = mirror the lighting environment.
     @Published var backgroundHDRPath:    String    = ""
+    /// When true (Environment mode only), the skybox is excluded from the feedback
+    /// loop: it's drawn fresh behind the trailing foreground each frame instead of
+    /// smearing with camera motion.  Mirrors a laser's "exclude from feedback".
+    @Published var excludeEnvironmentFromFeedback: Bool = false
 
     init() {
         print("[DEBUG] BackgroundConfig: initialized")
