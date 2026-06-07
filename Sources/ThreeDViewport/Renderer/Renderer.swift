@@ -1291,7 +1291,18 @@ final class Renderer: NSObject, MTKViewDelegate {
                                  color:          SIMD4<Float>) {
         guard !vertices.isEmpty else { return }
         let byteCount = MemoryLayout<SIMD3<Float>>.stride * vertices.count
-        encoder.setVertexBytes(&vertices, length: byteCount, index: 0)
+
+        // setVertexBytes is capped at 4 KB. A dense line list (e.g. the motion-path
+        // overlay for a rate-marker spin with hundreds of keyframes) exceeds that and
+        // would crash the driver, so upload it through a temporary buffer instead.
+        if byteCount <= 4096 {
+            encoder.setVertexBytes(&vertices, length: byteCount, index: 0)
+        } else if let buf = device.makeBuffer(bytes: vertices, length: byteCount,
+                                              options: .storageModeShared) {
+            encoder.setVertexBuffer(buf, offset: 0, index: 0)
+        } else {
+            return
+        }
 
         var u = WidgetUniforms(viewProjectionMatrix: viewProjection, color: color)
         encoder.setVertexBytes(&u, length: MemoryLayout<WidgetUniforms>.stride, index: 1)

@@ -798,17 +798,22 @@ final class ProjectFile {
     // MARK: - Apply keyframes + base transforms
 
     // Restores each object's baseTransform (v4) and keyframeTrack.
-    // Matches objects by name.  Both are handled in one pass so baseTransform
-    // is always set before the renderer evaluates the first animation delta.
+    //
+    // Saved object data is paired to live scene parts **per model, by part name**:
+    // each model loads as one contiguous block (shared sourceURL), and the loader
+    // renames each model's root to its file basename, so saved blocks line up with
+    // live blocks.  Matching by name *within* a block means a count/order drift in
+    // one model can never push another model's (or its own) base transforms onto
+    // the wrong parts — the load bug that made multi-part models "come apart."
+    //
+    // Falls back to the legacy position (index) matching whenever a confident
+    // per-model partition can't be established — substitution renames a model's
+    // root, a model is missing, etc. — so those paths behave exactly as before.
     private static func applyKeyframes(_ objectsData: [ObjectData], to vp: ViewportView) {
-        // Match saved object data to live scene objects by **position**, not by name.
-        // The save format writes objects in scene order, and on load addModelToScene
-        // appends in file order — so objectsData[i] corresponds to scene.objects[i]
-        // by construction.  Position-based matching preserves keyframes through
-        // missing-model substitution (user picks robot2.glb to replace robot1.glb)
-        // and through replaceSelectedModel + save + reload, neither of which can
-        // rely on name equality because the live names come from the new file.
         let objects = vp.sceneManager.objects
+        if applyKeyframesByModel(objectsData, objects: objects, vp: vp) { return }
+
+        // ── Legacy fallback: position (index) matching ───────────────────────────
         let n = min(objects.count, objectsData.count)
         if objects.count != objectsData.count {
             print("[DEBUG] ProjectFile: object count mismatch on load —"
@@ -816,67 +821,128 @@ final class ProjectFile {
                 + " loaded=" + String(objects.count)
                 + " (extras get no keyframes)")
         }
+        for i in 0..<n { restoreObject(objectsData[i], into: objects[i], vp: vp) }
+    }
 
-        for i in 0..<n {
-            let obj   = objects[i]
-            let saved = objectsData[i]
+    /// Per-model, name-aware restore.  Returns false (caller falls back to index
+    /// matching) if the saved/live blocks can't be confidently partitioned.
+    private static func applyKeyframesByModel(_ savedObjs: [ObjectData],
+                                              objects: [SceneObject],
+                                              vp: ViewportView) -> Bool {
+        guard !objects.isEmpty, !savedObjs.isEmpty else { return false }
 
-            // ── v15: restore Model Inspector state ───────────────────────────────
-            obj.isVisible = saved.isVisible
-            obj.occludeWhenHidden = saved.occludeWhenHidden   // v17
-            obj.objectClass = ObjectClass(rawValue: saved.objectClass) ?? .background
-            obj.feedbackEnabled = saved.feedbackEnabled
-            if let mode = NormalMode(rawValue: saved.normalMode), mode != .auto {
-                vp.applyNormalMode(mode, toTargets: [obj])
-                obj.normalMode = mode
-            }
-            if saved.metallicFactor >= 0  { obj.material.metallicFactor  = saved.metallicFactor }
-            if saved.roughnessFactor >= 0 { obj.material.roughnessFactor = saved.roughnessFactor }
-            if saved.baseColorFactor.count == 4 {
-                obj.material.baseColorFactor = SIMD4<Float>(
-                    saved.baseColorFactor[0], saved.baseColorFactor[1],
-                    saved.baseColorFactor[2], saved.baseColorFactor[3])
-            }
-            obj.material.opacity = saved.opacity
-
-            // ── v4: restore baseTransform so manual repositioning survives reload ──
-            if let m = decodeMatrix(saved.baseTransformMatrix) {
-                obj.baseTransform = m
-                if obj.parentIndex != nil {
-                    // Hierarchical part: m is a LOCAL transform.
-                    // Set localTransform; applyHierarchy() will compute world transform.
-                    obj.localTransform = m
-                    obj.transform      = m   // temporary; overwritten by applyHierarchy next draw
-                } else {
-                    obj.transform = m   // root: m is the world transform
-                }
-                print("[DEBUG] ProjectFile: baseTransform restored for '" + obj.name
-                    + "' (saved as '" + saved.name + "')")
-            }
-
-            // ── Keyframe track ────────────────────────────────────────────────────
-            guard !saved.keyframes.isEmpty else {
-                print("[DEBUG] ProjectFile: no keyframes for '" + obj.name + "'")
-                continue
-            }
-
-            let track = KeyframeTrack()
-            track.easingMode = EasingMode(rawValue: saved.easingMode) ?? .linear
-            for kf in saved.keyframes {
-                track.addKeyframe(TransformKeyframe(
-                    time:        kf.time,
-                    translation: SIMD3<Float>(kf.tx, kf.ty, kf.tz),
-                    rotation:    simd_quatf(ix: kf.rx, iy: kf.ry, iz: kf.rz, r: kf.rw),
-                    scale:       SIMD3<Float>(kf.sx, kf.sy, kf.sz),
-                    opacity:     kf.opacity
-                ))
-            }
-            obj.keyframeTrack = track
-
-            print("[DEBUG] ProjectFile: restored " + String(saved.keyframes.count)
-                + " keyframes for '" + obj.name + "'"
-                + (obj.name == saved.name ? "" : " (saved as '" + saved.name + "')"))
+        // 1. Live blocks: contiguous runs of objects that share a sourceURL.
+        var liveBlocks: [[Int]] = []
+        var lastKey: String? = nil
+        for (i, o) in objects.enumerated() {
+            guard let key = o.sourceURL?.path else { return false }   // unexpected → fallback
+            if key != lastKey { liveBlocks.append([]); lastKey = key }
+            liveBlocks[liveBlocks.count - 1].append(i)
         }
+
+        // 2. Each live block's model basename (the loader renamed its root to this,
+        //    so the matching saved block starts with an object of the same name).
+        let baseNames: [String] = liveBlocks.map {
+            objects[$0[0]].sourceURL?.deletingPathExtension().lastPathComponent ?? ""
+        }
+
+        // 3. Saved blocks: split at each expected basename, in order.
+        var savedBlocks: [[Int]] = []
+        var m = 0
+        for (i, sd) in savedObjs.enumerated() {
+            if m < baseNames.count, sd.name == baseNames[m] {
+                savedBlocks.append([i]); m += 1
+            } else if savedBlocks.isEmpty {
+                return false                       // content before the first root → fallback
+            } else {
+                savedBlocks[savedBlocks.count - 1].append(i)
+            }
+        }
+        guard savedBlocks.count == liveBlocks.count else { return false }
+
+        // 4. Restore each model block independently.
+        for (lb, sb) in zip(liveBlocks, savedBlocks) {
+            restoreBlock(live: lb, saved: sb, objects: objects, savedObjs: savedObjs, vp: vp)
+        }
+        print("[DEBUG] ProjectFile: per-model restore — \(liveBlocks.count) model block(s)")
+        return true
+    }
+
+    /// Restores one model's parts: by unique part name when the saved and live
+    /// names correspond (same model), otherwise by within-block position (a
+    /// substituted / renamed model, where names don't line up).
+    private static func restoreBlock(live: [Int], saved: [Int],
+                                     objects: [SceneObject], savedObjs: [ObjectData],
+                                     vp: ViewportView) {
+        var savedByName: [String: Int] = [:]
+        var uniqueNames = true
+        for s in saved {
+            if savedByName.updateValue(s, forKey: savedObjs[s].name) != nil { uniqueNames = false }
+        }
+        let overlap = live.filter { savedByName[objects[$0].name] != nil }.count
+        if uniqueNames, overlap * 2 >= live.count {
+            // Same model → name match (immune to index drift within the block).
+            for l in live {
+                if let s = savedByName[objects[l].name] {
+                    restoreObject(savedObjs[s], into: objects[l], vp: vp)
+                }
+                // No saved counterpart → keep the freshly-loaded GLB base transform.
+            }
+        } else {
+            // Substituted / renamed model → position match within the block.
+            let k = min(live.count, saved.count)
+            for j in 0..<k { restoreObject(savedObjs[saved[j]], into: objects[live[j]], vp: vp) }
+        }
+    }
+
+    /// Restores Inspector state, baseTransform, and the keyframe track for one part.
+    private static func restoreObject(_ saved: ObjectData, into obj: SceneObject,
+                                      vp: ViewportView) {
+        // ── v15: restore Model Inspector state ───────────────────────────────────
+        obj.isVisible = saved.isVisible
+        obj.occludeWhenHidden = saved.occludeWhenHidden   // v17
+        obj.objectClass = ObjectClass(rawValue: saved.objectClass) ?? .background
+        obj.feedbackEnabled = saved.feedbackEnabled
+        if let mode = NormalMode(rawValue: saved.normalMode), mode != .auto {
+            vp.applyNormalMode(mode, toTargets: [obj])
+            obj.normalMode = mode
+        }
+        if saved.metallicFactor >= 0  { obj.material.metallicFactor  = saved.metallicFactor }
+        if saved.roughnessFactor >= 0 { obj.material.roughnessFactor = saved.roughnessFactor }
+        if saved.baseColorFactor.count == 4 {
+            obj.material.baseColorFactor = SIMD4<Float>(
+                saved.baseColorFactor[0], saved.baseColorFactor[1],
+                saved.baseColorFactor[2], saved.baseColorFactor[3])
+        }
+        obj.material.opacity = saved.opacity
+
+        // ── v4: restore baseTransform so manual repositioning survives reload ─────
+        if let m = decodeMatrix(saved.baseTransformMatrix) {
+            obj.baseTransform = m
+            if obj.parentIndex != nil {
+                // Hierarchical part: m is a LOCAL transform.  Set localTransform;
+                // applyHierarchy() computes the world transform next draw.
+                obj.localTransform = m
+                obj.transform      = m   // temporary; overwritten by applyHierarchy
+            } else {
+                obj.transform = m        // root: m is the world transform
+            }
+        }
+
+        // ── Keyframe track ────────────────────────────────────────────────────────
+        guard !saved.keyframes.isEmpty else { return }
+        let track = KeyframeTrack()
+        track.easingMode = EasingMode(rawValue: saved.easingMode) ?? .linear
+        for kf in saved.keyframes {
+            track.addKeyframe(TransformKeyframe(
+                time:        kf.time,
+                translation: SIMD3<Float>(kf.tx, kf.ty, kf.tz),
+                rotation:    simd_quatf(ix: kf.rx, iy: kf.ry, iz: kf.rz, r: kf.rw),
+                scale:       SIMD3<Float>(kf.sx, kf.sy, kf.sz),
+                opacity:     kf.opacity
+            ))
+        }
+        obj.keyframeTrack = track
     }
 
     // MARK: - Apply Glue envelopes (v34)
