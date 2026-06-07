@@ -617,6 +617,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         settingsItem.target = self
         appMenu.addItem(settingsItem)
 
+        let newInstanceItem = NSMenuItem(
+            title: "New Instance",
+            action: #selector(openNewInstance(_:)),
+            keyEquivalent: ""
+        )
+        newInstanceItem.target = self
+        appMenu.addItem(newInstanceItem)
+
         appMenu.addItem(.separator())
 
         appMenu.addItem(NSMenuItem(
@@ -1909,6 +1917,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     // MARK: - Settings
+
+    /// Launches a second, independent instance of this app (separate process) so the
+    /// cross-instance copy/paste workflow has another window to paste into.
+    @objc private func openNewInstance(_ sender: Any) {
+        let url = Bundle.main.bundleURL
+        let config = NSWorkspace.OpenConfiguration()
+        config.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(at: url, configuration: config) { _, error in
+            if let error = error {
+                print("[DEBUG] AppDelegate: openNewInstance failed: \(error)")
+            }
+        }
+    }
 
     @objc private func showSettings(_ sender: Any) {
         // Toggle closed if already showing.
