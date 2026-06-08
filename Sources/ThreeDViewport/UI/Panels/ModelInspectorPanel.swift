@@ -125,6 +125,7 @@ struct ModelInspectorPanel: View {
                 TextField("", text: $state.name)
                     .textFieldStyle(.roundedBorder)
                     .font(.caption)
+                    .disabled(!state.canEditName)
             }
 
             HStack(spacing: 6) {

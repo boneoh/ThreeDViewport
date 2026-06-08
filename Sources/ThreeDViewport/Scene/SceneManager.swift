@@ -75,14 +75,32 @@ final class SceneManager {
     }
 
     /// Display name for a group — uses the source-URL filename of the first part.
+    /// Display name for a group.  When the same model is loaded more than once, the
+    /// instances are numbered ("hand 1", "hand 2") so they're distinguishable in the
+    /// timeline / pickers; a single instance keeps its plain name ("hand").
+    /// Display only — identity/persistence key on filename + occurrence, not this.
     func groupName(for groupID: Int) -> String {
-        guard let first = objects.first(where: { $0.groupID == groupID }) else {
+        guard objects.contains(where: { $0.groupID == groupID }) else {
             return "Group \(groupID)"
         }
-        if let url = first.sourceURL {
-            return url.deletingPathExtension().lastPathComponent
+        func base(_ obj: SceneObject) -> String {
+            obj.sourceURL?.deletingPathExtension().lastPathComponent ?? obj.name
         }
-        return first.name
+        guard let firstOfGroup = objects.first(where: { $0.groupID == groupID }) else {
+            return "Group \(groupID)"
+        }
+        let name = base(firstOfGroup)
+
+        // Count groups sharing this base name (object order) and find this one's spot.
+        var seen = Set<Int>()
+        var total = 0
+        var occurrence = 0
+        for obj in objects {
+            guard let gid = obj.groupID, seen.insert(gid).inserted, base(obj) == name else { continue }
+            total += 1
+            if gid == groupID { occurrence = total }   // 1-based
+        }
+        return total > 1 ? "\(name) \(occurrence)" : name
     }
 
     func clear() {
@@ -269,7 +287,12 @@ final class SceneManager {
     ///   inverse — which is the form the follow code uses for world→local.
     func worldOrbitAnchor(ofObjectNamed name: String)
         -> (pos: SIMD3<Float>, behindYaw: Float, behindPitch: Float, basis: matrix_float3x3)? {
-        guard let obj = objects.first(where: { $0.name == name }) else { return nil }
+        // Match by object name, or — for a grouped model whose follow target is its
+        // display name (e.g. "hand 1") — by the group root's display name.
+        guard let obj = objects.first(where: { $0.name == name })
+            ?? objects.first(where: {
+                $0.parentIndex == nil && $0.groupID != nil && groupName(for: $0.groupID!) == name })
+        else { return nil }
 
         // Rendered world transform of the followed object.  When the model has
         // a group-level keyframe, the group matrix is a multiplier on top of

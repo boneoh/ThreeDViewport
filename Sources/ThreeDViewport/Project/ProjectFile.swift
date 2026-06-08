@@ -272,6 +272,7 @@ final class ProjectFile {
         // ── Group keyframe tracks (v14 / Phase 2) ─────────────────────────────
         // Keyed by sourceFileName so group IDs (runtime ephemeral) can be
         // reconnected on load.  Only tracks with at least one keyframe are stored.
+        let occByGid = groupOccurrences(vp.sceneManager.objects)
         var groupTrackData: [GroupTrackData] = []
         for (gid, track) in vp.sceneManager.groupKeyframeTracks {
             guard !track.keyframes.isEmpty else { continue }
@@ -293,6 +294,7 @@ final class ProjectFile {
             }
             groupTrackData.append(GroupTrackData(
                 sourceFileName: fileName,
+                occurrence:     occByGid[gid] ?? 0,
                 easingMode:     track.easingMode.rawValue,
                 keyframes:      kfData
             ))
@@ -345,8 +347,11 @@ final class ProjectFile {
                 spinSchedData.append(SpinRateScheduleData(
                     targetKind: 2, targetName: vp.sceneManager.objects[i].name, targetIndex: 0, markers: md))
             case .group(let gid):
+                // Key by (filename, occurrence) so it survives reload + duplicates.
+                let fn = vp.sceneManager.objects.first { $0.groupID == gid }?
+                    .sourceURL?.lastPathComponent ?? ""
                 spinSchedData.append(SpinRateScheduleData(
-                    targetKind: 3, targetName: "", targetIndex: gid, markers: md))
+                    targetKind: 3, targetName: fn, targetIndex: occByGid[gid] ?? 0, markers: md))
             default:
                 continue
             }
@@ -597,7 +602,7 @@ final class ProjectFile {
                 print("[DEBUG] ProjectFile: model file not found at " + pathStr)
                 continue
             }
-            vp.addModelToScene(url: modelURL, allowDuplicate: true)
+            vp.addModelToScene(url: modelURL)
             loadedCount += 1
         }
 
@@ -1051,6 +1056,7 @@ final class ProjectFile {
     private static func applyRateSchedules(_ data: ProjectData, to vp: ViewportView) {
         vp.spinRateSchedules  = [:]
         vp.orbitRateSchedules = [:]
+        let gidMap = groupGidMap(vp.sceneManager, substitutedFilenames: [:])
 
         for sd in data.spinRateSchedules {
             let markers = sd.markers.map { SpinRateMarker(time: $0.time, rate: $0.rate, axisIndex: $0.axisIndex) }
@@ -1061,7 +1067,11 @@ final class ProjectFile {
                     vp.spinRateSchedules[.object(i)] = markers
                 }
             case 3:
-                vp.spinRateSchedules[.group(sd.targetIndex)] = markers
+                // New files key by (filename, occurrence); legacy files stored the gid
+                // in targetIndex with an empty targetName.
+                let gid = sd.targetName.isEmpty ? sd.targetIndex
+                                                : gidMap["\(sd.targetName)#\(sd.targetIndex)"]
+                if let gid = gid { vp.spinRateSchedules[.group(gid)] = markers }
             default:
                 break
             }
@@ -1105,28 +1115,14 @@ final class ProjectFile {
         guard !tracksData.isEmpty else { return }
         let sm = vp.sceneManager
 
-        // Build a map: sourceFileName → groupID from the currently loaded objects.
-        var fileToGID: [String: Int] = [:]
-        for obj in sm.objects {
-            guard let gid = obj.groupID,
-                  let fileName = obj.sourceURL?.lastPathComponent
-            else { continue }
-            fileToGID[fileName] = gid
-        }
-        // Alias substituted filenames: original saved name → gid of the file the
-        // user picked as a replacement.  This is what preserves group-level
-        // keyframes through the missing-model resolver flow.
-        for (savedName, loadedName) in substitutedFilenames {
-            if let gid = fileToGID[loadedName] {
-                fileToGID[savedName] = gid
-            }
-        }
+        // "<filename>#<occurrence>" → gid (handles the same model loaded > once).
+        let gidMap = groupGidMap(sm, substitutedFilenames: substitutedFilenames)
 
         for trackData in tracksData {
             guard !trackData.keyframes.isEmpty else { continue }
-            guard let gid = fileToGID[trackData.sourceFileName] else {
+            guard let gid = gidMap["\(trackData.sourceFileName)#\(trackData.occurrence)"] else {
                 print("[DEBUG] ProjectFile: group track skipped — no loaded group"
-                    + " matches '\(trackData.sourceFileName)'")
+                    + " matches '\(trackData.sourceFileName)#\(trackData.occurrence)'")
                 continue
             }
 
@@ -1158,23 +1154,12 @@ final class ProjectFile {
         guard !entries.isEmpty else { return }
         let sm = vp.sceneManager
 
-        var fileToGID: [String: Int] = [:]
-        for obj in sm.objects {
-            guard let gid = obj.groupID,
-                  let fileName = obj.sourceURL?.lastPathComponent
-            else { continue }
-            fileToGID[fileName] = gid
-        }
-        for (savedName, loadedName) in substitutedFilenames {
-            if let gid = fileToGID[loadedName] {
-                fileToGID[savedName] = gid
-            }
-        }
+        let gidMap = groupGidMap(sm, substitutedFilenames: substitutedFilenames)
 
         for entry in entries {
-            guard let gid = fileToGID[entry.sourceFileName] else {
+            guard let gid = gidMap["\(entry.sourceFileName)#\(entry.occurrence)"] else {
                 print("[DEBUG] ProjectFile: group base transform skipped — no loaded group"
-                    + " matches '\(entry.sourceFileName)'")
+                    + " matches '\(entry.sourceFileName)#\(entry.occurrence)'")
                 continue
             }
             guard let m = decodeMatrix(entry.matrix) else { continue }
@@ -1194,6 +1179,7 @@ final class ProjectFile {
     /// evaluator overwrites `gt` on the first frame after load, so the saved
     /// matrix is effectively unused for those.
     private static func captureGroupBaseTransforms(from vp: ViewportView) -> [GroupBaseTransformData] {
+        let occByGid = groupOccurrences(vp.sceneManager.objects)
         var seen: Set<Int> = []
         var out: [GroupBaseTransformData] = []
         for obj in vp.sceneManager.objects {
@@ -1204,10 +1190,52 @@ final class ProjectFile {
             let gt = vp.sceneManager.groupTransforms[gid] ?? matrix_identity_float4x4
             out.append(GroupBaseTransformData(
                 sourceFileName: fileName,
+                occurrence:     occByGid[gid] ?? 0,
                 matrix:         encodeMatrix(gt)
             ))
         }
         return out
+    }
+
+    // MARK: - Group identity (supports the same model loaded multiple times)
+
+    /// gid → occurrence index (0-based) among groups sharing the same source
+    /// filename, in object-array order.  Object order == load order, so the index a
+    /// group gets on save is the same one it gets on load.
+    private static func groupOccurrences(_ objects: [SceneObject]) -> [Int: Int] {
+        var occ: [Int: Int] = [:]
+        var perFile: [String: Int] = [:]
+        for obj in objects {
+            guard let gid = obj.groupID, occ[gid] == nil,
+                  let fn = obj.sourceURL?.lastPathComponent else { continue }
+            let n = perFile[fn, default: 0]
+            occ[gid] = n
+            perFile[fn] = n + 1
+        }
+        return occ
+    }
+
+    /// Load-side counterpart: `"<filename>#<occurrence>"` → gid for the currently
+    /// loaded groups (object order), plus aliases for substituted filenames.
+    private static func groupGidMap(_ sm: SceneManager,
+                                    substitutedFilenames: [String: String]) -> [String: Int] {
+        var map: [String: Int] = [:]
+        var perFile: [String: Int] = [:]
+        var seen = Set<Int>()
+        for obj in sm.objects {
+            guard let gid = obj.groupID, !seen.contains(gid),
+                  let fn = obj.sourceURL?.lastPathComponent else { continue }
+            seen.insert(gid)
+            let n = perFile[fn, default: 0]
+            map["\(fn)#\(n)"] = gid
+            perFile[fn] = n + 1
+        }
+        for (savedName, loadedName) in substitutedFilenames {
+            for occ in 0..<(perFile[loadedName] ?? 0) {
+                if let gid = map["\(loadedName)#\(occ)"] { map["\(savedName)#\(occ)"] = gid }
+            }
+        }
+        return map
     }
 
     /// Encodes a column-major 4×4 matrix as 16 floats.

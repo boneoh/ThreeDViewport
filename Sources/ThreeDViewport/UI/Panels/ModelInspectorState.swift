@@ -31,6 +31,9 @@ final class ModelInspectorState: ObservableObject {
     @Published var scale:           SIMD3<Float>    = SIMD3<Float>(1, 1, 1)
     /// Editing is allowed only for a single root object; copy works for any selection.
     @Published var canEditPosition: Bool            = false
+    /// Name is editable only for a standalone object (renaming a model root doesn't
+    /// change its filename-derived timeline name).
+    @Published var canEditName:     Bool            = false
     /// Rotation editing mirrors the same selection rule as position.
     @Published var canEditRotation: Bool            = false
     /// Scale editing is enabled for a single non-grouped root (writes
@@ -93,14 +96,16 @@ final class ModelInspectorState: ObservableObject {
 
     // Push a new selection into state, suppressing the Combine sinks so that
     // reading from the objects doesn't immediately write back to them.
-    func update(targets newTargets: [SceneObject]) {
+    func update(targets newTargets: [SceneObject], displayName: String) {
         isUpdating   = true
         defer { isUpdating = false }
         targets      = newTargets
         hasSelection = !newTargets.isEmpty
         guard let first = newTargets.first else { return }
 
-        name            = first.name
+        // Matches the Timeline Editor's first-column name (group display name with
+        // any duplicate-instance suffix for models; object name for standalone).
+        name            = displayName
         filename        = first.sourceURL?.deletingPathExtension().lastPathComponent ?? ""
         partCount       = newTargets.count
         normalMode      = first.normalMode
@@ -127,6 +132,9 @@ final class ModelInspectorState: ObservableObject {
         canEditPosition = singleNonGroupRoot || allSameGroup
         canEditRotation = canEditPosition
         canEditScale    = canEditPosition
+        // The name is editable only for a standalone object (renaming a model's
+        // root doesn't change its filename-derived timeline name, so it's read-only).
+        canEditName     = singleNonGroupRoot
 
         canAddToFavorites = favoritesEligible?(newTargets) ?? false
     }

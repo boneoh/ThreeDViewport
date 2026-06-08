@@ -203,7 +203,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             } else {
                 targets = []
             }
-            self.modelInspectorState?.update(targets: targets)
+            self.modelInspectorState?.update(targets: targets,
+                                             displayName: self.timelineDisplayName(for: targets))
             // Refresh the Effects grid's rows + highlight (fires on object-array
             // changes too, so add/remove/load all keep the grid current).
             self.effectsGridState?.sync()
@@ -704,6 +705,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         fileMenu.addItem(NSMenuItem.separator())
 
+        // Export Glued Model — enabled (validateMenuItem) when an envelope is selected.
+        let exportGlueItem = NSMenuItem(
+            title: "Export Glued Model…",
+            action: #selector(exportGluedModel(_:)),
+            keyEquivalent: ""
+        )
+        exportGlueItem.target = self
+        fileMenu.addItem(exportGlueItem)
+
+        fileMenu.addItem(NSMenuItem.separator())
+
         let openLightingHDRItem = NSMenuItem(
             title: "Open Lighting HDR...",
             action: #selector(openLightingHDR(_:)),
@@ -798,15 +810,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         )
         unglueItem.target = self
         editMenu.addItem(unglueItem)
-
-        // Export Glued Model — enabled (validateMenuItem) when an envelope is selected.
-        let exportGlueItem = NSMenuItem(
-            title: "Export Glued Model…",
-            action: #selector(exportGluedModel(_:)),
-            keyEquivalent: ""
-        )
-        exportGlueItem.target = self
-        editMenu.addItem(exportGlueItem)
 
         // ── View menu — rendering toggles only ───────────────────────────────
         let viewItem = NSMenuItem()
@@ -1317,36 +1320,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 return
             }
             print("[DEBUG] AppDelegate: openModel — " + url.lastPathComponent)
-            // A duplicate file name is blocked (group animation + lookups are keyed
-            // by name, so two copies would collide on save/load); a load failure
-            // already shows its own error from addModelToScene.
-            switch self?.viewportView?.addModelToScene(url: url) {
-            case .added:
+            // The same file may be added more than once; a load failure already
+            // shows its own error from addModelToScene.
+            if self?.viewportView?.addModelToScene(url: url) == .added {
                 self?.markDirty()
                 self?.timelineEditorWC?.updateWindowHeight()
                 self?.refreshCameraFollowTargets()
-            case .duplicate:
-                self?.showDuplicateModelAlert(name: url.lastPathComponent)
-            case .failed, .none:
-                break
             }
         }
-    }
-
-    /// Informational alert shown when the user tries to add a model file whose name
-    /// is already in the scene (blocked because identity is keyed by file name).
-    private func showDuplicateModelAlert(name: String) {
-        let alert = NSAlert()
-        alert.messageText = "“\(name)” is already in the scene."
-        alert.informativeText =
-            "Each model file can only be added once. Group animation and keyframes "
-            + "are tracked by file name, so a second copy would collide with the "
-            + "first when the project is saved.\n\n"
-            + "To place another instance, duplicate the file under a new name and "
-            + "add that."
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
     }
 
     // MARK: - Add Model to Scene (Phase 6)
@@ -2359,6 +2340,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     /// Refreshes the Camera panel's Follow Target list from the current scene.
     /// Call after any scene mutation (project load, model open/replace/remove)
     /// so the picker never shows stale objects from a previous scene.
+    /// The Timeline Editor's first-column display name for a selection: a group's
+    /// (possibly duplicate-suffixed) display name for a model, else the object name.
+    private func timelineDisplayName(for targets: [SceneObject]) -> String {
+        guard let first = targets.first, let sm = viewportView?.sceneManager else { return "" }
+        return first.groupID.map { sm.groupName(for: $0) } ?? first.name
+    }
+
     private func refreshCameraFollowTargets() {
         guard let viewport = viewportView else { return }
         // Sort alphabetically (natural order so `head10` follows `head2`,
@@ -2367,18 +2355,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // Dedupe — two robots both export "head" / "ankle_L" / etc.; SwiftUI
         // Picker's id:\.self crashes warnings on duplicate strings, and a
         // picker with two identical tags can't represent a stable selection.
+        // Use the same display names as the Timeline Editor's first column: a group
+        // root shows the group's (possibly suffixed) name; parts/standalone show
+        // their object name.  Envelopes (glued assemblies) are included so the whole
+        // unit can be followed — they appear in the timeline as a standalone row.
+        let sm = viewport.sceneManager
         var seen = Set<String>()
         viewport.cameraPanelState.availableObjectNames =
-            viewport.sceneManager.objects
-                .map { $0.name }
+            sm.objects
+                .map { obj -> String in
+                    (obj.parentIndex == nil && obj.groupID != nil)
+                        ? sm.groupName(for: obj.groupID!) : obj.name
+                }
                 .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
                 .filter { seen.insert($0).inserted }
-        // If the previously-chosen follow target no longer exists in the
-        // scene (e.g. the model was removed or replaced), reset to free
-        // camera so the picker shows a valid selection.
+        // Reconcile the chosen target with the new list.  Older projects stored a
+        // grouped model's ROOT object name (e.g. "hand"); migrate it to the group's
+        // display name (e.g. "hand 1") so the picker shows a valid selection.  If
+        // the target is truly gone, fall back to free camera.
         if let chosen = viewport.cameraPanelState.followTargetName,
            !viewport.cameraPanelState.availableObjectNames.contains(chosen) {
-            viewport.cameraPanelState.followTargetName = nil
+            if let root = sm.objects.first(where: {
+                $0.name == chosen && $0.parentIndex == nil && $0.groupID != nil }) {
+                viewport.cameraPanelState.followTargetName = sm.groupName(for: root.groupID!)
+            } else {
+                viewport.cameraPanelState.followTargetName = nil
+            }
         }
     }
 
@@ -2603,7 +2605,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         } else {
             targets = []
         }
-        state.update(targets: targets)
+        state.update(targets: targets, displayName: timelineDisplayName(for: targets))
 
         // Wire callbacks.
         state.onRedraw = { [weak viewport] in viewport?.needsDisplay = true }
@@ -3165,8 +3167,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     /// Builds the Path Animator "Target" dropdown list from the scene, restricted to
     /// the track kinds a given animator supports.  Alphabetical by label (GUI
-    /// convention).  Envelopes are skipped; grouped parts are represented by their
-    /// group (when groups are included), standalone objects individually.
+    /// convention).  Grouped parts are represented by their group (when groups are
+    /// included), standalone objects individually; an envelope (glued assembly) is
+    /// a standalone-style target so the whole unit can be animated.
     private func pathAnimatorTargets(camera: Bool, lights: Bool,
                                      objects: Bool, groups: Bool) -> [PathTarget] {
         guard let viewport = viewportView else { return [] }
@@ -3179,7 +3182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             }
         }
         var seenGroups = Set<Int>()
-        for (i, obj) in viewport.sceneManager.objects.enumerated() where !obj.isEnvelope {
+        for (i, obj) in viewport.sceneManager.objects.enumerated() {
             if let gid = obj.groupID {
                 if groups, seenGroups.insert(gid).inserted {
                     result.append(PathTarget(label: viewport.sceneManager.groupName(for: gid),
@@ -3955,7 +3958,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
         markDirty()
         // Recompute the inspector so the button disables now that it's a favourite.
-        modelInspectorState?.update(targets: group)
+        modelInspectorState?.update(targets: group, displayName: timelineDisplayName(for: group))
         print("[DEBUG] AppDelegate: added to favourites — " + ctx.aliasURL.path)
     }
 

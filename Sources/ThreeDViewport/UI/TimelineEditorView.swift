@@ -183,7 +183,7 @@ final class TimelineEditorView: NSView {
 
     // ── Layout constants ──────────────────────────────────────────────────────
 
-    private let labelWidth:      CGFloat = 240
+    private let labelWidth:      CGFloat = 360
     private let rulerHeight:     CGFloat = 24
     private let laneHeight:      CGFloat = 28
     private let diamondHalfSize: CGFloat = 5

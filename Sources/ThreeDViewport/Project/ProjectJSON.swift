@@ -861,10 +861,28 @@ struct LightKeyframeData: Codable {
 struct GroupTrackData: Codable {
     /// The filename (e.g. "robot.glb") of the model whose group this track animates.
     var sourceFileName: String
+    /// Which instance of that filename (0-based, in load order) — distinguishes the
+    /// same model loaded more than once.  Absent in older files → 0.
+    var occurrence:     Int = 0
     /// EasingMode.rawValue — 0 = .linear.  Absent in older files → 0.
     var easingMode:     Int = 0
     /// The keyframe array for this group track.
     var keyframes:      [KeyframeData] = []
+
+    init(sourceFileName: String, occurrence: Int = 0, easingMode: Int = 0,
+         keyframes: [KeyframeData] = []) {
+        self.sourceFileName = sourceFileName
+        self.occurrence     = occurrence
+        self.easingMode     = easingMode
+        self.keyframes      = keyframes
+    }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        sourceFileName = (try? c.decode(String.self,          forKey: .sourceFileName)) ?? ""
+        occurrence     = (try? c.decode(Int.self,             forKey: .occurrence))     ?? 0
+        easingMode     = (try? c.decode(Int.self,             forKey: .easingMode))     ?? 0
+        keyframes      = (try? c.decode([KeyframeData].self,  forKey: .keyframes))      ?? []
+    }
 }
 
 // Snapshot of `sceneManager.groupTransforms[gid]` for a group, keyed by the
@@ -878,5 +896,19 @@ struct GroupTrackData: Codable {
 // (the pre-fix behaviour).
 struct GroupBaseTransformData: Codable {
     var sourceFileName: String
+    /// Which instance of that filename (0-based, load order).  Absent in older files → 0.
+    var occurrence:     Int = 0
     var matrix:         [Float]   // 16 floats, column-major
+
+    init(sourceFileName: String, occurrence: Int = 0, matrix: [Float]) {
+        self.sourceFileName = sourceFileName
+        self.occurrence     = occurrence
+        self.matrix         = matrix
+    }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        sourceFileName = (try? c.decode(String.self,  forKey: .sourceFileName)) ?? ""
+        occurrence     = (try? c.decode(Int.self,     forKey: .occurrence))     ?? 0
+        matrix         = (try? c.decode([Float].self, forKey: .matrix))         ?? []
+    }
 }
