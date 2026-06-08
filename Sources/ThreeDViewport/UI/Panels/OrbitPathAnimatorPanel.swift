@@ -12,7 +12,7 @@ import simd
 // Workflow:
 //   1. Place the Probe at the orbit centre, click "Capture Axis Start"; place it
 //      along the desired tilt and click "Capture Axis End" (same point = level).
-//   2. Pick a target, set radius + rate, scrub the playhead, "Add Rate Keyframe".
+//   2. Pick a target, set radius + rate, scrub the playhead, "Create Keyframes".
 //   3. Add more markers to change rate over time; rate 0 stops it.
 
 /// Observable state, held on the ViewportView so captures + field values survive
@@ -94,7 +94,7 @@ struct OrbitPathAnimatorPanel: View {
                         .fixedSize(horizontal: false, vertical: true)
 
                     Button(action: addMarker) {
-                        Text("Add Rate Keyframe").frame(maxWidth: .infinity)
+                        Text("Create Keyframes").frame(maxWidth: .infinity)
                     }
                     .keyboardShortcut(.defaultAction)
                     if !state.markers.isEmpty {

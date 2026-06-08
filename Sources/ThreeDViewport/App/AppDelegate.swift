@@ -3249,7 +3249,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let rate = Double(state.rate) else {
             state.validationAlert = "Rate must be a number (rev/s)."; return
         }
-        let t = viewport.timeline.currentTime
+        // The first rate keyframe anchors at frame 0 so the orbit covers the whole
+        // timeline by default; later ones land at the playhead.
+        let t = state.markers.isEmpty ? 0 : viewport.timeline.currentTime
         var markers = state.markers.filter { abs($0.time - t) >= 1e-3 }
         markers.append(OrbitRateMarker(time: t, rate: rate))
         markers.sort { $0.time < $1.time }
@@ -3293,7 +3295,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         spinReloadFromSchedule()
 
         if let panel = spinPanel {
-            panel.isVisible ? panel.orderOut(nil) : panel.makeKeyAndOrderFront(nil)
+            if panel.isVisible {
+                panel.orderOut(nil)
+            } else {
+                spinSeedDefaultMarkerIfEmpty()
+                panel.makeKeyAndOrderFront(nil)
+            }
             return
         }
 
@@ -3326,8 +3333,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
 
         spinPanel = panel
+        spinSeedDefaultMarkerIfEmpty()
         panel.makeKeyAndOrderFront(nil)
         print("[DEBUG] AppDelegate: spin animator panel opened")
+    }
+
+    /// On first showing the Spin panel for a target that has no markers yet, seed a
+    /// rate marker at frame 0 (using the current Rate / axis fields) so the object
+    /// spins across the whole timeline by default — the rate-marker analog of
+    /// Linear/Curve defaulting their time window to the full timeline.
+    private func spinSeedDefaultMarkerIfEmpty() {
+        guard let viewport = viewportView else { return }
+        let state = viewport.spinAnimatorState
+        guard let ref = state.capturedRef, state.markers.isEmpty,
+              let rate = Double(state.rate),
+              let perRev = Float(state.perRev), perRev >= 3 else { return }
+        let markers = [SpinRateMarker(time: 0, rate: rate, axisIndex: state.axisIndex)]
+        viewport.setSpinSchedule(ref: ref, markers: markers, keyframesPerRevolution: perRev)
+        state.markers = markers
+        timelineEditorWC?.editorView.needsDisplay = true
+        markDirty()
+        state.status = "Seeded full-timeline spin at frame 0."
     }
 
     /// Loads the selected target's persisted spin markers into the panel.
@@ -3353,7 +3379,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let perRev = Float(state.perRev), perRev >= 3 else {
             state.validationAlert = "Keyframes / rev must be ≥ 3."; return
         }
-        let t = viewport.timeline.currentTime
+        // The first rate keyframe anchors at frame 0 so the spin covers the whole
+        // timeline by default; later ones land at the playhead.
+        let t = state.markers.isEmpty ? 0 : viewport.timeline.currentTime
         var markers = (viewport.spinRateSchedules[ref] ?? []).filter { abs($0.time - t) >= 1e-3 }
         markers.append(SpinRateMarker(time: t, rate: rate, axisIndex: state.axisIndex))
         markers.sort { $0.time < $1.time }

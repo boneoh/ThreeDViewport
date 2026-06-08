@@ -11,7 +11,7 @@ import simd
 //
 // Workflow:
 //   1. Pick a target (object or model) from the dropdown.
-//   2. Set the rate + local axis, scrub the playhead, click "Add Rate Keyframe".
+//   2. Set the rate + local axis, scrub the playhead, click "Create Keyframes".
 //   3. Add more markers to change rate over time; rate 0 stops it.
 
 /// Observable state, held on the ViewportView so field values survive panel hide/show.
@@ -75,7 +75,7 @@ struct SpinAnimatorPanel: View {
                         .fixedSize(horizontal: false, vertical: true)
 
                     Button(action: addMarker) {
-                        Text("Add Rate Keyframe").frame(maxWidth: .infinity)
+                        Text("Create Keyframes").frame(maxWidth: .infinity)
                     }
                     .keyboardShortcut(.defaultAction)
                 }
