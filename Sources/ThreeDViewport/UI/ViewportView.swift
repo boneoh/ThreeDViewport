@@ -132,6 +132,18 @@ final class ViewportView: MTKView {
         }
     }
 
+    /// Whether the 'V' keyframe motion-path overlay is currently on (View menu read).
+    var motionVectorsVisible: Bool { showMotionVectors }
+
+    /// Toggles the motion-path overlay — the View menu's "Vector Path" item, mirroring
+    /// the V key.
+    func toggleMotionVectors() {
+        showMotionVectors.toggle()
+        updateMotionVectorTarget()
+        needsDisplay = true
+        print("[DEBUG] ViewportView: motion vectors = " + String(showMotionVectors))
+    }
+
     // Input state
     private var lastMouseLocation: NSPoint = .zero
     private var isSpaceDown: Bool = false

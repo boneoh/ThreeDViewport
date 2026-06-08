@@ -55,6 +55,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     // Edit > Remove submenu — repopulated dynamically by NSMenuDelegate.
     private var removeSubmenu: NSMenu?
+    // Marks menu — Go To / Delete submenus repopulated dynamically by NSMenuDelegate.
+    private var goToMarkSubmenu:  NSMenu?
+    private var deleteMarkSubmenu: NSMenu?
 
     // Timeline editor (AppKit canvas panel).
     private var timelineEditorWC: TimelineEditorWindowController?
@@ -204,6 +207,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             // Refresh the Effects grid's rows + highlight (fires on object-array
             // changes too, so add/remove/load all keep the grid current).
             self.effectsGridState?.sync()
+        }
+
+        // Viewport / timeline selection change → highlight the timeline lane AND
+        // keep any open Path Animator panel's Target in step with the selection.
+        // Centralised here (rather than in showTimelineEditor) so the sync works even
+        // before the timeline editor has been opened.
+        viewport.onControlModeChanged = { [weak self] ref in
+            self?.timelineEditorWC?.editorView.selectTrack(ref)
+            self?.syncPathAnimatorPanelsToSelection(ref)
         }
 
         if viewport.device == nil {
@@ -820,6 +832,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         gizmoItem.target = self
         viewMenu.addItem(gizmoItem)
 
+        // Vector Path — toggles the keyframe motion-path overlay (also the V key).
+        let vectorPathItem = NSMenuItem(
+            title: "Vector Path",
+            action: #selector(toggleVectorPath(_:)),
+            keyEquivalent: ""
+        )
+        vectorPathItem.target = self
+        viewMenu.addItem(vectorPathItem)
+
         viewMenu.addItem(.separator())
 
         // Loop Playback — when on, animation restarts instead of stopping at the end
@@ -830,6 +851,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         )
         loopItem.target = self
         viewMenu.addItem(loopItem)
+
+        // ── Marks menu — saved position marks ──────────────────────────────────
+        let marksItem = NSMenuItem()
+        mainMenu.addItem(marksItem)
+        let marksMenu = NSMenu(title: "Marks")
+        marksItem.submenu = marksMenu
+
+        let addMarkItem = NSMenuItem(title: "Add Mark",
+                                     action: #selector(promptForMarkMenu(_:)),
+                                     keyEquivalent: "")
+        addMarkItem.target = self
+        marksMenu.addItem(addMarkItem)
+
+        let goToMarkItem = NSMenuItem(title: "Go To Mark", action: nil, keyEquivalent: "")
+        let goToSub = NSMenu(title: "Go To Mark")
+        goToSub.delegate = self
+        goToMarkItem.submenu = goToSub
+        goToMarkSubmenu = goToSub
+        marksMenu.addItem(goToMarkItem)
+
+        let deleteMarkItem = NSMenuItem(title: "Delete Mark", action: nil, keyEquivalent: "")
+        let deleteSub = NSMenu(title: "Delete Mark")
+        deleteSub.delegate = self
+        deleteMarkItem.submenu = deleteSub
+        deleteMarkSubmenu = deleteSub
+        marksMenu.addItem(deleteMarkItem)
+
+        marksMenu.addItem(.separator())
+
+        let showMarksItem = NSMenuItem(title: "Show Marks",
+                                       action: #selector(toggleMarks(_:)),
+                                       keyEquivalent: "")
+        showMarksItem.target = self
+        marksMenu.addItem(showMarksItem)
 
         // ── Window menu — panels + macOS-standard items ────────────────────────
         let windowItem = NSMenuItem()
@@ -929,14 +984,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         )
         probeInspectorItem.target = self
         windowMenu.addItem(probeInspectorItem)
-
-        let showMarksItem = NSMenuItem(
-            title: "Show Marks",
-            action: #selector(toggleMarks(_:)),
-            keyEquivalent: ""
-        )
-        showMarksItem.target = self
-        windowMenu.addItem(showMarksItem)
+        // (Show Marks moved to the dedicated Marks menu.)
 
         let pathAnimatorItem = NSMenuItem(title: "Path Animator", action: nil, keyEquivalent: "")
         let pathSubmenu = NSMenu(title: "Path Animator")
@@ -1663,6 +1711,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // MARK: - Save Project
 
     @objc private func saveProject(_ sender: Any) {
+        guard confirmSaveKeyframes() else { return }
         if let url = currentProjectURL {
             guard let viewport = viewportView else { return }
             do {
@@ -1674,11 +1723,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 showErrorAlert(message: "Could not save project", detail: error.localizedDescription)
             }
         } else {
-            saveProjectAs(sender)
+            presentSaveAsPanel()
         }
     }
 
     @objc private func saveProjectAs(_ sender: Any) {
+        guard confirmSaveKeyframes() else { pendingQuitAfterSave = false; return }
+        presentSaveAsPanel()
+    }
+
+    private func presentSaveAsPanel() {
         guard let window = window else { return }
         guard let viewport = viewportView else { return }
 
@@ -1739,6 +1793,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                                     detail: error.localizedDescription)
             }
         }
+    }
+
+    // MARK: - Save keyframe-coverage check
+
+    /// Lists the friendly names of animatable units (camera, enabled lights,
+    /// standalone objects, models, envelopes) that have NO keyframes anywhere — a
+    /// likely "forgot to animate it" oversight.  Parts driven by their group /
+    /// envelope are NOT flagged (that's correct coverage).
+    private func unkeyframedUnits() -> [String] {
+        guard let vp = viewportView else { return [] }
+        var flagged: [String] = []
+
+        // Camera.
+        if vp.camera.keyframeTrack?.keyframes.isEmpty ?? true { flagged.append("Camera") }
+
+        // Enabled lights.
+        for (i, light) in vp.lightManager.lights.enumerated() where light.isEnabled {
+            let track = i < vp.lightManager.keyframeTracks.count ? vp.lightManager.keyframeTracks[i] : nil
+            if track?.keyframes.isEmpty ?? true {
+                flagged.append("Light \(i + 1) — \(light.type.displayName)")
+            }
+        }
+
+        // Objects / models / envelopes — one entry per root unit.
+        let sm = vp.sceneManager
+        func ownHasKeys(_ o: SceneObject) -> Bool { !(o.keyframeTrack?.keyframes.isEmpty ?? true) }
+        var seenGroups = Set<Int>()
+        for (idx, obj) in sm.objects.enumerated() where obj.parentIndex == nil {
+            if obj.isEnvelope {
+                let memberAnimated = sm.objects.contains { $0.parentIndex == idx && ownHasKeys($0) }
+                if !ownHasKeys(obj) && !memberAnimated { flagged.append(obj.name) }
+            } else if let gid = obj.groupID {
+                guard seenGroups.insert(gid).inserted else { continue }
+                let groupTrack = sm.groupKeyframeTracks[gid]
+                let groupAnimated = !(groupTrack?.keyframes.isEmpty ?? true)
+                    || sm.objects(inGroup: gid).contains { ownHasKeys($0) }
+                if !groupAnimated { flagged.append(sm.groupName(for: gid)) }
+            } else {
+                if !ownHasKeys(obj) { flagged.append(obj.name) }
+            }
+        }
+        return flagged
+    }
+
+    /// Warns (Save Anyway / Cancel) when some animatable units have no keyframes.
+    /// Returns true to proceed with the save.
+    private func confirmSaveKeyframes() -> Bool {
+        let flagged = unkeyframedUnits()
+        guard !flagged.isEmpty else { return true }
+        let alert = NSAlert()
+        alert.alertStyle      = .warning
+        alert.messageText     = "Some items have no keyframes"
+        alert.informativeText = "These have no animation keyframes — was that intentional?\n\n• "
+            + flagged.joined(separator: "\n• ")
+        alert.addButton(withTitle: "Save Anyway")   // first = default (Return)
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     // MARK: - NSWindowDelegate — main window miniaturize tracking
@@ -1937,6 +2048,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if menuItem.action == #selector(toggleLoopPlayback(_:)) {
             let isOn = viewportView?.timeline.isLooping ?? false
             menuItem.state = isOn ? .on : .off
+        }
+        if menuItem.action == #selector(toggleVectorPath(_:)) {
+            menuItem.state = (viewportView?.motionVectorsVisible ?? false) ? .on : .off
+        }
+        if menuItem.action == #selector(toggleMarks(_:)) {
+            menuItem.state = (viewportView?.probeConfig.marksVisible ?? false) ? .on : .off
         }
         return true
     }
@@ -2674,6 +2791,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         print("[DEBUG] AppDelegate: deleted mark '\(removed.name)'")
     }
 
+    // MARK: - Marks menu actions
+
+    @objc private func promptForMarkMenu(_ sender: Any) { promptForMark() }
+
+    @objc private func toggleVectorPath(_ sender: Any) {
+        viewportView?.toggleMotionVectors()
+    }
+
+    /// Selects mark `index` and recalls the probe to it (Marks ▸ Go To Mark).
+    private func goToMark(index: Int) {
+        guard let viewport = viewportView else { return }
+        let probe = viewport.probeConfig
+        guard probe.marks.indices.contains(index) else { return }
+        probe.marksVisible      = true
+        probe.selectedMarkIndex = index
+        let mark = probe.marks[index]
+        probe.position = mark.position
+        viewport.overlayState.markName = mark.name
+        markDirty()
+    }
+
+    /// Deletes mark `index` (Marks ▸ Delete Mark).
+    private func deleteMark(index: Int) {
+        guard let viewport = viewportView else { return }
+        let probe = viewport.probeConfig
+        guard probe.marks.indices.contains(index) else { return }
+        let removed = probe.marks.remove(at: index)
+        if let sel = probe.selectedMarkIndex {
+            probe.selectedMarkIndex = probe.marks.isEmpty ? nil
+                : (sel == index ? min(index, probe.marks.count - 1) : (sel > index ? sel - 1 : sel))
+        }
+        viewport.overlayState.markName = nil
+        markDirty()
+        print("[DEBUG] AppDelegate: deleted mark '\(removed.name)'")
+    }
+
+    @objc private func goToMarkMenuItem(_ sender: NSMenuItem)   { goToMark(index: sender.tag) }
+    @objc private func deleteMarkMenuItem(_ sender: NSMenuItem) { deleteMark(index: sender.tag) }
+
     // MARK: - Linear Path Animator
 
     @objc private func showLinearPathAnimator(_ sender: Any) {
@@ -2684,6 +2840,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if state.endTime   == nil { state.endTime   = viewport.timeline.duration }
         if let ref = state.capturedRef, !state.targets.contains(where: { $0.ref == ref }) {
             state.capturedRef = nil   // previously-selected target no longer exists
+        }
+        // Default the Target to the current viewport/timeline selection when valid.
+        if let sel = viewport.currentTrackRef, state.targets.contains(where: { $0.ref == sel }) {
+            state.capturedRef = sel
         }
 
         if let panel = linearPathPanel {
@@ -2782,6 +2942,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if state.endTime   == nil { state.endTime   = viewport.timeline.duration }
         if let ref = state.capturedRef, !state.targets.contains(where: { $0.ref == ref }) {
             state.capturedRef = nil   // previously-selected target no longer exists
+        }
+        // Default the Target to the current viewport/timeline selection when valid.
+        if let sel = viewport.currentTrackRef, state.targets.contains(where: { $0.ref == sel }) {
+            state.capturedRef = sel
         }
 
         if let panel = curvePathPanel {
@@ -2886,6 +3050,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if let ref = state.capturedRef, !state.targets.contains(where: { $0.ref == ref }) {
             state.capturedRef = nil   // previously-selected target no longer exists
         }
+        // Default the Target to the current viewport/timeline selection when valid.
+        if let sel = viewport.currentTrackRef, state.targets.contains(where: { $0.ref == sel }) {
+            state.capturedRef = sel
+        }
         orbitReloadFromSchedule()
 
         if let panel = orbitPathPanel {
@@ -2949,6 +3117,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         case .group(let gid):
             return viewportView?.sceneManager.groupName(for: gid) ?? "Model \(gid)"
         default:             return "Unsupported"
+        }
+    }
+
+    /// Keeps any OPEN Spin / Orbit panel's Target in step with the viewport /
+    /// timeline selection (the dropdown can still override until the next change).
+    /// Setting `capturedRef` fires the panel's onChange, which reloads its markers.
+    private func syncPathAnimatorPanelsToSelection(_ ref: TrackRef) {
+        guard let viewport = viewportView else { return }
+
+        // Spin targets objects + models (groups).
+        if spinPanel?.isVisible == true {
+            let s = viewport.spinAnimatorState
+            s.targets = pathAnimatorTargets(camera: false, lights: false, objects: true, groups: true)
+            if s.targets.contains(where: { $0.ref == ref }), s.capturedRef != ref { s.capturedRef = ref }
+        }
+
+        // Orbit / Linear / Curve target camera + lights + objects (no groups).
+        let cloTargets = pathAnimatorTargets(camera: true, lights: true, objects: true, groups: false)
+        let valid      = cloTargets.contains(where: { $0.ref == ref })
+        if orbitPathPanel?.isVisible == true {
+            let s = viewport.orbitPathState
+            s.targets = cloTargets
+            if valid, s.capturedRef != ref { s.capturedRef = ref }
+        }
+        if linearPathPanel?.isVisible == true {
+            let s = viewport.linearPathState
+            s.targets = cloTargets
+            if valid, s.capturedRef != ref { s.capturedRef = ref }
+        }
+        if curvePathPanel?.isVisible == true {
+            let s = viewport.curvePathState
+            s.targets = cloTargets
+            if valid, s.capturedRef != ref { s.capturedRef = ref }
         }
     }
 
@@ -3071,6 +3272,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         state.targets = pathAnimatorTargets(camera: false, lights: false, objects: true, groups: true)
         if let ref = state.capturedRef, !state.targets.contains(where: { $0.ref == ref }) {
             state.capturedRef = nil   // previously-selected target no longer exists
+        }
+        // Default the Target to the current viewport/timeline selection when valid.
+        if let sel = viewport.currentTrackRef, state.targets.contains(where: { $0.ref == sel }) {
+            state.capturedRef = sel
         }
         spinReloadFromSchedule()
 
@@ -3644,12 +3849,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             }
         }
 
-        // ── Viewport mode / selection change → timeline lane highlight ─────────
-        // Pressing C / L / O (or cycling with L / O) in the viewport updates
-        // the highlighted row in the timeline editor.
-        viewport.onControlModeChanged = { [weak wc] ref in
-            wc?.editorView.selectTrack(ref)
-        }
+        // (Viewport mode / selection-change handling — including timeline lane
+        // highlight + Path Animator Target sync — is wired centrally in setup, so
+        // it works whether or not the timeline editor has been opened.)
 
         // ── Atmosphere panel emitter selection → timeline lane highlight ──────
         // Selecting an emitter in the panel (a Weather row, or adding one) highlights
@@ -3978,6 +4180,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // MARK: - Edit > Remove
 
     func menuNeedsUpdate(_ menu: NSMenu) {
+        // Marks ▸ Go To / Delete submenus — rebuilt from the current marks each open.
+        if menu === goToMarkSubmenu || menu === deleteMarkSubmenu {
+            menu.removeAllItems()
+            let marks = viewportView?.probeConfig.marks ?? []
+            if marks.isEmpty {
+                let empty = NSMenuItem(title: "No Marks", action: nil, keyEquivalent: "")
+                empty.isEnabled = false
+                menu.addItem(empty)
+                return
+            }
+            let isGoTo = (menu === goToMarkSubmenu)
+            for (i, mark) in marks.enumerated() {
+                let item = NSMenuItem(
+                    title: mark.name,
+                    action: isGoTo ? #selector(goToMarkMenuItem(_:)) : #selector(deleteMarkMenuItem(_:)),
+                    keyEquivalent: "")
+                item.target = self
+                item.tag    = i
+                menu.addItem(item)
+            }
+            return
+        }
+
         guard menu === removeSubmenu else { return }
         menu.removeAllItems()
         guard let scene = viewportView?.sceneManager else { return }
