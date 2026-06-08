@@ -799,6 +799,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         unglueItem.target = self
         editMenu.addItem(unglueItem)
 
+        // Export Glued Model — enabled (validateMenuItem) when an envelope is selected.
+        let exportGlueItem = NSMenuItem(
+            title: "Export Glued Model…",
+            action: #selector(exportGluedModel(_:)),
+            keyEquivalent: ""
+        )
+        exportGlueItem.target = self
+        editMenu.addItem(exportGlueItem)
+
         // ── View menu — rendering toggles only ───────────────────────────────
         let viewItem = NSMenuItem()
         mainMenu.addItem(viewItem)
@@ -2026,7 +2035,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             // Need at least two root objects to bind together.
             return (viewportView?.sceneManager.rootObjectIndicesSorted.count ?? 0) >= 2
         }
-        if menuItem.action == #selector(unglueSelected(_:)) {
+        if menuItem.action == #selector(unglueSelected(_:))
+            || menuItem.action == #selector(exportGluedModel(_:)) {
             // Enabled only when the current selection is an envelope.
             return viewportView?.sceneManager.selectedObject?.isEnvelope == true
         }
@@ -4358,6 +4368,105 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         markDirty()
         timelineEditorWC?.updateWindowHeight()
         refreshCameraFollowTargets()
+    }
+
+    /// Exports the selected envelope's members (their whole subtree) as one `.glb`
+    /// model, baking each member's rest transform relative to the envelope origin so
+    /// the assembly re-imports as a single reusable model.  Factor materials only.
+    @objc private func exportGluedModel(_ sender: Any) {
+        guard let window = window, let scene = viewportView?.sceneManager,
+              let env = scene.selectedObject, env.isEnvelope else { return }
+        let envIndex = scene.selectedIndex
+        let objects  = scene.objects
+
+        // Rest transform of `objIndex` relative to the envelope (product of
+        // baseTransforms up the chain), or nil if it isn't under this envelope.
+        func restRelative(_ objIndex: Int) -> matrix_float4x4? {
+            var m = matrix_identity_float4x4
+            var cur = objIndex
+            var hops = 0
+            while let p = objects[cur].parentIndex, hops <= objects.count {
+                m = objects[cur].baseTransform * m
+                if p == envIndex { return m }
+                cur = p; hops += 1
+            }
+            return nil
+        }
+
+        var meshes: [GLBExporter.Mesh] = []
+        var droppedTextures = false
+        for (i, obj) in objects.enumerated() where !obj.isEnvelope && obj.indexCount > 0 {
+            guard let rel = restRelative(i),
+                  !obj.cpuPositions.isEmpty, !obj.cpuIndices.isEmpty else { continue }
+            let mat = obj.material
+            // A texture that's loaded but whose source bytes weren't retained can't
+            // be embedded (rare — e.g. an external image that moved); flag those.
+            if (mat.baseColorTexture != nil && mat.baseColorSource == nil)
+                || (mat.metallicRoughnessTexture != nil && mat.metallicRoughnessSource == nil)
+                || (mat.normalTexture != nil && mat.normalSource == nil)
+                || (mat.emissiveTexture != nil && mat.emissiveSource == nil) {
+                droppedTextures = true
+            }
+            let alpha = mat.baseColorFactor.w * mat.opacity
+            meshes.append(GLBExporter.Mesh(
+                name:      obj.name,
+                positions: obj.cpuPositions,
+                normals:   obj.originalNormals.isEmpty ? nil : obj.originalNormals,
+                uvs:       obj.cpuUVs.isEmpty ? nil : obj.cpuUVs,
+                indices:   obj.cpuIndices,
+                transform: rel,
+                baseColor: SIMD4<Float>(mat.baseColorFactor.x, mat.baseColorFactor.y,
+                                        mat.baseColorFactor.z, alpha),
+                metallic:  mat.metallicFactor,
+                roughness: mat.roughnessFactor,
+                emissive:  mat.emissiveFactor,
+                baseColorTex:  mat.baseColorSource,
+                metalRoughTex: mat.metallicRoughnessSource,
+                normalTex:     mat.normalSource,
+                emissiveTex:   mat.emissiveSource))
+        }
+
+        guard !meshes.isEmpty else {
+            showErrorAlert(message: "Nothing to export",
+                           detail: "The selected envelope has no geometry members.")
+            return
+        }
+
+        if droppedTextures {
+            let a = NSAlert()
+            a.alertStyle      = .warning
+            a.messageText     = "Some textures can't be embedded"
+            a.informativeText = "One or more textures have no retained source image (e.g. an "
+                + "external file that moved) and will be dropped — their colour/metalness/"
+                + "roughness factors are still exported. Continue?"
+            a.addButton(withTitle: "Continue")
+            a.addButton(withTitle: "Cancel")
+            guard a.runModal() == .alertFirstButtonReturn else { return }
+        }
+
+        guard let data = GLBExporter.build(meshes: meshes, assetName: env.name) else {
+            showErrorAlert(message: "Export failed", detail: "Could not build the model.")
+            return
+        }
+
+        let panel = NSSavePanel()
+        panel.title                = "Export Glued Model"
+        panel.canCreateDirectories = true
+        panel.directoryURL         = defaultModelDirectory()
+        panel.nameFieldStringValue = env.name + ".glb"
+        if let glb = UTType(filenameExtension: "glb") { panel.allowedContentTypes = [glb] }
+        panel.beginSheetModal(for: window) { [weak self] resp in
+            guard resp == .OK, var url = panel.url else { return }
+            if url.pathExtension.lowercased() != "glb" { url.appendPathExtension("glb") }
+            do {
+                try data.write(to: url)
+                print("[DEBUG] AppDelegate: exported glued model → "
+                    + url.lastPathComponent + " (\(meshes.count) meshes)")
+            } catch {
+                self?.showErrorAlert(message: "Could not write model",
+                                     detail: error.localizedDescription)
+            }
+        }
     }
 
     @objc private func confirmRemoveAll(_ sender: Any) {

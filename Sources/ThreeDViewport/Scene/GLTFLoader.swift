@@ -272,6 +272,7 @@ final class GLTFLoader {
 
         obj.cpuPositions    = positions
         obj.cpuIndices      = indices
+        obj.cpuUVs          = uvs
         obj.originalNormals = normals
         obj.fileHadNormals  = fileHadNormals
 
@@ -317,10 +318,12 @@ final class GLTFLoader {
 
             if let tp = pbr.baseColorTexture, let img = tp.texture.source {
                 mat.baseColorTexture = loadTexture(from: img, sRGB: true)
+                mat.baseColorSource  = imageSource(from: img)
                 print("[DEBUG] GLTFLoader: baseColorTexture " + (mat.baseColorTexture != nil ? "OK" : "FAILED"))
             }
             if let tp = pbr.metallicRoughnessTexture, let img = tp.texture.source {
                 mat.metallicRoughnessTexture = loadTexture(from: img, sRGB: false)
+                mat.metallicRoughnessSource  = imageSource(from: img)
                 print("[DEBUG] GLTFLoader: mrTexture " + (mat.metallicRoughnessTexture != nil ? "OK" : "FAILED"))
             }
 
@@ -339,6 +342,7 @@ final class GLTFLoader {
             // diffuseTexture is the colour map for specular-glossiness materials
             if let tp = sg.diffuseTexture, let img = tp.texture.source {
                 mat.baseColorTexture = loadTexture(from: img, sRGB: true)
+                mat.baseColorSource  = imageSource(from: img)
                 print("[DEBUG] GLTFLoader: sg.diffuseTexture " + (mat.baseColorTexture != nil ? "OK" : "FAILED"))
             }
             print("[DEBUG] GLTFLoader: specularGlossiness fallback — roughness="
@@ -351,6 +355,7 @@ final class GLTFLoader {
         if hasTangents,
            let tp = gm.normalTexture, let img = tp.texture.source {
             mat.normalTexture = loadTexture(from: img, sRGB: false)
+            mat.normalSource  = imageSource(from: img)
             print("[DEBUG] GLTFLoader: normalTexture " + (mat.normalTexture != nil ? "OK" : "FAILED"))
         }
 
@@ -364,11 +369,38 @@ final class GLTFLoader {
 
             if let tp = em.emissiveTexture, let img = tp.texture.source {
                 mat.emissiveTexture = loadTexture(from: img, sRGB: true)
+                mat.emissiveSource  = imageSource(from: img)
                 print("[DEBUG] GLTFLoader: emissiveTexture " + (mat.emissiveTexture != nil ? "OK" : "FAILED"))
             }
         }
 
         return mat
+    }
+
+    /// Extracts a texture's original encoded bytes + mime type (no decode), for the
+    /// GLB exporter to re-embed.  Mirrors loadTexture's source resolution.
+    private func imageSource(from image: GLTFImage) -> TextureSource? {
+        let data: Data
+        if let bv = image.bufferView {
+            guard let buf = bv.buffer.data, bv.length > 0,
+                  bv.offset >= 0, bv.offset + bv.length <= buf.count else { return nil }
+            data = buf.subdata(in: bv.offset..<(bv.offset + bv.length))
+        } else if let uri = image.uri, let d = try? Data(contentsOf: uri) {
+            data = d
+        } else {
+            return nil
+        }
+        // Prefer the declared mime; otherwise sniff PNG vs JPEG from the magic bytes.
+        let mime: String
+        if let m = image.mimeType, !m.isEmpty {
+            mime = m
+        } else if data.count >= 3, data[data.startIndex] == 0xFF,
+                  data[data.startIndex + 1] == 0xD8, data[data.startIndex + 2] == 0xFF {
+            mime = "image/jpeg"
+        } else {
+            mime = "image/png"
+        }
+        return TextureSource(data: data, mimeType: mime)
     }
 
     // MARK: - Texture Loading

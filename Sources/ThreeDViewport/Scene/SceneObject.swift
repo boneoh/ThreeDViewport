@@ -116,6 +116,7 @@ final class SceneObject {
     var normalMode:      NormalMode  = .auto
     var cpuPositions:    [Float]     = []
     var cpuIndices:      [UInt32]    = []
+    var cpuUVs:          [Float]     = []   // packed float2 TEXCOORD_0 (empty if absent)
     var originalNormals: [Float]     = []   // normals as-loaded from file (or initial smooth)
     // True when the source .glb actually shipped a NORMAL accessor.
     // Drives the shader's flat-normal fallback when normalMode == .auto.
