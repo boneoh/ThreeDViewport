@@ -10,7 +10,7 @@ length (FOV). Camera keyframes are **absolute** (the full state at each time).
 
 | Control | Description |
 |---------|-------------|
-| **Follow Target** | Picker. *None — Free Camera* stamps an absolute camera. Choosing an object makes new keyframes **follow** that object — the camera stays glued to it (POV / over-the-shoulder), rebasing on the object's facing each frame. The choice is sticky across stamps. |
+| **Follow Target** | Picker. *None — Free Camera* stamps an absolute camera. Choosing an object makes new keyframes **follow** that object — the camera stays glued to it (POV / over-the-shoulder), rebasing on the object's facing each frame. The choice is sticky across stamps. The list uses the same names as the [Timeline Editor](Timeline-Editor.md)'s first column — multi-part models show their model name (with a numeric suffix like *hand 1* / *hand 2* for repeated copies), and glued **envelopes** appear too, so you can follow a whole glued unit. |
 | **Add Camera Keyframe** | Stamps a keyframe at the playhead using the current camera (free or follow, per the picker). Same as pressing **I** in Camera mode. |
 | **Follow POV** (Distance / Azimuth / Elevation) | When a follow target is set, frames the camera relative to the object; the button stamps a follow keyframe at that relative pose. |
 | **Position X / Y / Z** | The camera eye position (copy / paste / zero). |

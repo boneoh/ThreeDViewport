@@ -31,6 +31,10 @@ the envelope, so the unit looks identical until you animate it.
   the anchor.
 - **Keyframe the envelope** (stamp with **I**, or use the
   [Orbit Path Animator](Orbit-Path-Animator.md)) to animate the unit as one.
+- The envelope appears as a target everywhere a root object can — the
+  [Camera](Camera-Panel.md) **Follow Target**, and the
+  [Spin](Spin-Path-Animator.md) / [Orbit](Orbit-Path-Animator.md) Path Animator
+  **Target** dropdowns — so the whole unit can be followed, spun, or orbited.
 
 ## Animate a single member
 
@@ -44,6 +48,13 @@ keyframes) while spinning on its own axis (B's own keyframes).
 
 Select the envelope and choose **Edit ▸ Unglue** (or remove it via Edit ▸ Remove).
 Members become independent again, keeping their current positions — nothing jumps.
+
+## Export the glued unit as a model
+
+Select the envelope and choose **File ▸ Export Glued Model…** to write the whole unit
+(every member's geometry, flattened by its glued transform, with PBR materials and
+textures) as a single reusable **.glb**. Re-import it as one object to assemble bigger
+scenes from sub-assemblies. The command is enabled only when an envelope is selected.
 
 ## Example: B orbits A *and* spins
 

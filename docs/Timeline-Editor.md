@@ -9,8 +9,14 @@ unrecognised keys are forwarded back to the viewport.
 ## Lanes
 
 Tracks are listed A→Z across all types. Multi-part models appear as a collapsible
-**group header**; click the disclosure triangle to expand its part lanes. Clicking a
-lane label selects that track (the target for paste).
+**group header**; click the disclosure triangle to expand its part lanes. A glued
+[envelope](Glue.md) appears as its own lane. Clicking a lane label selects that track
+(the target for paste).
+
+The first column's name is the canonical name used throughout the app (the HUD, the
+[Model Inspector](Model-Inspector.md), and the Camera / Path-Animator target
+dropdowns all match it). When the same model is loaded more than once, the copies are
+disambiguated with a numeric suffix — *hand 1*, *hand 2*, etc.
 
 ## Keyboard
 

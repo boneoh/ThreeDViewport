@@ -99,7 +99,7 @@ See also [Viewport-Navigation](docs/Viewport-Navigation.md), [Export](docs/Expor
 
 ### Load models
 
-Open `.glb` (single binary) or `.gltf` + `.bin` (JSON + sidecar) via **File → Open Model…** (⌘O). Multiple models can be loaded; each is auto-normalised to a 1-unit bounding sphere on first load. The camera fits to the first model; additional models append without resetting the camera. Hierarchical rigs (e.g. a character with named bones) preserve their parent-child structure for FK animation.
+Open `.glb` (single binary) or `.gltf` + `.bin` (JSON + sidecar) via **File → Open Model…** (⌘O). Multiple models can be loaded; each is auto-normalised to a 1-unit bounding sphere on first load. The camera fits to the first model; additional models append without resetting the camera. Hierarchical rigs (e.g. a character with named bones) preserve their parent-child structure for FK animation. You can load the **same model more than once** to assemble a figure from repeated parts (two hands, two feet); the copies are disambiguated everywhere with a numeric suffix (*hand 1*, *hand 2*).
 
 ### Animate with keyframes
 

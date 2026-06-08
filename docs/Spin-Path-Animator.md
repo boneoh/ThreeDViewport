@@ -11,8 +11,10 @@ To change speed, drop another marker; to stop, drop a marker with rate **0**. Th
 makes dialling a spin in (and adjusting it later) much quicker than hand-keying a
 window of rotations.
 
-It works on two kinds of track: a single **object** lane, or a **model** (group)
-lane — a multi-part model that spins as a whole about its own centre.
+It works on three kinds of track: a single **object** lane, a **model** (group)
+lane — a multi-part model that spins as a whole about its own centre — or a glued
+**envelope** lane, which spins the whole [glued](Glue.md) unit in place. Cameras and
+lights aren't offered (self-spin isn't meaningful for them).
 
 This is the in-place counterpart to the [Orbit Path Animator](Orbit-Path-Animator.md),
 which moves an object *around* an external axis.
@@ -21,13 +23,18 @@ which moves an object *around* an external axis.
 
 ## Workflow
 
-1. **Target:** pick an **object** or **model** from the **Target** dropdown.
+1. **Target:** pick an **object**, **model**, or glued **envelope** from the
+   **Target** dropdown. It defaults to the current selection when that selection is
+   something spinnable.
 2. **Spin Rate:** choose the **Local axis** (X / Y / Z — Y is a top-like spin), set
    the **Rate (rev/s)** (negative reverses direction), and **Keyframes / rev**.
-3. Scrub the playhead to where the rate should take effect, then **Add Rate
-   Keyframe**.
-4. Repeat to change the rate over time. Add a marker with **Rate 0** where you want
-   the spin to stop and hold.
+3. Click **Create Keyframes** to drop a rate marker. The **first** marker for a
+   target anchors at **frame 0** so the spin covers the whole timeline by default —
+   in fact, opening the panel for an object that has no spin yet **seeds that frame-0
+   marker for you** using the current Rate, so it spins start-to-end immediately.
+4. For a later rate change, scrub the playhead to where it should take effect and
+   click **Create Keyframes** again. Add a marker with **Rate 0** where you want the
+   spin to stop and hold.
 
 Each marker is listed under **Rate Keyframes** (time · rate · axis) with an **×** to
 delete it, plus **Clear All**. The markers are saved with the project, so you can
@@ -63,8 +70,8 @@ reopen it later and tweak a rate.
   hand-keyed frames *before* the first marker are left alone.
 - The spin starts from the object's **current orientation** at the first marker — no
   pop at the start.
-- **Object** and **model** tracks only (self-spin isn't meaningful for cameras or
-  lights).
+- **Object**, **model**, and glued **envelope** tracks only (self-spin isn't
+  meaningful for cameras or lights, so they aren't offered).
 - An **object** spins about its **local origin (pivot)**; if a single mesh's pivot
   is off-centre the spin looks like a small orbit around that pivot. A **model**
   (group) spins about its **bounding centre**, so multi-part models turn in place.

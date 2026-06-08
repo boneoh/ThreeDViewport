@@ -23,12 +23,15 @@ just edit a rate instead of re-keying a whole sweep.
    → **Capture Axis Start**; move it along the desired tilt → **Capture Axis End**
    (the same point = a level, world-up orbit). The plane's normal is the
    start → end direction. (Copy / paste / zero icons share the Probe clipboard.)
-2. **Target:** pick a camera / light / object from the **Target** dropdown.
+2. **Target:** pick a camera, light, object, or glued **envelope** from the
+   **Target** dropdown (defaults to the current selection when valid).
 3. **Orbit Rate:** set the **Radius**, **Rate (rev/s)** (negative reverses
    direction), and **Keyframes / rev**.
-4. Scrub the playhead to where the rate should take effect, then **Add Rate
-   Keyframe**.
-5. Repeat to change the rate over time; add a **Rate 0** marker to stop.
+4. Click **Create Keyframes** to drop a rate marker. The **first** marker for a
+   target anchors at **frame 0** so the orbit covers the whole timeline by default —
+   no need to scrub to the start first.
+5. For a later rate change, scrub the playhead to where it should take effect and
+   click **Create Keyframes** again; add a **Rate 0** marker to stop.
 
 Each marker is listed under **Rate Keyframes** (time · rate) with an **×** to delete
 it, plus **Clear All**. The axis and radius are **shared by the whole track** —
