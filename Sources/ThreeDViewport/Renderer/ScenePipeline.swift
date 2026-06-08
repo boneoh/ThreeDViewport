@@ -146,14 +146,16 @@ final class ScenePipeline {
             laserDesc.fragmentFunction                = laserFragFn
             laserDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
             laserDesc.depthAttachmentPixelFormat      = .depth32Float
-            // Additive RGB blend — beam brightens the scene; destination alpha preserved
+            // Additive RGB blend — beam brightens the scene.  Alpha = beam glow
+            // composited "over" so the beam contributes to the content mask (so it
+            // isn't washed out over the sky under feedback) + the export coverage matte.
             let laserCA = laserDesc.colorAttachments[0]!
             laserCA.isBlendingEnabled           = true
             laserCA.sourceRGBBlendFactor        = .one
             laserCA.destinationRGBBlendFactor   = .one
             laserCA.rgbBlendOperation           = .add
-            laserCA.sourceAlphaBlendFactor      = .zero     // preserve dest alpha
-            laserCA.destinationAlphaBlendFactor = .one
+            laserCA.sourceAlphaBlendFactor      = .one
+            laserCA.destinationAlphaBlendFactor = .oneMinusSourceAlpha
             laserCA.alphaBlendOperation         = .add
             do {
                 laserBeam = try device.makeRenderPipelineState(descriptor: laserDesc)
@@ -183,8 +185,8 @@ final class ScenePipeline {
             hitCA.sourceRGBBlendFactor        = .one
             hitCA.destinationRGBBlendFactor   = .one
             hitCA.rgbBlendOperation           = .add
-            hitCA.sourceAlphaBlendFactor      = .zero
-            hitCA.destinationAlphaBlendFactor = .one
+            hitCA.sourceAlphaBlendFactor      = .one     // contribute to content mask
+            hitCA.destinationAlphaBlendFactor = .oneMinusSourceAlpha
             hitCA.alphaBlendOperation         = .add
             do {
                 laserHit = try device.makeRenderPipelineState(descriptor: hitDesc)
@@ -210,8 +212,8 @@ final class ScenePipeline {
             sparkCA.sourceRGBBlendFactor        = .one
             sparkCA.destinationRGBBlendFactor   = .one
             sparkCA.rgbBlendOperation           = .add
-            sparkCA.sourceAlphaBlendFactor      = .zero
-            sparkCA.destinationAlphaBlendFactor = .one
+            sparkCA.sourceAlphaBlendFactor      = .one     // contribute to content mask
+            sparkCA.destinationAlphaBlendFactor = .oneMinusSourceAlpha
             sparkCA.alphaBlendOperation         = .add
             do {
                 spark = try device.makeRenderPipelineState(descriptor: sparkDesc)
@@ -237,7 +239,11 @@ final class ScenePipeline {
             ca.sourceRGBBlendFactor        = .sourceAlpha
             ca.destinationRGBBlendFactor   = .oneMinusSourceAlpha
             ca.rgbBlendOperation           = .add
-            ca.sourceAlphaBlendFactor      = .sourceAlpha
+            // Correct straight-"over" alpha accumulation (was .sourceAlpha, which
+            // under-counted coverage as src.a²): smoke now contributes its true
+            // coverage to the content mask + export matte, so it isn't washed out
+            // over the sky under feedback.
+            ca.sourceAlphaBlendFactor      = .one
             ca.destinationAlphaBlendFactor = .oneMinusSourceAlpha
             ca.alphaBlendOperation         = .add
             do {

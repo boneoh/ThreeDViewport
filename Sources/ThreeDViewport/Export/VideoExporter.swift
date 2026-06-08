@@ -799,6 +799,25 @@ final class VideoExporter {
             visibleOff = []
         }
 
+        // Holdout objects (hidden but occluding); hoisted so the opaque-only FX depth
+        // pre-pass below can reuse them.  Transparent parts are excluded — they don't
+        // block weather/fog/lasers.
+        let holdoutObjects = sceneManager.objects.filter {
+            !$0.isVisible && $0.occludeWhenHidden
+                && !($0.material.opacity < 1.0 || $0.material.baseColorFactor.w < 1.0)
+        }
+
+        // Opaque-only depth for fog + excluded lasers, so transparent glass doesn't
+        // clip those FX behind windows (mirrors the live Renderer).  Allocated per
+        // frame — export is offline, so the extra textures are cheap.
+        let hasExcludedBeams = exportLights.contains {
+            $0.type == .laser && $0.isEnabled && $0.excludeBeamFromFeedback
+        }
+        let needFxDepth = (fogSettings?.isEnabled == true)
+                       || (feedbackActive && includeLaserFX && hasExcludedBeams)
+        let fxDepth: MTLTexture? = needFxDepth ? makeDepthTexture() : nil
+        let fxColor: MTLTexture? = needFxDepth ? makeGradeTexture() : nil
+
         if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: passDesc) {
 
             // ── Background gradient / environment skybox ──────────────────────
@@ -815,10 +834,7 @@ final class VideoExporter {
             // visible geometry behind them is cut to background — matches preview.
             // Transparent parts (glass) are excluded: they don't block weather/fog
             // when visible, so they must not occlude FX as depth-only holdouts.
-            let holdoutObjects = sceneManager.objects.filter {
-                !$0.isVisible && $0.occludeWhenHidden
-                    && !($0.material.opacity < 1.0 || $0.material.baseColorFactor.w < 1.0)
-            }
+            // (holdoutObjects hoisted above for reuse by the FX depth pre-pass.)
             if !holdoutObjects.isEmpty, let holdout = holdoutPipelineState {
                 SceneGeometryEncoder.encode(
                     into:            encoder,
@@ -872,6 +888,25 @@ final class VideoExporter {
             encoder.endEncoding()
         }
 
+        // ── Opaque-only depth pre-pass (fog + excluded lasers) ────────────────
+        // Opaque geometry + opaque holdouts depth-only into fxDepth, so the fog
+        // raymarch / excluded-laser pass clamp against opaque depth (not glass).
+        if needFxDepth, let fx = fxDepth, let fxc = fxColor {
+            let desc = MTLRenderPassDescriptor()
+            desc.colorAttachments[0].texture     = fxc
+            desc.colorAttachments[0].loadAction  = .clear
+            desc.colorAttachments[0].storeAction = .dontCare
+            desc.depthAttachment.texture         = fx
+            desc.depthAttachment.loadAction      = .clear
+            desc.depthAttachment.clearDepth      = 1.0
+            desc.depthAttachment.storeAction     = .store
+            if let fxEnc = commandBuffer.makeRenderCommandEncoder(descriptor: desc) {
+                let (opaque, _) = splitOpaqueTransparent(visibleObjects)
+                encodeOpaqueGeometry(opaque + holdoutObjects, into: fxEnc)
+                fxEnc.endEncoding()
+            }
+        }
+
         // Environment-excluded-from-feedback: draw the skybox fresh onto colorTex
         // first, so the feedback composite lands over it (matches the live preview).
         if excludeBg {
@@ -912,16 +947,19 @@ final class VideoExporter {
         }
 
         // ── Excluded beams + hit effects + all sparks (after feedback, no trails) ──
-        if includeLaserFX, feedbackActive, let fp = feedbackProc, let depthTex = fp.depthTexture {
+        // Depth-test against opaque-only fxDepth (falls back to feedback depth) so
+        // beams behind window glass aren't depth-rejected.
+        if includeLaserFX, feedbackActive, let fp = feedbackProc,
+           let depthTex = fxDepth ?? fp.depthTexture {
             scenePipeline.encodeExcludedLaserBeams(commandBuffer: commandBuffer,
                                                    dest: colorTex, depthTex: depthTex, sceneCtx)
         }
 
         // ── Fog volume composite (last; fog + feedback coexist) ───────────────
-        // Samples the feedback pass's depth when feedback is on, else the frame's
-        // scene depth — matches the live preview.
+        // Clamps to opaque-only fxDepth so glass doesn't cut fog off behind windows;
+        // falls back to the per-mode scene depth if the pre-pass texture is absent.
         if fogSettings?.isEnabled == true {
-            let fogDepth = feedbackActive ? feedbackProc?.depthTexture : depthTex
+            let fogDepth = fxDepth ?? (feedbackActive ? feedbackProc?.depthTexture : depthTex)
             if let fogTex = fogDepth {
                 scenePipeline.encodeFogVolume(commandBuffer: commandBuffer,
                                               dest: colorTex, depthTex: fogTex, sceneCtx)

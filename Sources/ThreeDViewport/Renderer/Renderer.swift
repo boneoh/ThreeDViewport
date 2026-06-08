@@ -118,6 +118,14 @@ final class Renderer: NSObject, MTKViewDelegate {
     // depth attachment; the fog pass then samples it to clamp rays to scene depth.
     private var fogSceneDepth: MTLTexture?
 
+    // Opaque-only scene depth for the fog raymarch and excluded-laser post-pass.
+    // Rendered by a depth pre-pass that draws ONLY opaque geometry + opaque
+    // holdouts — so transparent glass (which writes depth for its own self-
+    // occlusion) does NOT clip fog / lasers behind windows.  `fxColorThrowaway`
+    // is a discarded colour target so the pre-pass can reuse the opaque pipeline.
+    private var fxDepth:          MTLTexture?
+    private var fxColorThrowaway: MTLTexture?
+
     // MARK: - Weather particles (optional — set by ViewportView after init)
     var particleManager: ParticleManager?
     // (Particle pipeline + seed buffer now live in ScenePipeline.)
@@ -427,6 +435,21 @@ final class Renderer: NSObject, MTKViewDelegate {
         print("[DEBUG] Renderer: fog scene depth rebuilt \(width)×\(height)")
     }
 
+    /// (Re)builds the opaque-only FX depth texture + its throwaway colour target.
+    private func rebuildFxDepth(width: Int, height: Int) {
+        guard width > 0, height > 0 else { return }
+        let d = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .depth32Float, width: width, height: height, mipmapped: false)
+        d.usage = [.shaderRead, .renderTarget]; d.storageMode = .private
+        fxDepth = device.makeTexture(descriptor: d)
+
+        let c = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
+        c.usage = [.renderTarget]; c.storageMode = .private
+        fxColorThrowaway = device.makeTexture(descriptor: c)
+        print("[DEBUG] Renderer: fx (opaque-only) depth rebuilt \(width)×\(height)")
+    }
+
     // (Fog volume composite now lives in ScenePipeline.encodeFogVolume.)
 
     /// While the timeline is paused, makes the Fog/Weather panel + paused render
@@ -620,6 +643,18 @@ final class Renderer: NSObject, MTKViewDelegate {
             if fogSceneDepth?.width != w || fogSceneDepth?.height != h {
                 rebuildFogSceneDepth(width: w, height: h)
             }
+        }
+
+        // Opaque-only depth pre-pass is needed for fog (always) and for excluded
+        // lasers (only meaningful when feedback is on).  Without it, transparent
+        // glass would clip those FX behind windows.
+        let hasExcludedBeams = animatedLights.contains {
+            $0.type == .laser && $0.isEnabled && $0.excludeBeamFromFeedback
+        }
+        let needFxDepth = fogActive || (feedbackActive && hasExcludedBeams)
+        if needFxDepth {
+            let w = drawable.texture.width, h = drawable.texture.height
+            if fxDepth?.width != w || fxDepth?.height != h { rebuildFxDepth(width: w, height: h) }
         }
 
         let passDescriptor: MTLRenderPassDescriptor
@@ -820,6 +855,27 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         encoder.endEncoding()
 
+        // ── Opaque-only depth pre-pass (for fog + excluded lasers) ────────────
+        // Draw opaque geometry + opaque holdouts depth-only into fxDepth, so the
+        // fog raymarch and excluded-laser pass clamp/test against opaque depth and
+        // are NOT cut off by transparent glass (which writes depth in the main pass
+        // for its own self-occlusion).
+        if needFxDepth, let fx = fxDepth, let fxc = fxColorThrowaway {
+            let desc = MTLRenderPassDescriptor()
+            desc.colorAttachments[0].texture     = fxc
+            desc.colorAttachments[0].loadAction  = .clear
+            desc.colorAttachments[0].storeAction = .dontCare   // colour discarded
+            desc.depthAttachment.texture         = fx
+            desc.depthAttachment.loadAction      = .clear
+            desc.depthAttachment.clearDepth      = 1.0
+            desc.depthAttachment.storeAction     = .store
+            if let fxEnc = commandBuffer.makeRenderCommandEncoder(descriptor: desc) {
+                let depthSet = visibleObjects.filter { !isTransparentMat($0) } + holdoutObjects
+                encodeOpaqueGeometry(depthSet, into: fxEnc)
+                fxEnc.endEncoding()
+            }
+        }
+
         // Environment-excluded-from-feedback: draw the skybox fresh onto the drawable
         // first, so the feedback composite (premultiplied, source-over) lands over it.
         if excludeBg {
@@ -871,19 +927,21 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
 
         // ── Excluded laser beams + their hit effects + all sparks ─────────────
-        // Drawn after feedback so none of these get feedback trails.
-        if feedbackActive, let fp = feedbackProcessor, let depthTex = fp.depthTexture {
+        // Drawn after feedback so none of these get feedback trails.  Depth-test
+        // against the OPAQUE-only fxDepth (falls back to feedback depth) so beams
+        // behind window glass aren't depth-rejected.
+        if feedbackActive, let fp = feedbackProcessor, let depthTex = fxDepth ?? fp.depthTexture {
             scenePipeline?.encodeExcludedLaserBeams(commandBuffer: commandBuffer,
                                                     dest: drawable.texture,
                                                     depthTex: depthTex, sceneCtx)
         }
 
         // ── Fog volume composite (last, over scene + lasers) ──────────────────
-        // Raymarch the fog over the drawable, sampling scene depth for occlusion:
-        // the feedback pass's depth when feedback is on, else the dedicated fog-scene
-        // depth.  This is what lets fog and feedback coexist.
+        // Raymarch the fog over the drawable, clamping rays to the OPAQUE-only
+        // fxDepth so the glass doesn't cut fog off behind windows.  Falls back to
+        // the old per-mode depth if the pre-pass texture isn't available.
         if fogActive {
-            let fogDepth = feedbackActive ? feedbackProcessor?.depthTexture : fogSceneDepth
+            let fogDepth = fxDepth ?? (feedbackActive ? feedbackProcessor?.depthTexture : fogSceneDepth)
             if let depthTex = fogDepth {
                 scenePipeline?.encodeFogVolume(commandBuffer: commandBuffer,
                                                dest: drawable.texture, depthTex: depthTex, sceneCtx)
