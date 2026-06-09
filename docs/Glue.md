@@ -38,11 +38,16 @@ the envelope, so the unit looks identical until you animate it.
 
 ## Animate a single member
 
-After gluing, a member is no longer a viewport-cycleable root — **select it from
-its lane in the [Timeline Editor](Timeline-Editor.md)**. From there you can move it,
-keyframe it, or give it its own [Spin](Spin-Path-Animator.md). A member's own
-animation **composes on top of** the envelope's, so e.g. B can orbit A (envelope
-keyframes) while spinning on its own axis (B's own keyframes).
+In the [Timeline Editor](Timeline-Editor.md) the envelope renders as a **collapsible
+group**: a header row with a **disclosure triangle**, and its members nested
+underneath. Expand it and **select a member's lane** to move it, keyframe it, or give
+it its own [Spin](Spin-Path-Animator.md). Each member keeps its **own** track (and its
+own easing) — unlike a loaded multi-part model, whose parts share one group track.
+
+A member's own animation **composes on top of** the envelope's, so e.g. B can orbit A
+(envelope keyframes) while spinning on its own axis (B's own keyframes). You can even
+spin each member on a different axis — A in X, B in Y, the envelope C in Z — for
+layered, compound motion.
 
 ## Unglue
 
@@ -55,6 +60,14 @@ Select the envelope and choose **File ▸ Export Glued Model…** to write the w
 (every member's geometry, flattened by its glued transform, with PBR materials and
 textures) as a single reusable **.glb**. Re-import it as one object to assemble bigger
 scenes from sub-assemblies. The command is enabled only when an envelope is selected.
+
+> **The export is baked.** A reimported glued model comes in as an ordinary
+> multi-part model — one unit driven as a whole (Model mode, a single group track).
+> Its former members are now just parts of that model, so you can **no longer spin or
+> orbit them as independent objects** the way you could inside the envelope (they
+> don't appear as separate Spin/Orbit targets anymore). If you still need per-member
+> motion, keep the original project with the live envelope and export only when the
+> assembly is final.
 
 ## Example: B orbits A *and* spins
 
