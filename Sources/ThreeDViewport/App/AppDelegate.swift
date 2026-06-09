@@ -775,6 +775,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         followCamItem.target = self
         editMenu.addItem(followCamItem)
 
+        // Duplicate Object — adds another instance of the selected object/model,
+        // carrying its material overrides + placement (validateMenuItem gates it).
+        let duplicateItem = NSMenuItem(
+            title: "Duplicate Object",
+            action: #selector(duplicateObject(_:)),
+            keyEquivalent: "d"
+        )
+        duplicateItem.target = self
+        editMenu.addItem(duplicateItem)
+
         editMenu.addItem(.separator())
 
         let removeItem = NSMenuItem(title: "Remove", action: nil, keyEquivalent: "")
@@ -2004,6 +2014,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     // Keep menu item checkmarks in sync with current rendering state.
+    /// True when the active selection is an editable object/model — not the camera,
+    /// a light, the director, or a fog/particle (Effects) lane.  The control mode is
+    /// the reliable signal; the timeline lane additionally catches fog/particles
+    /// (which have no viewport control mode of their own).
+    private var isObjectOrModelSelected: Bool {
+        switch viewportView?.currentTrackRef {
+        case .object, .group: break
+        default:              return false
+        }
+        if let tl = timelineEditorWC?.editorView.selectedTrackRef {
+            switch tl {
+            case .fog, .particles: return false
+            default:               break
+            }
+        }
+        return true
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(replaceSelectedModel(_:)) {
             // Disabled when no object is selected.
@@ -2022,21 +2050,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             return viewportView?.sceneManager.selectedObject?.isEnvelope == true
         }
         if menuItem.action == #selector(exportModel(_:)) {
-            // The control mode (camera / object / light / model / director) reliably
-            // reflects the viewport's current target — enable only for object/model.
-            switch viewportView?.currentTrackRef {
-            case .object, .group: break
-            default:              return false
-            }
-            // Fog / particle (Effects) lanes have no viewport control mode, so also
-            // grey it out when the timeline's selected lane is one of those.
-            if let tl = timelineEditorWC?.editorView.selectedTrackRef {
-                switch tl {
-                case .fog, .particles: return false
-                default:               break
-                }
-            }
-            return true
+            return isObjectOrModelSelected
+        }
+        if menuItem.action == #selector(duplicateObject(_:)) {
+            // Same object/model gate, plus needs a source file to reload from (so an
+            // envelope / geometryless selection is excluded).
+            return isObjectOrModelSelected
+                && viewportView?.sceneManager.selectedObject?.sourceURL != nil
         }
         if menuItem.action == #selector(toggleColorMode(_:)) {
             // Three modes can't be shown by a single checkmark, so reflect the
@@ -4568,6 +4588,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                                      detail: error.localizedDescription)
             }
         }
+    }
+
+    /// Duplicates the selected object/model: re-adds another instance from the same
+    /// file (the robust load path, so it persists like loading the file twice), then
+    /// carries the original's material overrides + places the copy at the original's
+    /// position plus a small offset.  Animation is intentionally not copied.
+    @objc private func duplicateObject(_ sender: Any) {
+        guard let viewport = viewportView else { return }
+        let sm = viewport.sceneManager
+        guard let sel = sm.selectedObject, let url = sel.sourceURL else { return }
+
+        // Capture the source's state BEFORE the duplicate is appended.
+        let sourceGid   = sel.groupID
+        let sourceParts = sourceGid.map { sm.objects(inGroup: $0) } ?? [sel]
+        let sourceGroupT = sourceGid.flatMap { sm.groupTransforms[$0] }
+        let sourceXform  = sel.transform
+        let before       = sm.objects.count
+
+        guard viewport.addModelToScene(url: url) == .added else { return }
+
+        let newObjects = Array(sm.objects[before...])
+        guard !newObjects.isEmpty else { return }
+        let newGid = newObjects.first(where: { $0.parentIndex == nil })?.groupID
+
+        // 1. Carry the inspector material overrides (factors only — the duplicate
+        //    loads its own textures from the same file).  Match parts by name for a
+        //    multi-part model (part names are unique within a model).
+        func carry(from src: PBRMaterial, to dst: inout PBRMaterial) {
+            dst.baseColorFactor  = src.baseColorFactor
+            dst.metallicFactor   = src.metallicFactor
+            dst.roughnessFactor  = src.roughnessFactor
+            dst.opacity          = src.opacity
+            dst.emissiveFactor   = src.emissiveFactor
+            dst.emissiveStrength = src.emissiveStrength
+        }
+        if sourceGid != nil {
+            var srcByName: [String: SceneObject] = [:]
+            for p in sourceParts { srcByName[p.name] = p }
+            for n in newObjects where srcByName[n.name] != nil {
+                carry(from: srcByName[n.name]!.material, to: &n.material)
+            }
+        } else if let n = newObjects.first {
+            carry(from: sel.material, to: &n.material)
+        }
+
+        // 2. Place the copy at the original's position + a small offset.
+        var offset = matrix_identity_float4x4
+        offset.columns.3 = SIMD4<Float>(0.5, 0, 0.5, 1)
+        if let newGid {
+            sm.groupTransforms[newGid] = offset * (sourceGroupT ?? matrix_identity_float4x4)
+        } else if let n = newObjects.first {
+            n.transform     = offset * sourceXform
+            n.baseTransform = n.transform
+        }
+
+        markDirty()
+        viewport.syncOverlayState()
+        refreshCameraFollowTargets()
+        timelineEditorWC?.editorView.needsDisplay = true
+        timelineEditorWC?.updateWindowHeight()
+        viewport.renderer?.invalidateAnimationCache()
+        print("[DEBUG] AppDelegate: duplicated '\(sel.name)' → \(newObjects.count) new object(s)")
     }
 
     @objc private func confirmRemoveAll(_ sender: Any) {
