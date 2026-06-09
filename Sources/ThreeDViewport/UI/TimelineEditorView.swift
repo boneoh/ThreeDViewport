@@ -48,8 +48,6 @@ struct TrackRow {
     var isGroupHeader: Bool  = false
     /// True for part rows shown when a group is expanded (indented name, no easing popup).
     var isIndented:    Bool  = false
-    /// Set on group-header rows — the groupID that owns this header.
-    var groupID:       Int?  = nil
 }
 
 // MARK: - Coordinate channel paste (Part B2)
@@ -415,8 +413,10 @@ final class TimelineEditorView: NSView {
     // groupIDs that are currently expanded (showing per-part rows).
     // All groups start collapsed so complex models appear as a single row.
 
-    private var expandedGroups:     Set<Int> = []
-    private var lastExpandedGroups: Set<Int> = []
+    // Expanded header rows, keyed by the header's own ref so multi-part model groups
+    // (.group) and glued envelopes (.object) can both be collapsed/expanded.
+    private var expandedHeaders:     Set<TrackRef> = []
+    private var lastExpandedHeaders: Set<TrackRef> = []
 
     // ── Easing popup buttons ──────────────────────────────────────────────────
     // One NSPopUpButton per object lane, positioned in the right half of the label
@@ -500,12 +500,23 @@ final class TimelineEditorView: NSView {
             }
         }
 
+        // Index a glued envelope's direct simple members (parentIndex → envelope,
+        // no groupID) so they can nest under the envelope like group parts.
+        var envelopeMembers: [Int: [(idx: Int, obj: SceneObject)]] = [:]
+        for (i, obj) in objects.enumerated() {
+            if obj.groupID == nil, let p = obj.parentIndex,
+               p < objects.count, objects[p].isEnvelope {
+                envelopeMembers[p, default: []].append((i, obj))
+            }
+        }
+
         // One top-level entry per row, tagged with the name used to sort it and a
         // monotonic `order` used only as a stable tiebreaker for equal names.
         enum RowEntry {
             case camera
             case standalone(idx: Int, obj: SceneObject)
             case group(gid: Int)
+            case envelope(idx: Int)
             case light(idx: Int)
             case fog
             case particles(idx: Int, name: String)
@@ -531,9 +542,14 @@ final class TimelineEditorView: NSView {
         }
         var seenGroups = Set<Int>()
         for (i, obj) in objects.enumerated() {
-            if let gid = obj.groupID {
+            if obj.isEnvelope {
+                add(sceneManager?.displayName(for: obj) ?? obj.name, .envelope(idx: i))
+            } else if let gid = obj.groupID {
                 guard seenGroups.insert(gid).inserted else { continue }
                 add(sceneManager?.groupName(for: gid) ?? "Group", .group(gid: gid))
+            } else if let p = obj.parentIndex, p < objects.count, objects[p].isEnvelope {
+                // Direct simple member of a glued envelope — nested under it, not top-level.
+                continue
             } else {
                 add(sceneManager?.displayName(for: obj) ?? obj.name, .standalone(idx: i, obj: obj))
             }
@@ -565,13 +581,30 @@ final class TimelineEditorView: NSView {
                 let gName = sceneManager?.groupName(for: gid) ?? "Group"
                 let parts = groupOrder[gid] ?? []
                 result.append(TrackRow(name: gName, ref: .group(gid),
-                                       isGroupHeader: true, groupID: gid))
-                if expandedGroups.contains(gid) {
+                                       isGroupHeader: true))
+                if expandedHeaders.contains(.group(gid)) {
                     // Parts sorted alphabetically by name, beneath their header.
                     let sorted = parts.sorted { $0.obj.name.localizedStandardCompare($1.obj.name) == .orderedAscending }
                     for pair in sorted {
                         result.append(TrackRow(name: pair.obj.name,
                                                ref: .object(pair.idx),
+                                               isIndented: true))
+                    }
+                }
+            case .envelope(let idx):
+                // A glued envelope renders like a group: a collapsible header with its
+                // simple members nested.  The header's own ref is .object(idx) (the
+                // envelope is a real, keyframeable object); it only shows a disclosure
+                // triangle when it actually has nestable members.
+                let members = (envelopeMembers[idx] ?? [])
+                    .sorted { $0.obj.name.localizedStandardCompare($1.obj.name) == .orderedAscending }
+                let name = sceneManager?.displayName(for: objects[idx]) ?? objects[idx].name
+                result.append(TrackRow(name: name, ref: .object(idx),
+                                       isGroupHeader: !members.isEmpty))
+                if !members.isEmpty, expandedHeaders.contains(.object(idx)) {
+                    for m in members {
+                        result.append(TrackRow(name: m.obj.name,
+                                               ref: .object(m.idx),
                                                isIndented: true))
                     }
                 }
@@ -857,8 +890,8 @@ final class TimelineEditorView: NSView {
         let popupReserved: CGFloat = 64   // popup width (58) + right margin (3) + gap (3)
 
         for (i, row) in tracks.enumerated() {
-            if row.isGroupHeader, let gid = row.groupID {
-                let triStr  = (expandedGroups.contains(gid) ? "▼" : "▶") as NSString
+            if row.isGroupHeader {
+                let triStr  = (expandedHeaders.contains(row.ref) ? "▼" : "▶") as NSString
                 let triAttrs: [NSAttributedString.Key: Any] = [
                     .font:            NSFont.systemFont(ofSize: 12, weight: .bold),
                     .foregroundColor: NSColor(white: 0.92, alpha: 1)
@@ -1085,13 +1118,13 @@ final class TimelineEditorView: NSView {
                 multiSelectedDiamonds.removeAll()
             }
 
-            if row.isGroupHeader, let gid = row.groupID {
+            if row.isGroupHeader {
                 // Toggle expansion only via the disclosure triangle.
                 if pt.x - labelOriginX < triangleZone {
-                    if expandedGroups.contains(gid) {
-                        expandedGroups.remove(gid)
+                    if expandedHeaders.contains(row.ref) {
+                        expandedHeaders.remove(row.ref)
                     } else {
-                        expandedGroups.insert(gid)
+                        expandedHeaders.insert(row.ref)
                     }
                     rebuildEasingPopups()
                     onLayoutChanged?()   // resize document view / panel for new row count
@@ -2288,10 +2321,10 @@ final class TimelineEditorView: NSView {
         let objCount     = sm.objects.count
         let needsRebuild = objCount != lastObjectCount
                         || bounds   != lastBounds
-                        || expandedGroups != lastExpandedGroups
+                        || expandedHeaders != lastExpandedHeaders
         lastObjectCount     = objCount
         lastBounds          = bounds
-        lastExpandedGroups  = expandedGroups
+        lastExpandedHeaders = expandedHeaders
 
         if needsRebuild {
             rebuildEasingPopups()
