@@ -408,7 +408,9 @@ final class ViewportView: MTKView {
                 obj.sourceURL     = url
                 obj.groupID       = gid
             }
-            objects.first?.name = baseName
+            // Name a single-mesh model after its file; multi-part models keep each
+            // part's real glTF node name (the group header already shows the file).
+            if objects.count == 1 { objects.first?.name = baseName }
 
             sceneManager.objects = objects
             sceneManager.selectedIndex = 0
@@ -457,7 +459,9 @@ final class ViewportView: MTKView {
                 obj.sourceURL     = url
                 obj.groupID       = gid
             }
-            objects.first?.name = baseName
+            // Name a single-mesh model after its file; multi-part models keep each
+            // part's real glTF node name (the group header already shows the file).
+            if objects.count == 1 { objects.first?.name = baseName }
 
             let isFirst = sceneManager.objects.isEmpty
             // Offset every parentIndex in the new batch by the number of objects
@@ -668,17 +672,17 @@ final class ViewportView: MTKView {
         case .object:
             let idx = sceneManager.selectedIndex
             overlayState.selectedItemName = idx < sceneManager.objects.count
-                ? sceneManager.objects[idx].name : ""
+                ? sceneManager.displayName(for: sceneManager.objects[idx]) : ""
         case .light:
             overlayState.selectedItemName = "Light \(lightManager.selectedIndex + 1)"
         case .model:
-            // Show the model's timeline name (with any duplicate-instance suffix)
-            // and how many parts it has.
+            // Show the model's timeline name (with any duplicate-instance suffix).
             if let gid = sceneManager.selectedGroupID {
-                let count = sceneManager.objects(inGroup: gid).count
-                overlayState.selectedItemName = "\(sceneManager.groupName(for: gid)) (\(count) parts)"
+                overlayState.selectedItemName = sceneManager.groupName(for: gid)
+            } else if let obj = sceneManager.selectedObject {
+                overlayState.selectedItemName = sceneManager.displayName(for: obj)
             } else {
-                overlayState.selectedItemName = sceneManager.selectedObject?.name ?? ""
+                overlayState.selectedItemName = ""
             }
         case .director:
             overlayState.selectedItemName = "POV"

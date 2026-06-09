@@ -2344,7 +2344,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     /// (possibly duplicate-suffixed) display name for a model, else the object name.
     private func timelineDisplayName(for targets: [SceneObject]) -> String {
         guard let first = targets.first, let sm = viewportView?.sceneManager else { return "" }
-        return first.groupID.map { sm.groupName(for: $0) } ?? first.name
+        return first.groupID.map { sm.groupName(for: $0) } ?? sm.displayName(for: first)
     }
 
     private func refreshCameraFollowTargets() {
@@ -2363,10 +2363,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         var seen = Set<String>()
         viewport.cameraPanelState.availableObjectNames =
             sm.objects
-                .map { obj -> String in
-                    (obj.parentIndex == nil && obj.groupID != nil)
-                        ? sm.groupName(for: obj.groupID!) : obj.name
-                }
+                .map { sm.displayName(for: $0) }
                 .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
                 .filter { seen.insert($0).inserted }
         // Reconcile the chosen target with the new list.  Older projects stored a
@@ -3189,7 +3186,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                                              ref: .group(gid)))
                 }
             } else if objects {
-                result.append(PathTarget(label: obj.name, ref: .object(i)))
+                result.append(PathTarget(label: viewport.sceneManager.displayName(for: obj),
+                                         ref: .object(i)))
             }
         }
         result.sort { $0.label.localizedStandardCompare($1.label) == .orderedAscending }

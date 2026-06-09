@@ -103,6 +103,28 @@ final class SceneManager {
         return total > 1 ? "\(name) \(occurrence)" : name
     }
 
+    /// The canonical display name used everywhere in the UI (Timeline first column,
+    /// HUD, Inspector, Camera-Follow + Path-Animator pickers).  A grouped model's
+    /// root resolves to the group name; a simple top-level object shows its own name,
+    /// **numbered** ("cube 1", "cube 2") when more than one simple object shares it;
+    /// group members keep their part name.
+    func displayName(for obj: SceneObject) -> String {
+        // Members (of a group or a glued envelope) keep their own part name.
+        guard obj.parentIndex == nil else { return obj.name }
+        // A grouped model's root resolves to the group name.
+        if let gid = obj.groupID { return groupName(for: gid) }
+        // Simple top-level object: number duplicates by object/load order.
+        let name = obj.name
+        var total = 0
+        var occurrence = 0
+        for o in objects where o.parentIndex == nil && o.groupID == nil {
+            guard o.name == name else { continue }
+            total += 1
+            if o === obj { occurrence = total }   // 1-based
+        }
+        return total > 1 ? "\(name) \(occurrence)" : name
+    }
+
     func clear() {
         print("[DEBUG] SceneManager: clearing " + String(objects.count) + " object(s)")
         objects.removeAll()
@@ -287,11 +309,11 @@ final class SceneManager {
     ///   inverse — which is the form the follow code uses for world→local.
     func worldOrbitAnchor(ofObjectNamed name: String)
         -> (pos: SIMD3<Float>, behindYaw: Float, behindPitch: Float, basis: matrix_float3x3)? {
-        // Match by object name, or — for a grouped model whose follow target is its
-        // display name (e.g. "hand 1") — by the group root's display name.
-        guard let obj = objects.first(where: { $0.name == name })
-            ?? objects.first(where: {
-                $0.parentIndex == nil && $0.groupID != nil && groupName(for: $0.groupID!) == name })
+        // Match by the canonical display name (handles grouped models "hand 1" and
+        // duplicated simple objects "cube 2"), falling back to the raw object name
+        // for older projects that stored a plain part name.
+        guard let obj = objects.first(where: { displayName(for: $0) == name })
+            ?? objects.first(where: { $0.name == name })
         else { return nil }
 
         // Rendered world transform of the followed object.  When the model has

@@ -535,7 +535,7 @@ final class TimelineEditorView: NSView {
                 guard seenGroups.insert(gid).inserted else { continue }
                 add(sceneManager?.groupName(for: gid) ?? "Group", .group(gid: gid))
             } else {
-                add(obj.name, .standalone(idx: i, obj: obj))
+                add(sceneManager?.displayName(for: obj) ?? obj.name, .standalone(idx: i, obj: obj))
             }
         }
         for i in 0..<lightCount {
@@ -557,14 +557,14 @@ final class TimelineEditorView: NSView {
             case .particles(let idx, let name):
                 result.append(TrackRow(name: name, ref: .particles(idx)))
             case .standalone(let idx, let obj):
-                result.append(TrackRow(name: obj.name, ref: .object(idx)))
+                result.append(TrackRow(name: sceneManager?.displayName(for: obj) ?? obj.name,
+                                       ref: .object(idx)))
             case .light(let idx):
                 result.append(TrackRow(name: lightLaneName(idx), ref: .light(idx)))
             case .group(let gid):
                 let gName = sceneManager?.groupName(for: gid) ?? "Group"
                 let parts = groupOrder[gid] ?? []
-                let label = "\(gName)  (\(parts.count) parts)"
-                result.append(TrackRow(name: label, ref: .group(gid),
+                result.append(TrackRow(name: gName, ref: .group(gid),
                                        isGroupHeader: true, groupID: gid))
                 if expandedGroups.contains(gid) {
                     // Parts sorted alphabetically by name, beneath their header.
