@@ -641,6 +641,9 @@ struct ObjectData: Codable {
     // User-controllable material opacity (0…1).  Default 1 → fully opaque, so
     // older project files without the field load with no behavioural change.
     var opacity:         Float   = 1
+    // "Brightness": base-colour self-emission (0…1).  Default 0 → no glow, so older
+    // files without the field load unchanged.
+    var emissiveStrength: Float  = 0
 
     // Custom decoder so older files without the v15 fields decode cleanly.
     init(from decoder: Decoder) throws {
@@ -658,6 +661,7 @@ struct ObjectData: Codable {
         roughnessFactor      = (try? c.decode(Float.self,         forKey: .roughnessFactor))     ?? -1
         baseColorFactor      = (try? c.decode([Float].self,       forKey: .baseColorFactor))     ?? []
         opacity              = (try? c.decode(Float.self,         forKey: .opacity))             ?? 1
+        emissiveStrength     = (try? c.decode(Float.self,         forKey: .emissiveStrength))    ?? 0
     }
 
     init(name: String, keyframes: [KeyframeData],
@@ -666,7 +670,8 @@ struct ObjectData: Codable {
          objectClass: String = ObjectClass.background.rawValue,
          feedbackEnabled: Bool = true, normalMode: Int = 0,
          metallicFactor: Float = -1, roughnessFactor: Float = -1,
-         baseColorFactor: [Float] = [], opacity: Float = 1) {
+         baseColorFactor: [Float] = [], opacity: Float = 1,
+         emissiveStrength: Float = 0) {
         self.name                = name
         self.keyframes           = keyframes
         self.baseTransformMatrix = baseTransformMatrix
@@ -680,6 +685,7 @@ struct ObjectData: Codable {
         self.roughnessFactor     = roughnessFactor
         self.baseColorFactor     = baseColorFactor
         self.opacity             = opacity
+        self.emissiveStrength    = emissiveStrength
     }
 }
 

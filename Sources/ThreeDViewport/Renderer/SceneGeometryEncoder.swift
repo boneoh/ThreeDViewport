@@ -122,9 +122,13 @@ enum SceneGeometryEncoder {
         let mat = object.material
         var mu  = MaterialUniforms()
         mu.baseColorFactor     = mat.baseColorFactor
-        mu.emissiveFactor      = SIMD4<Float>(mat.emissiveFactor.x,
-                                              mat.emissiveFactor.y,
-                                              mat.emissiveFactor.z, 0)
+        // Brightness override self-emits the object's own base colour, added on top
+        // of any glTF emissive.  At strength 1 the object glows its full base colour.
+        let emissive = mat.emissiveFactor
+            + SIMD3<Float>(mat.baseColorFactor.x,
+                           mat.baseColorFactor.y,
+                           mat.baseColorFactor.z) * mat.emissiveStrength
+        mu.emissiveFactor      = SIMD4<Float>(emissive.x, emissive.y, emissive.z, 0)
         mu.metallicFactor      = mat.metallicFactor
         mu.roughnessFactor     = mat.roughnessFactor
         mu.hasBaseColorTex     = mat.baseColorTexture         != nil ? 1 : 0

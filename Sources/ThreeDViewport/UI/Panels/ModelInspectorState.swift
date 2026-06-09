@@ -18,6 +18,7 @@ final class ModelInspectorState: ObservableObject {
     @Published var roughnessFactor: Float           = 0.5
     @Published var opacity:         Float           = 1
     @Published var baseColor:       Color           = .white
+    @Published var emissiveStrength: Float          = 0
     @Published var hasSelection:    Bool            = false
     /// True when the selection can be added to the Favorite Models folder (has a
     /// real sourceURL, not already inside favourites, and no alias exists yet).
@@ -112,6 +113,7 @@ final class ModelInspectorState: ObservableObject {
         metallicFactor  = first.material.metallicFactor
         roughnessFactor = first.material.roughnessFactor
         opacity         = first.material.opacity
+        emissiveStrength = first.material.emissiveStrength
         let c = first.material.baseColorFactor
         baseColor = Color(red: Double(c.x), green: Double(c.y), blue: Double(c.z))
 
@@ -224,6 +226,13 @@ final class ModelInspectorState: ObservableObject {
             .sink { [weak self] v in
                 guard let self, !isUpdating else { return }
                 targets.forEach { $0.material.opacity = v }
+                onRedraw?(); onDirty?()
+            }.store(in: &cancellables)
+
+        $emissiveStrength.dropFirst()
+            .sink { [weak self] v in
+                guard let self, !isUpdating else { return }
+                targets.forEach { $0.material.emissiveStrength = v }
                 onRedraw?(); onDirty?()
             }.store(in: &cancellables)
 

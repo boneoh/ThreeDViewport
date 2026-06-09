@@ -47,8 +47,10 @@ import trimesh.transformations as tf
 import trimesh.visual.material
 from PIL import Image
 
+from generate_models import models_root   # app's Model Library folder (modelsPathSecondary)
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-OUTPUT_DIR = os.path.join(SCRIPT_DIR, "Models")
+OUTPUT_DIR = models_root()
 TEX = 256  # texture resolution
 
 

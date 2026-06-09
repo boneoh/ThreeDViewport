@@ -481,8 +481,10 @@ final class ViewportView: MTKView {
                 camera.fitToScene(boundingRadius: radius, center: center)
             }
 
-            // Switch to Object mode so the user can immediately manipulate the new model.
-            setControlMode(.object)
+            // Switch to a mode that manipulates the new model as the user expects:
+            // a multi-part model → Model mode (the whole model moves as one); a
+            // single-mesh object → Object mode.
+            setControlMode(gid != nil ? .model : .object)
 
             print("[DEBUG] ViewportView: addModelToScene complete — total objects=\(sceneManager.objects.count) groupID=\(gid.map { String($0) } ?? "none")")
             return .added

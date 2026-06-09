@@ -218,6 +218,11 @@ struct ModelInspectorPanel: View {
                       range: 0...1,
                       format: "%.2f")
 
+            SliderRow(label: "Brightness",
+                      value: $state.emissiveStrength,
+                      range: 0...1,
+                      format: "%.2f")
+
             LabeledColorRow(label: "Base Color", binding: $state.baseColor)
         }
     }

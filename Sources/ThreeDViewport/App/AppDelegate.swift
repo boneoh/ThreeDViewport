@@ -4,7 +4,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 import simd
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate,
+                         NSMenuItemValidation {
 
     var window: NSWindow?
     var viewportView: ViewportView?
@@ -705,14 +706,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         fileMenu.addItem(NSMenuItem.separator())
 
-        // Export Glued Model — enabled (validateMenuItem) when an envelope is selected.
-        let exportGlueItem = NSMenuItem(
-            title: "Export Glued Model…",
-            action: #selector(exportGluedModel(_:)),
+        // Export Model — enabled (validateMenuItem) whenever an object is selected.
+        let exportModelItem = NSMenuItem(
+            title: "Export Model…",
+            action: #selector(exportModel(_:)),
             keyEquivalent: ""
         )
-        exportGlueItem.target = self
-        fileMenu.addItem(exportGlueItem)
+        exportModelItem.target = self
+        fileMenu.addItem(exportModelItem)
 
         fileMenu.addItem(NSMenuItem.separator())
 
@@ -2016,10 +2017,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             // Need at least two root objects to bind together.
             return (viewportView?.sceneManager.rootObjectIndicesSorted.count ?? 0) >= 2
         }
-        if menuItem.action == #selector(unglueSelected(_:))
-            || menuItem.action == #selector(exportGluedModel(_:)) {
+        if menuItem.action == #selector(unglueSelected(_:)) {
             // Enabled only when the current selection is an envelope.
             return viewportView?.sceneManager.selectedObject?.isEnvelope == true
+        }
+        if menuItem.action == #selector(exportModel(_:)) {
+            // The control mode (camera / object / light / model / director) reliably
+            // reflects the viewport's current target — enable only for object/model.
+            switch viewportView?.currentTrackRef {
+            case .object, .group: break
+            default:              return false
+            }
+            // Fog / particle (Effects) lanes have no viewport control mode, so also
+            // grey it out when the timeline's selected lane is one of those.
+            if let tl = timelineEditorWC?.editorView.selectedTrackRef {
+                switch tl {
+                case .fog, .particles: return false
+                default:               break
+                }
+            }
+            return true
         }
         if menuItem.action == #selector(toggleColorMode(_:)) {
             // Three modes can't be shown by a single checkmark, so reflect the
@@ -4409,34 +4426,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         refreshCameraFollowTargets()
     }
 
-    /// Exports the selected envelope's members (their whole subtree) as one `.glb`
-    /// model, baking each member's rest transform relative to the envelope origin so
-    /// the assembly re-imports as a single reusable model.  Factor materials only.
-    @objc private func exportGluedModel(_ sender: Any) {
+    /// Exports the current selection as one reusable `.glb` model — a single object,
+    /// a whole multi-part model (group), or a glued envelope's subtree — baking each
+    /// mesh's rest transform relative to the selection's own frame (so it re-imports
+    /// at the origin) along with material overrides, Brightness, and textures.
+    @objc private func exportModel(_ sender: Any) {
         guard let window = window, let scene = viewportView?.sceneManager,
-              let env = scene.selectedObject, env.isEnvelope else { return }
-        let envIndex = scene.selectedIndex
+              let sel = scene.selectedObject else { return }
         let objects  = scene.objects
+        let selIndex = scene.selectedIndex
 
-        // Rest transform of `objIndex` relative to the envelope (product of
-        // baseTransforms up the chain), or nil if it isn't under this envelope.
-        func restRelative(_ objIndex: Int) -> matrix_float4x4? {
+        // World rest pose of `i` = product of baseTransforms up to the true root.
+        func worldRest(_ i: Int) -> matrix_float4x4 {
             var m = matrix_identity_float4x4
-            var cur = objIndex
+            var cur: Int? = i
             var hops = 0
-            while let p = objects[cur].parentIndex, hops <= objects.count {
-                m = objects[cur].baseTransform * m
-                if p == envIndex { return m }
-                cur = p; hops += 1
+            while let c = cur, hops <= objects.count {
+                m = objects[c].baseTransform * m
+                cur = objects[c].parentIndex
+                hops += 1
             }
-            return nil
+            return m
         }
+        // True when `i` equals `root` or sits under it in the parent chain.
+        func isUnder(_ i: Int, _ root: Int) -> Bool {
+            var cur: Int? = i
+            var hops = 0
+            while let c = cur, hops <= objects.count {
+                if c == root { return true }
+                cur = objects[c].parentIndex
+                hops += 1
+            }
+            return false
+        }
+
+        // Choose the export set + the frame the meshes bake relative to (so the model
+        // re-imports at the origin): an envelope's subtree, a whole multi-part model
+        // (group), or a single object.
+        let memberIndices: [Int]
+        let frameIndex:    Int
+        let assetName:     String
+        if sel.isEnvelope {
+            frameIndex    = selIndex
+            memberIndices = objects.indices.filter {
+                !objects[$0].isEnvelope && objects[$0].indexCount > 0 && isUnder($0, selIndex)
+            }
+            assetName = sel.name
+        } else if let gid = sel.groupID {
+            memberIndices = objects.indices.filter { objects[$0].groupID == gid && objects[$0].indexCount > 0 }
+            frameIndex    = objects.indices.first { objects[$0].groupID == gid && objects[$0].parentIndex == nil }
+                            ?? memberIndices.first ?? selIndex
+            assetName = scene.groupName(for: gid)
+        } else {
+            memberIndices = [selIndex]
+            frameIndex    = selIndex
+            assetName = scene.displayName(for: sel)
+        }
+        let frameInv = simd_inverse(worldRest(frameIndex))
 
         var meshes: [GLBExporter.Mesh] = []
         var droppedTextures = false
-        for (i, obj) in objects.enumerated() where !obj.isEnvelope && obj.indexCount > 0 {
-            guard let rel = restRelative(i),
-                  !obj.cpuPositions.isEmpty, !obj.cpuIndices.isEmpty else { continue }
+        for i in memberIndices {
+            let obj = objects[i]
+            guard !obj.cpuPositions.isEmpty, !obj.cpuIndices.isEmpty else { continue }
+            let rel = frameInv * worldRest(i)
             let mat = obj.material
             // A texture that's loaded but whose source bytes weren't retained can't
             // be embedded (rare — e.g. an external image that moved); flag those.
@@ -4458,7 +4511,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                                         mat.baseColorFactor.z, alpha),
                 metallic:  mat.metallicFactor,
                 roughness: mat.roughnessFactor,
-                emissive:  mat.emissiveFactor,
+                // Bake the Brightness override (base-colour self-emission) into the
+                // exported emissiveFactor, matching the renderer, so a reused model
+                // keeps its glow.
+                emissive:  mat.emissiveFactor + SIMD3<Float>(mat.baseColorFactor.x,
+                                                             mat.baseColorFactor.y,
+                                                             mat.baseColorFactor.z) * mat.emissiveStrength,
                 baseColorTex:  mat.baseColorSource,
                 metalRoughTex: mat.metallicRoughnessSource,
                 normalTex:     mat.normalSource,
@@ -4467,7 +4525,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         guard !meshes.isEmpty else {
             showErrorAlert(message: "Nothing to export",
-                           detail: "The selected envelope has no geometry members.")
+                           detail: "The selected object has no geometry to export.")
             return
         }
 
@@ -4483,23 +4541,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             guard a.runModal() == .alertFirstButtonReturn else { return }
         }
 
-        guard let data = GLBExporter.build(meshes: meshes, assetName: env.name) else {
+        guard let data = GLBExporter.build(meshes: meshes, assetName: assetName) else {
             showErrorAlert(message: "Export failed", detail: "Could not build the model.")
             return
         }
 
         let panel = NSSavePanel()
-        panel.title                = "Export Glued Model"
+        panel.title                = "Export Model"
         panel.canCreateDirectories = true
         panel.directoryURL         = defaultModelDirectory()
-        panel.nameFieldStringValue = env.name + ".glb"
+        panel.nameFieldStringValue = assetName + ".glb"
         if let glb = UTType(filenameExtension: "glb") { panel.allowedContentTypes = [glb] }
         panel.beginSheetModal(for: window) { [weak self] resp in
             guard resp == .OK, var url = panel.url else { return }
             if url.pathExtension.lowercased() != "glb" { url.appendPathExtension("glb") }
             do {
                 try data.write(to: url)
-                print("[DEBUG] AppDelegate: exported glued model → "
+                print("[DEBUG] AppDelegate: exported model → "
                     + url.lastPathComponent + " (\(meshes.count) meshes)")
             } catch {
                 self?.showErrorAlert(message: "Could not write model",

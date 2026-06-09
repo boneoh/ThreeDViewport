@@ -34,11 +34,11 @@ import trimesh.visual.material
 
 from generate_models import (
     prompt_color, prompt_material,
-    _apply_solid_color, _align_to,
+    _apply_solid_color, _align_to, models_root,
 )
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-OUTPUT_DIR = os.path.join(SCRIPT_DIR, "Models")
+OUTPUT_DIR = models_root()   # app's Model Library folder (modelsPathSecondary)
 
 
 # ─── Geometry parameters (≈ 2× scaled benzene) ──────────────────────────────

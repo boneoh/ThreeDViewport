@@ -14,11 +14,27 @@ selection (click in the viewport, cycle with **O**, or select a Timeline lane).
 | **Rotation** | World Euler degrees, **YXZ** order (copy / paste / zero). |
 | **Scale** | World per-axis scale (copy / paste / zero). |
 | **Display** | **Normals** mode. |
-| **Material** | Metallic, Roughness, Opacity, Base colour. |
+| **Material** | Metallic, Roughness, Opacity, **Brightness**, Base colour. |
 
 **Visible**, **Occlude when hidden** (holdout), and **Object class** (Actor /
 Background / MacGuffin — drives Export All passes) now live in the **Effects** grid
 (Window ▸ Effects), not here.
+
+### Brightness (self-emission)
+
+**Brightness** makes the object **emit its own Base Color** — independent of the
+scene lights — from `0` (off, lit normally) to `1` (full base-colour emission). It's
+added on top of any emissive the model already had. Pair a white shape with a tinted
+Base Color and raise Brightness, then turn the lights down, to get a flat, self-lit
+**solid-colour field** (handy for compositing / synth feeds). The value is saved with
+the project and is **baked into [Export Model](Glue.md#export-the-glued-unit-as-a-model)**
+output, so a reused model keeps its glow.
+
+> **Tip — bake overrides into a reusable model.** After tuning a shape's Base Color,
+> metallic/roughness, opacity, and Brightness here, choose **File ▸ Export Model…** to
+> write it (with all overrides baked in) as a `.glb` you can re-import anywhere. Works
+> on a single object, a multi-part model, or a glued envelope — no gluing required for
+> a single object.
 
 Editing the transform is enabled for a **single ungrouped object** or a **uniform
 multi-part group** (the whole model rotates/scales about its anchor).

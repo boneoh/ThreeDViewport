@@ -6,11 +6,13 @@ Usage:
     python3 generate_models.py          # interactive colour prompts
     python3 generate_models.py -y       # skip prompts, use default greyscale
 
-Output goes into a  Models/  subfolder next to this script.
+Output goes into the app's Model Library folder (modelsPathSecondary in the
+ThreeDViewport settings), falling back to a  Models/  folder next to this script.
 Filenames include the chosen palette, e.g. sphere-sunset-c2.glb
 """
 
 import sys
+import json
 import numpy as np
 import trimesh
 import trimesh.visual.material
@@ -18,8 +20,30 @@ from PIL import Image
 import io
 import os
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-OUTPUT_DIR = os.path.join(SCRIPT_DIR, "Models")
+SCRIPT_DIR    = os.path.dirname(os.path.abspath(__file__))
+SETTINGS_PATH = os.path.expanduser(
+    "~/Library/Application Support/ThreeDViewport/settings.json")
+
+
+def models_root():
+    """Destination root for generated .glb files.
+
+    Reads `modelsPathSecondary` (the app's "Model Library" folder) from the
+    ThreeDViewport settings so generated files land where the app already browses
+    them — no manual copy/move step.  Falls back to a `Models/` folder next to this
+    script when the setting is missing or the file can't be read.
+    """
+    try:
+        with open(SETTINGS_PATH) as f:
+            path = json.load(f).get("modelsPathSecondary")
+        if path:
+            return os.path.expanduser(path)
+    except (OSError, ValueError):
+        pass
+    return os.path.join(SCRIPT_DIR, "Models")
+
+
+OUTPUT_DIR = models_root()
 TEX_SIZE   = 512
 
 
@@ -121,6 +145,13 @@ def apply_tonal_range(gray_2d, low, high):
     return scaled.clip(0, 255).astype(np.uint8)
 
 
+def apply_white(gray_2d):
+    """Flat pure-white base — discards the shape's pattern so the in-app **Base
+    Color** override (which multiplies the texture) tints it to a clean solid
+    colour.  Pairs with the white → override → envelope → export workflow."""
+    return np.full_like(gray_2d, 255)
+
+
 def apply_palette(gray_2d, stops):
     """
     Map a 2D greyscale array to RGB using a multi-stop colour gradient.
@@ -193,6 +224,10 @@ def prompt_color(shape_name, pattern_name):
             print(f"   {lk:>2}  {ln}")
 
     print()
+    print("  Solid")
+    print("    w  White (flat — for in-app colour tinting)")
+
+    print()
     print("  Append c1 or c2 for a complementary dark end  (e.g. 11c1 · 11c2 · 11c2a)")
     print("  Enter = default   <n>a = choice for all remaining   a = default for all")
 
@@ -219,6 +254,10 @@ def prompt_color(shape_name, pattern_name):
         elif key_part.endswith("c1"):
             variant  = "c1"
             key_part = key_part[:-2]
+
+        # White — flat pure-white base for in-app colour tinting.
+        if key_part == "w":
+            return apply_white, apply_all, "white"
 
         # Greyscale range — c1/c2 silently ignored (no complement defined).
         if key_part in GREY_RANGES:
@@ -574,6 +613,40 @@ def build_mobius():
     mesh = trimesh.Trimesh(vertices=verts, faces=np.array(faces), process=False)
     return mesh, uv_arr, tex_spiral()
 
+def build_cone():
+    # A true cone (high section count); the pyramid is the same primitive at 4 sides.
+    mesh = trimesh.creation.cone(radius=0.6, height=1.2, sections=64)
+    return mesh, uv_cylindrical(mesh.vertices), tex_radial_gradient()
+
+def build_icosahedron():
+    # subdivisions=0 is the raw 20-face icosahedron (no spherical subdivision).
+    mesh = trimesh.creation.icosphere(subdivisions=0, radius=0.6)
+    return mesh, uv_spherical(mesh.vertices), tex_marble()
+
+def build_dodecahedron():
+    # 20 vertices from the golden ratio; the convex hull triangulates the 12 faces.
+    phi = (1.0 + 5.0 ** 0.5) / 2.0
+    inv = 1.0 / phi
+    verts = []
+    for sx in (-1.0, 1.0):
+        for sy in (-1.0, 1.0):
+            for sz in (-1.0, 1.0):
+                verts.append((sx, sy, sz))
+    for a in (-inv, inv):
+        for b in (-phi, phi):
+            verts += [(0.0, a, b), (a, b, 0.0), (b, 0.0, a)]
+    verts = np.array(verts, dtype=float)
+    verts = verts / np.linalg.norm(verts[0]) * 0.6
+    mesh  = trimesh.Trimesh(vertices=verts).convex_hull
+    return mesh, uv_spherical(mesh.vertices), tex_cells()
+
+def build_disc():
+    # A thin flat card — useful as a solid colour / light field.  Planar UV on the
+    # flat (XY) faces so a pattern reads cleanly face-on.
+    mesh = trimesh.creation.cylinder(radius=0.6, height=0.05, sections=64)
+    uv   = (mesh.vertices[:, :2] + 0.6) / 1.2
+    return mesh, uv, tex_concentric_rings()
+
 # ---------------------------------------------------------------------------
 # Molecule builders
 # ---------------------------------------------------------------------------
@@ -921,6 +994,10 @@ SHAPES = [
     ("hexprism",        build_hexprism,        "crosshatch"),
     ("capsule",         build_capsule,         "wood grain"),
     ("mobius",          build_mobius,          "spiral"),
+    ("cone",            build_cone,            "radial gradient"),
+    ("icosahedron",     build_icosahedron,     "marble"),
+    ("dodecahedron",    build_dodecahedron,    "cells"),
+    ("disc",            build_disc,            "concentric rings"),
     ("star",            build_star,            "cells"),
     ("buckyball-162",   build_buckyball_162,   "marble"),
     ("buckyball-642",   build_buckyball_642,   "concentric rings"),

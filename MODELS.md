@@ -33,13 +33,22 @@ You can also use any other Python that has the three packages installed.
 
 ## Where the files go
 
-| Script | Output root |
-|--------|-------------|
-| `generate_models.py` | `./Models/` (alongside the script, in the repo root) |
-| `generate_character.py` | `./Models/` (alongside the script) |
-| `generate_all.py` | `~/Documents/ThreeDViewport/Models/` (the same path the macOS app's project files reference) |
+**All scripts write into the app's "Model Library" folder** — `modelsPathSecondary`
+from `~/Library/Application Support/ThreeDViewport/settings.json` — so generated
+files land where the app already browses them, with no copy/move step. The shared
+`models_root()` helper in `generate_models.py` reads that setting (falling back to a
+`./Models/` folder next to the script if the settings file is missing/unreadable);
+every script imports or uses it.
 
-`generate_all.py` writes shapes into subfolders by shape name (e.g. `~/Documents/ThreeDViewport/Models/sphere/`) and robots into `~/Documents/ThreeDViewport/Models/robot/`. The three `buckyball-*` shapes all land in a single `buckyball/` subfolder.
+| Script | Layout under the Model Library root |
+|--------|-------------|
+| `generate_models.py` · `generate_character.py` · `generate_station.py` · `generate_emissive.py` | flat (files directly in the root) |
+| `generate_all.py` | per-shape **subfolders** (e.g. `…/Models/sphere/`, `…/Models/robot/`) |
+
+`generate_all.py` writes shapes into subfolders by shape name and robots into a
+`robot/` subfolder. The three `buckyball-*` shapes all land in a single `buckyball/`
+subfolder. (Both flat root files and subfolders are reachable from the app's
+"add a model" open panel, which starts in this folder.)
 
 ---
 
@@ -83,6 +92,10 @@ Each palette is a three-stop gradient (dark → mid → bright). Two complementa
 
 Append `a` to any choice to lock it in for the remaining prompts (e.g. `11c2a`). A bare `a` skips all remaining prompts and uses defaults.
 
+### Solid white (key `w`)
+
+`w` produces a **flat pure-white** base (label `white`) — the shape's pattern is discarded. Because the app's **Base Color** material override *multiplies* the base-colour texture, a white model tints to a clean solid colour in the viewer. This is the basis of the white → Material-Overrides tint → glue into an envelope → **Export Glued Model** reuse workflow. White molecules are built **multi-part** (see the molecule note) so each atom/bond group can be tinted independently before export.
+
 ### Material presets
 
 | Key | Name | Metallic | Roughness |
@@ -97,9 +110,9 @@ Append `a` to any choice to lock it in for the remaining prompts (e.g. `11c2a`).
 
 ### Total combinations
 
-30 colours × 5 materials = **150 variants per shape**.
+31 colours × 5 materials = **155 variants per shape**.
 
-The colour count is 6 greyscale ranges + 8 palettes × 3 variants (plain / c1 / c2) = 30.
+The colour count is 6 greyscale ranges + 8 palettes × 3 variants (plain / c1 / c2) + 1 solid white = 31.
 
 ---
 
@@ -110,13 +123,13 @@ The colour count is 6 greyscale ranges + 8 palettes × 3 variants (plain / c1 / 
 /tmp/glb_env/bin/python3 generate_models.py -y     # accept all defaults (greyscale + matte plastic)
 ```
 
-Builds every shape in `SHAPES` (currently 21) one at a time, prompting for a colour palette and a material preset before each shape. Filenames encode the choice, e.g. `sphere-sunset-c2-ceramic.glb`.
+Builds every shape in `SHAPES` (currently 25) one at a time, prompting for a colour palette and a material preset before each shape. Filenames encode the choice, e.g. `sphere-sunset-c2-ceramic.glb`.
 
 ### Shape catalog
 
 | Group | Shapes | Default texture |
 |-------|--------|-----------------|
-| Primitives | cube · cylinder · pyramid · sphere · torus · tetrahedron · octahedron · hexprism · capsule | mostly linear / radial / cylindrical gradients |
+| Primitives | cube · cylinder · cone · pyramid · sphere · torus · tetrahedron · octahedron · icosahedron · dodecahedron · hexprism · capsule · disc | mostly linear / radial / cylindrical gradients |
 | Surfaces | mobius · star · hyperboloid · trefoil · helix | spiral, cells, concentric rings, diagonal stripes, wood grain |
 | Buckyballs | buckyball-162 · buckyball-642 · buckyball-2562 | icospheres at three subdivisions (162, 642, 2562 verts) |
 | Molecules | water · methane · benzene · dna | radial gradient / marble / angular stripes / spiral |
@@ -125,7 +138,7 @@ Each builder returns `(mesh, uv, gray_array)`. The greyscale texture is colouris
 
 ### Molecule note
 
-In `generate_models.py`'s standalone mode, molecules (water, methane, benzene, dna) get a single PBR material like every other shape. In **`generate_all.py`**, the `c1` and `c2` palette variants of molecules instead use `MOLECULE_BUILDERS` to produce a multi-part scene with three solid-colour groups — `heavy` (O / C atoms), `hydrogen` (H atoms), `bonds` (cylinders) — coloured from the palette's bright / complementary / mid stops. This makes molecule colourings read as chemistry rather than as a single textured blob. DNA is a special case: both backbone strands map to `heavy` and the base-pair rungs map to `hydrogen`; there is no `bonds` node, so the palette's mid / `comp2a` stop is unused for DNA.
+In `generate_models.py`'s standalone mode, molecules (water, methane, benzene, dna) get a single PBR material like every other shape. In **`generate_all.py`**, the `white`, `c1`, and `c2` variants of molecules instead use `MOLECULE_BUILDERS` to produce a multi-part scene with three solid-colour groups — `heavy` (O / C atoms), `hydrogen` (H atoms), `bonds` (cylinders) — coloured from the palette's bright / complementary / mid stops (the `white` variant makes all three groups pure white, so you can tint each one independently in the app before re-gluing and exporting). This makes molecule colourings read as chemistry rather than as a single textured blob. DNA is a special case: both backbone strands map to `heavy` and the base-pair rungs map to `hydrogen`; there is no `bonds` node, so the palette's mid / `comp2a` stop is unused for DNA.
 
 The three parts are exported with `heavy` as the root mesh and `hydrogen` / `bonds` parented to it, mirroring how the robot is structured (`hips` as the root with everything else descending). On import, ThreeDViewport renames the root to the filename basename and the whole molecule appears as a single hierarchical object — selectable and movable as one unit in Model mode, exactly like the robot.
 
@@ -311,7 +324,7 @@ emissive-{shape}-{colour}-x{intensity}.glb
 /tmp/glb_env/bin/python3 generate_all.py --emissive-only
 ```
 
-Non-interactive. Iterates every (shape × colour × material), every (robot × colour), every (station × colour × material), and every (emissive shape × colour) combination, writing into `~/Documents/ThreeDViewport/Models/`. Progress is printed on a single rewriting line per group so the output stays terse.
+Non-interactive. Iterates every (shape × colour × material), every (robot × colour), every (station × colour × material), and every (emissive shape × colour) combination, writing into the app's Model Library folder (`modelsPathSecondary`). Progress is printed on a single rewriting line per group so the output stays terse.
 
 | Mode | File count |
 |------|------------|

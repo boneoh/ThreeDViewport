@@ -30,6 +30,12 @@ struct PBRMaterial {
     var emissiveFactor:  SIMD3<Float> = SIMD3<Float>(0, 0, 0)
     var emissiveTexture: MTLTexture?
 
+    // User-controllable "Brightness": how strongly the object self-emits its own
+    // base colour (0 = off / lit only, 1 = full base-colour emission).  Added on
+    // top of any glTF emissiveFactor by the geometry encoder.  Lets a white shape
+    // become a flat, self-lit colour field (drop the lights → pure base colour).
+    var emissiveStrength: Float = 0
+
     // User-controllable opacity (0 = fully transparent, 1 = fully opaque).
     // Independent of baseColorFactor.w; the shader multiplies the two.
     var opacity: Float = 1

@@ -56,10 +56,17 @@ Members become independent again, keeping their current positions — nothing ju
 
 ## Export the glued unit as a model
 
-Select the envelope and choose **File ▸ Export Glued Model…** to write the whole unit
-(every member's geometry, flattened by its glued transform, with PBR materials and
-textures) as a single reusable **.glb**. Re-import it as one object to assemble bigger
-scenes from sub-assemblies. The command is enabled only when an envelope is selected.
+Select the envelope and choose **File ▸ Export Model…** to write the whole unit
+(every member's geometry, flattened by its glued transform, with material overrides,
+[Brightness](Model-Inspector.md#brightness-self-emission), and textures) as a single
+reusable **.glb**. Re-import it as one object to assemble bigger scenes from
+sub-assemblies.
+
+**Export Model** isn't envelope-only — it exports whatever is selected: a **single
+object**, a whole **multi-part model**, or an envelope's subtree. So you can tint a
+single shape in the [Model Inspector](Model-Inspector.md) and export it directly,
+without gluing first. Each export bakes relative to the selection's own frame and
+re-imports auto-normalised at the origin.
 
 > **The export is baked.** A reimported glued model comes in as an ordinary
 > multi-part model — one unit driven as a whole (Model mode, a single group track).

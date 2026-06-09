@@ -32,13 +32,13 @@ import trimesh
 import trimesh.visual.material
 
 from generate_models import (
-    prompt_color,
+    prompt_color, models_root,
     build_cube, build_cylinder, build_pyramid, build_sphere, build_torus,
     build_tetrahedron, build_octahedron, build_hexprism, build_capsule,
 )
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-OUTPUT_DIR = os.path.join(SCRIPT_DIR, "Models")
+OUTPUT_DIR = models_root()   # app's Model Library folder (modelsPathSecondary)
 
 # Shapes to expose as emissive — just the simple primitives.  Pulls the
 # geometry from generate_models.py; the texture/UV that the builders also

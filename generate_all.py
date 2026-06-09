@@ -28,8 +28,8 @@ import sys
 
 from generate_models import (
     GREY_RANGES, PALETTES, MATERIAL_PRESETS, SHAPES, SHAPE_OUTPUT_DIRS,
-    MOLECULE_BUILDERS, palette_molecule_colors,
-    apply_palette, apply_tonal_range, apply_texture, make_png_bytes,
+    MOLECULE_BUILDERS, palette_molecule_colors, models_root,
+    apply_palette, apply_tonal_range, apply_white, apply_texture, make_png_bytes,
 )
 from generate_character import build_robot
 from generate_station   import build_station_scene, colorizer_to_rgb
@@ -37,7 +37,9 @@ from generate_emissive  import (
     EMISSIVE_SHAPES, DEFAULT_INTENSITY, build_emissive_shape,
 )
 
-MODELS_ROOT = os.path.expanduser("~/Documents/ThreeDViewport/Models")
+# Destination root = the app's "Model Library" folder (modelsPathSecondary), so
+# the batch writes straight into where the app browses models.
+MODELS_ROOT = models_root()
 
 
 def all_colors():
@@ -46,7 +48,11 @@ def all_colors():
     palette_key and variant are None for greyscale and normal palette entries.
     For C1/C2 palette entries, palette_key is the PALETTES dict key ("7"–"14")
     and variant is "c1" or "c2" — used by molecule scene builders.
+    The "white" entry carries variant="white" so molecule shapes emit a multi-part
+    all-white scene (parts tintable individually in the app) instead of a single mesh.
     """
+    yield "white", apply_white, None, "white"
+
     for _, (name, (low, high)) in GREY_RANGES.items():
         label = name.lower().replace(" ", "-")
         yield label, lambda g, lo=low, hi=high: apply_tonal_range(g, lo, hi), None, None
@@ -78,8 +84,12 @@ def generate_shapes():
                 stem = f"{shape_name}-{color_label}-{mat_label}"
                 out  = os.path.join(out_dir, f"{stem}.glb")
 
-                if mol_builder and palette_key and variant in ("c1", "c2"):
-                    heavy, h, bond = palette_molecule_colors(palette_key, variant)
+                if mol_builder and (variant == "white"
+                                    or (palette_key and variant in ("c1", "c2"))):
+                    if variant == "white":
+                        heavy = h = bond = (255, 255, 255)   # tint each part in-app
+                    else:
+                        heavy, h, bond = palette_molecule_colors(palette_key, variant)
                     mol_builder(heavy, h, bond, metalness, roughness).export(out)
                 else:
                     mesh, uv, gray = builder()
