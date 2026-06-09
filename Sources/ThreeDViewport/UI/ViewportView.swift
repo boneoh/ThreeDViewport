@@ -1706,13 +1706,26 @@ final class ViewportView: MTKView {
             }
             obj.keyframeTrack?.easingMode = .linear
             obj.keyframeTrack?.keyframes.removeAll { $0.time >= lo && $0.time <= hi }
-            let baseInv  = simd_inverse(obj.baseTransform)
-            let opacity  = obj.material.opacity
-            let objScale = TransformMath.scale(of: obj.transform)
+            // The frame the object's keyframe delta resolves within, in world space:
+            // groupMatrix · parentWorld (identity for a plain root).  For a grouped
+            // part or glued member the renderer composes these on top, so we convert
+            // the world circle into this frame — the part then orbits relative to its
+            // model (riding along with any model-level motion) instead of being
+            // displaced.  Captured at the current (bake-time) pose.
+            let groupMat    = obj.groupID.flatMap { sceneManager.groupTransforms[$0] }
+                              ?? matrix_identity_float4x4
+            let parentWorld = obj.parentIndex.map { sceneManager.objects[$0].transform }
+                              ?? matrix_identity_float4x4
+            let frameInv    = simd_inverse(groupMat * parentWorld)
+            let baseInv     = simd_inverse(obj.baseTransform)
+            let opacity     = obj.material.opacity
+            // World-appearance scale (includes the group matrix) so the part keeps its
+            // on-screen size after the frame conversion divides the parent/group scale out.
+            let objScale    = TransformMath.scale(of: groupMat * obj.transform)
             for s in samples {
                 let worldRot = PathGenerator.lookAtRotation(from: s.position, to: s.axisPoint)
                 let world    = PathGenerator.makeTransform(translation: s.position, rotation: worldRot, scale: objScale)
-                let (t, r, sc) = PathGenerator.decompose(baseInv * world)
+                let (t, r, sc) = PathGenerator.decompose(baseInv * frameInv * world)
                 obj.keyframeTrack?.addKeyframe(TransformKeyframe(
                     time: s.time, translation: t, rotation: r, scale: sc, opacity: opacity))
             }

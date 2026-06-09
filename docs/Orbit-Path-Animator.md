@@ -23,8 +23,9 @@ just edit a rate instead of re-keying a whole sweep.
    → **Capture Axis Start**; move it along the desired tilt → **Capture Axis End**
    (the same point = a level, world-up orbit). The plane's normal is the
    start → end direction. (Copy / paste / zero icons share the Probe clipboard.)
-2. **Target:** pick a camera, light, object, or glued **envelope** from the
-   **Target** dropdown (defaults to the current selection when valid).
+2. **Target:** pick a camera, light, object, **model part** (`model ▸ part`), or
+   glued **envelope** from the **Target** dropdown (defaults to the current selection
+   when valid). A part orbits **relative to its model** (see Notes).
 3. **Orbit Rate:** set the **Radius**, **Rate (rev/s)** (negative reverses
    direction), and **Keyframes / rev**.
 4. Click **Create Keyframes** to drop a rate marker. The **first** marker for a
@@ -60,9 +61,13 @@ with the new geometry. The schedule is saved with the project.
 - A marker with **rate 0** holds position — the target parks on the circle until a
   later marker resumes the orbit.
 - Object keyframes **preserve the object's current scale**.
-- The generated keyframes write a **world** pose, so this is intended for **root**
-  objects (cameras, lights, ungrouped models). For two [glued](Glue.md) objects,
-  drive the **orbit on the envelope** and add the **spin on the child** with the
-  [Spin Path Animator](Spin-Path-Animator.md).
+- **Root** objects (cameras, lights, ungrouped models) orbit on the captured
+  **world** circle directly. A **model part** or **glued member** orbits **relative
+  to its model / envelope**: the world circle you capture is baked into the part's
+  own frame at that moment, so the part circles within the model and rides along if
+  the whole model is later moved or animated. Re-pose the model first, then re-bake,
+  if you change its rest pose. (So you can now orbit a child directly — though driving
+  the **orbit on the envelope** + a **[Spin](Spin-Path-Animator.md) on the child**
+  is still the classic way to get "B circles A while spinning".)
 
 See also: [Spin Path Animator](Spin-Path-Animator.md) · [Linear Path Animator](Linear-Path-Animator.md) · [Curve Path Animator](Curve-Path-Animator.md).

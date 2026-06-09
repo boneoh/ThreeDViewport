@@ -3072,7 +3072,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc private func showOrbitPathAnimator(_ sender: Any) {
         guard let viewport = viewportView else { return }
         let state = viewport.orbitPathState
-        state.targets = pathAnimatorTargets(camera: true, lights: true, objects: true, groups: false)
+        state.targets = pathAnimatorTargets(camera: true, lights: true, objects: true,
+                                            groups: false, groupParts: true)
         if let ref = state.capturedRef, !state.targets.contains(where: { $0.ref == ref }) {
             state.capturedRef = nil   // previously-selected target no longer exists
         }
@@ -3164,9 +3165,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let cloTargets = pathAnimatorTargets(camera: true, lights: true, objects: true, groups: false)
         let valid      = cloTargets.contains(where: { $0.ref == ref })
         if orbitPathPanel?.isVisible == true {
+            // Orbit also lists individual model parts (it bakes into each part's frame);
+            // Linear/Curve don't, so keep their list parts-free.
             let s = viewport.orbitPathState
-            s.targets = cloTargets
-            if valid, s.capturedRef != ref { s.capturedRef = ref }
+            s.targets = pathAnimatorTargets(camera: true, lights: true, objects: true,
+                                            groups: false, groupParts: true)
+            if s.targets.contains(where: { $0.ref == ref }), s.capturedRef != ref { s.capturedRef = ref }
         }
         if linearPathPanel?.isVisible == true {
             let s = viewport.linearPathState
