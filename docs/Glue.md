@@ -63,11 +63,13 @@ scenes from sub-assemblies. The command is enabled only when an envelope is sele
 
 > **The export is baked.** A reimported glued model comes in as an ordinary
 > multi-part model — one unit driven as a whole (Model mode, a single group track).
-> Its former members are now just parts of that model, so you can **no longer spin or
-> orbit them as independent objects** the way you could inside the envelope (they
-> don't appear as separate Spin/Orbit targets anymore). If you still need per-member
-> motion, keep the original project with the live envelope and export only when the
-> assembly is final.
+> Its former members are now **parts** of that model. You can still
+> [Spin](Spin-Path-Animator.md) an individual part (it appears in the Spin Target
+> list as `model ▸ part`) and keyframe it from its lane, but a part can **no longer be
+> orbited** as an independent object (Orbit writes a world pose that only applies to
+> roots/envelopes). If you need the full per-member freedom — independent orbits,
+> follow targets, etc. — keep the original project with the live envelope and export
+> only when the assembly is final.
 
 ## Example: B orbits A *and* spins
 

@@ -3138,7 +3138,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // Spin targets objects + models (groups).
         if spinPanel?.isVisible == true {
             let s = viewport.spinAnimatorState
-            s.targets = pathAnimatorTargets(camera: false, lights: false, objects: true, groups: true)
+            s.targets = pathAnimatorTargets(camera: false, lights: false, objects: true,
+                                            groups: true, groupParts: true)
             if s.targets.contains(where: { $0.ref == ref }), s.capturedRef != ref { s.capturedRef = ref }
         }
 
@@ -3167,9 +3168,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     /// convention).  Grouped parts are represented by their group (when groups are
     /// included), standalone objects individually; an envelope (glued assembly) is
     /// a standalone-style target so the whole unit can be animated.
+    /// `groupParts` (Spin only) additionally lists each member of a multi-part model
+    /// as its own `.object` target, labelled "<model> ▸ <part>", so individual parts
+    /// can be spun in place.  Not offered for Orbit, which writes a *world* pose that
+    /// a hierarchical part (animated in local space) can't represent correctly.
     private func pathAnimatorTargets(camera: Bool, lights: Bool,
-                                     objects: Bool, groups: Bool) -> [PathTarget] {
+                                     objects: Bool, groups: Bool,
+                                     groupParts: Bool = false) -> [PathTarget] {
         guard let viewport = viewportView else { return [] }
+        let sm = viewport.sceneManager
         var result: [PathTarget] = []
         if camera { result.append(PathTarget(label: "Camera", ref: .camera)) }
         if lights {
@@ -3179,15 +3186,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             }
         }
         var seenGroups = Set<Int>()
-        for (i, obj) in viewport.sceneManager.objects.enumerated() {
+        for (i, obj) in sm.objects.enumerated() {
             if let gid = obj.groupID {
                 if groups, seenGroups.insert(gid).inserted {
-                    result.append(PathTarget(label: viewport.sceneManager.groupName(for: gid),
-                                             ref: .group(gid)))
+                    result.append(PathTarget(label: sm.groupName(for: gid), ref: .group(gid)))
+                }
+                if groupParts {
+                    result.append(PathTarget(label: "\(sm.groupName(for: gid)) ▸ \(obj.name)",
+                                             ref: .object(i)))
                 }
             } else if objects {
-                result.append(PathTarget(label: viewport.sceneManager.displayName(for: obj),
-                                         ref: .object(i)))
+                result.append(PathTarget(label: sm.displayName(for: obj), ref: .object(i)))
             }
         }
         result.sort { $0.label.localizedStandardCompare($1.label) == .orderedAscending }
@@ -3282,7 +3291,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc private func showSpinAnimator(_ sender: Any) {
         guard let viewport = viewportView else { return }
         let state = viewport.spinAnimatorState
-        state.targets = pathAnimatorTargets(camera: false, lights: false, objects: true, groups: true)
+        state.targets = pathAnimatorTargets(camera: false, lights: false, objects: true,
+                                            groups: true, groupParts: true)
         if let ref = state.capturedRef, !state.targets.contains(where: { $0.ref == ref }) {
             state.capturedRef = nil   // previously-selected target no longer exists
         }

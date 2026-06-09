@@ -11,10 +11,11 @@ To change speed, drop another marker; to stop, drop a marker with rate **0**. Th
 makes dialling a spin in (and adjusting it later) much quicker than hand-keying a
 window of rotations.
 
-It works on three kinds of track: a single **object** lane, a **model** (group)
-lane — a multi-part model that spins as a whole about its own centre — or a glued
-**envelope** lane, which spins the whole [glued](Glue.md) unit in place. Cameras and
-lights aren't offered (self-spin isn't meaningful for them).
+It works on four kinds of track: a single **object** lane; a **model** (group)
+lane — a multi-part model that spins as a whole about its own centre; an individual
+**model part** (listed as `model ▸ part`), which spins in place on top of any
+whole-model spin; or a glued **envelope** lane, which spins the whole [glued](Glue.md)
+unit. Cameras and lights aren't offered (self-spin isn't meaningful for them).
 
 This is the in-place counterpart to the [Orbit Path Animator](Orbit-Path-Animator.md),
 which moves an object *around* an external axis.
@@ -23,9 +24,9 @@ which moves an object *around* an external axis.
 
 ## Workflow
 
-1. **Target:** pick an **object**, **model**, or glued **envelope** from the
-   **Target** dropdown. It defaults to the current selection when that selection is
-   something spinnable.
+1. **Target:** pick an **object**, **model**, **model part** (`model ▸ part`), or
+   glued **envelope** from the **Target** dropdown. It defaults to the current
+   selection when that selection is something spinnable.
 2. **Spin Rate:** choose the **Local axis** (X / Y / Z — Y is a top-like spin), set
    the **Rate (rev/s)** (negative reverses direction), and **Keyframes / rev**.
 3. Click **Create Keyframes** to drop a rate marker. The **first** marker for a
@@ -70,8 +71,10 @@ reopen it later and tweak a rate.
   hand-keyed frames *before* the first marker are left alone.
 - The spin starts from the object's **current orientation** at the first marker — no
   pop at the start.
-- **Object**, **model**, and glued **envelope** tracks only (self-spin isn't
-  meaningful for cameras or lights, so they aren't offered).
+- **Object**, **model**, **model-part**, and glued **envelope** tracks only (self-spin
+  isn't meaningful for cameras or lights, so they aren't offered). A part spins about
+  its **local** origin (relative to its parent), composing on top of any whole-model
+  spin — the same way a glued member spins relative to its envelope.
 - An **object** spins about its **local origin (pivot)**; if a single mesh's pivot
   is off-centre the spin looks like a small orbit around that pivot. A **model**
   (group) spins about its **bounding centre**, so multi-part models turn in place.
