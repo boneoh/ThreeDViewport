@@ -41,6 +41,21 @@ final class Timeline: ObservableObject {
     /// FPS dropdown and persisted with the project (default 30).
     @Published var frameRate: Double = 30.0
 
+    // ── Timeline In / Out marks (NLE-style working range) ─────────────────────
+    /// Optional In / Out points (seconds).  Persisted with the project so a slice
+    /// can be reused (Import) and used to limit Play / Export to a region.
+    @Published var inPoint:  Double? = nil
+    @Published var outPoint: Double? = nil
+    /// When true, playback is confined to [playStart, playEnd]; the footer toggle.
+    @Published var loopInOut: Bool = false
+
+    /// Effective play range start / end (falls back to 0 / duration when a mark is unset).
+    var playStart: Double { max(0, min(inPoint ?? 0, duration)) }
+    var playEnd:   Double { max(playStart, min(outPoint ?? duration, duration)) }
+    /// The active range for the current play mode.
+    var rangeStart: Double { loopInOut ? playStart : 0 }
+    var rangeEnd:   Double { loopInOut ? playEnd : duration }
+
     init() {
         print("[DEBUG] Timeline: initialized, duration=" + String(duration) + "s frameRate=30")
     }
@@ -49,13 +64,32 @@ final class Timeline: ObservableObject {
 
     func play() {
         guard !isPlaying else { return }
-        if currentTime >= duration {
-            currentTime = 0.0
-            print("[DEBUG] Timeline: rewound to 0 before play")
+        // Snap into the active range (full timeline, or [In, Out] when Loop In/Out is on).
+        if currentTime >= rangeEnd || currentTime < rangeStart {
+            currentTime = rangeStart
+            print("[DEBUG] Timeline: snapped to range start \(rangeStart) before play")
         }
         isPlaying = true
         print("[DEBUG] Timeline: playing from t=" + String(format: "%.3f", currentTime))
     }
+
+    // ── In / Out marks ────────────────────────────────────────────────────────
+
+    /// Sets the In point at `t`; if the Out point would end up before it, clears Out.
+    func setIn(at t: Double) {
+        let v = max(0, min(t, duration))
+        inPoint = v
+        if let o = outPoint, o <= v { outPoint = nil }
+    }
+
+    /// Sets the Out point at `t`; if the In point would end up after it, clears In.
+    func setOut(at t: Double) {
+        let v = max(0, min(t, duration))
+        outPoint = v
+        if let i = inPoint, i >= v { inPoint = nil }
+    }
+
+    func clearInOut() { inPoint = nil; outPoint = nil }
 
     func pause() {
         guard isPlaying else { return }
@@ -93,17 +127,21 @@ final class Timeline: ObservableObject {
         renderTime += dt
 
         var landUI = false   // force a UI mirror this tick (end / loop wrap)
-        if renderTime >= duration {
+        // Honor the active play range — the full timeline, or [In, Out] when the
+        // Loop In/Out toggle is on.
+        let rEnd   = rangeEnd
+        let rStart = rangeStart
+        if renderTime >= rEnd {
             if isLooping {
-                renderTime = 0.0
+                renderTime = rStart
                 loopRevolution += 1
                 landUI = true
-                print("[DEBUG] Timeline: looped back to t=0 (revolution=\(loopRevolution))")
+                print("[DEBUG] Timeline: looped back to t=\(rStart) (revolution=\(loopRevolution))")
             } else {
-                renderTime = duration
+                renderTime = rEnd
                 isPlaying = false
                 landUI = true
-                print("[DEBUG] Timeline: reached end at t=" + String(format: "%.3f", renderTime))
+                print("[DEBUG] Timeline: reached range end at t=" + String(format: "%.3f", renderTime))
             }
         }
 

@@ -52,6 +52,33 @@ support per-track easing.
 > Live keyframe **edit mode** (formerly Return / double-click) has been removed —
 > the I / Insert stamp workflow replaces it.
 
+## In / Out marks
+
+Like an NLE, the timeline carries an optional **In** and **Out** point that define a
+working range. Set them from the **footer** (or the **Timeline** menu):
+
+| Footer button | Action |
+|---------------|--------|
+| **Set In** | Place the In point at the playhead. |
+| **Set Out** | Place the Out point at the playhead. |
+| **Clear** | Remove both marks. |
+| **Loop In/Out** | When on, playback is confined to the In…Out range; off plays the full timeline. |
+
+The active range is tinted across the lanes with a faint band, and each mark draws a
+bracket line with a small tab pointing into the range (bright yellow where the mark is
+set, grey on the implicit edge). Setting In past Out (or vice-versa) clears the other
+mark so the range can't invert.
+
+The marks also drive **playback** (via the Loop In/Out toggle) and **export** (the
+single-clip Export panel offers a *Full Timeline* / *In → Out* choice — see
+[Export](Export.md)). They are saved with the project, so a slice marked in one
+project can be reused later.
+
+> These are distinct from the [Probe Inspector](Probe-Inspector.md)'s **Position
+> Marks** (saved world positions). The menu names keep them apart.
+
 ## Persistence
 
-All tracks, keyframes, and per-track easing modes are saved with the project.
+All tracks, keyframes, and per-track easing modes are saved with the project, along
+with the In / Out points. (The Loop In/Out toggle is a transient playback mode and is
+not saved.)

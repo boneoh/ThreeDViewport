@@ -84,11 +84,7 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
             defer:       false
         ))
 
-        let footer = Self.makeFooter(width: panelWidth, target: self,
-                                     fit: #selector(zoomFitAction),
-                                     out: #selector(zoomOutAction),
-                                     inn: #selector(zoomInAction),
-                                     max: #selector(zoomMaxAction))
+        let footer = makeFooter(width: panelWidth)
 
         let container = NSView(frame: panelRect)
         container.autoresizesSubviews = true
@@ -134,11 +130,45 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
     @objc private func zoomInAction()  { editorView.zoomIn() }
     @objc private func zoomMaxAction() { editorView.zoomToMax() }
 
-    /// Builds the bottom footer bar with the zoom controls.
-    private static func makeFooter(width: CGFloat, target: AnyObject,
-                                   fit: Selector, out: Selector,
-                                   inn: Selector, max: Selector) -> NSView {
-        let footer = NSView(frame: NSRect(x: 0, y: 0, width: width, height: footerHeight))
+    // MARK: - In / Out actions (footer buttons)
+
+    @objc private func setInAction() {
+        let tl = editorView.timeline
+        tl?.setIn(at: tl?.currentTime ?? 0)
+        editorView.needsDisplay = true
+        NSApp.sendAction(#selector(AppDelegate.markDirtyFromUI), to: nil, from: self)
+    }
+
+    @objc private func setOutAction() {
+        let tl = editorView.timeline
+        tl?.setOut(at: tl?.currentTime ?? 0)
+        editorView.needsDisplay = true
+        NSApp.sendAction(#selector(AppDelegate.markDirtyFromUI), to: nil, from: self)
+    }
+
+    @objc private func clearInOutAction() {
+        editorView.timeline?.clearInOut()
+        editorView.needsDisplay = true
+        NSApp.sendAction(#selector(AppDelegate.markDirtyFromUI), to: nil, from: self)
+    }
+
+    @objc private func toggleLoopInOutAction(_ sender: NSButton) {
+        editorView.timeline?.loopInOut = (sender.state == .on)
+        NSApp.sendAction(#selector(AppDelegate.markDirtyFromUI), to: nil, from: self)
+    }
+
+    /// Syncs the footer Loop In/Out toggle to the timeline (e.g. after the menu
+    /// item toggles it).  Called by the AppDelegate menu handler.
+    func refreshLoopInOutButton() {
+        loopInOutButton?.state = (editorView.timeline?.loopInOut ?? false) ? .on : .off
+    }
+
+    /// The footer Loop In/Out toggle, kept so the menu item can sync it.
+    private weak var loopInOutButton: NSButton?
+
+    /// Builds the bottom footer bar with the zoom + In/Out controls.
+    private func makeFooter(width: CGFloat) -> NSView {
+        let footer = NSView(frame: NSRect(x: 0, y: 0, width: width, height: Self.footerHeight))
         footer.autoresizingMask = [.width]
         footer.wantsLayer = true
         footer.layer?.backgroundColor = NSColor(white: 0.20, alpha: 1).cgColor
@@ -147,7 +177,7 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
         footer.appearance = NSAppearance(named: .darkAqua)
 
         func button(_ title: String, _ sel: Selector, _ tip: String) -> NSButton {
-            let b = NSButton(title: title, target: target, action: sel)
+            let b = NSButton(title: title, target: self, action: sel)
             b.bezelStyle  = .rounded
             b.controlSize = .small
             b.font        = NSFont.systemFont(ofSize: 11)
@@ -155,16 +185,35 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
             return b
         }
 
-        let label = NSTextField(labelWithString: "Zoom")
-        label.font      = NSFont.systemFont(ofSize: 11)
-        label.textColor = NSColor(white: 0.70, alpha: 1)
+        let zoomLabel = NSTextField(labelWithString: "Zoom")
+        zoomLabel.font      = NSFont.systemFont(ofSize: 11)
+        zoomLabel.textColor = NSColor(white: 0.70, alpha: 1)
+
+        let inOutLabel = NSTextField(labelWithString: "In/Out")
+        inOutLabel.font      = NSFont.systemFont(ofSize: 11)
+        inOutLabel.textColor = NSColor(white: 0.70, alpha: 1)
+
+        let loopToggle = NSButton(checkboxWithTitle: "Loop In/Out",
+                                  target: self,
+                                  action: #selector(toggleLoopInOutAction(_:)))
+        loopToggle.controlSize = .small
+        loopToggle.font        = NSFont.systemFont(ofSize: 11)
+        loopToggle.toolTip     = "Confine playback to the In…Out range"
+        loopToggle.state       = (editorView.timeline?.loopInOut ?? false) ? .on : .off
+        loopInOutButton = loopToggle
 
         let stack = NSStackView(views: [
-            label,
-            button("Fit", fit, "Fit the entire timeline"),
-            button("+",        inn, "Zoom in"),
-            button("\u{2013}", out, "Zoom out"),
-            button("1 s",      max, "Zoom in to about one second")
+            zoomLabel,
+            button("Fit", #selector(zoomFitAction), "Fit the entire timeline"),
+            button("+",        #selector(zoomInAction),  "Zoom in"),
+            button("\u{2013}", #selector(zoomOutAction), "Zoom out"),
+            button("1 s",      #selector(zoomMaxAction), "Zoom in to about one second"),
+            NSBox.footerSeparator(),
+            inOutLabel,
+            button("Set In",  #selector(setInAction),     "Set the In point at the playhead"),
+            button("Set Out", #selector(setOutAction),    "Set the Out point at the playhead"),
+            button("Clear",   #selector(clearInOutAction), "Clear the In and Out points"),
+            loopToggle
         ])
         stack.orientation = .horizontal
         stack.spacing     = 6
@@ -175,7 +224,7 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
             stack.centerYAnchor.constraint(equalTo: footer.centerYAnchor)
         ])
 
-        let divider = NSBox(frame: NSRect(x: 0, y: footerHeight - 1, width: width, height: 1))
+        let divider = NSBox(frame: NSRect(x: 0, y: Self.footerHeight - 1, width: width, height: 1))
         divider.boxType          = .separator
         divider.autoresizingMask = [.width]
         footer.addSubview(divider)
@@ -253,5 +302,16 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
         let rulerHeight: CGFloat = 24
         let laneHeight:  CGFloat = 28
         return rulerHeight + CGFloat(max(3, numTracks)) * laneHeight
+    }
+}
+
+private extension NSBox {
+    /// A short vertical separator for grouping controls in the footer stack.
+    static func footerSeparator() -> NSBox {
+        let b = NSBox()
+        b.boxType = .separator
+        b.translatesAutoresizingMaskIntoConstraints = false
+        b.heightAnchor.constraint(equalToConstant: 18).isActive = true
+        return b
     }
 }

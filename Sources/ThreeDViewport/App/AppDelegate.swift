@@ -491,6 +491,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     private func markDirty() { isDirty = true }
 
+    /// Responder-chain entry point so detached UI (e.g. the Timeline footer) can
+    /// flag the project dirty without holding an AppDelegate reference.
+    @objc func markDirtyFromUI(_ sender: Any?) { markDirty() }
+
     /// Subscribe to every ObservableObject that holds saveable state so that any
     /// change made via the SwiftUI inspector panels automatically sets isDirty.
     /// Uses synchronous delivery (no receive(on:)) so that subscriptions fire before
@@ -883,27 +887,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         loopItem.target = self
         viewMenu.addItem(loopItem)
 
-        // ── Marks menu — saved position marks ──────────────────────────────────
+        // ── Position Marks menu — saved Probe world positions ──────────────────
+        // (Named "Position Marks" to distinguish from the Timeline In/Out marks.)
         let marksItem = NSMenuItem()
         mainMenu.addItem(marksItem)
-        let marksMenu = NSMenu(title: "Marks")
+        let marksMenu = NSMenu(title: "Position Marks")
         marksItem.submenu = marksMenu
 
-        let addMarkItem = NSMenuItem(title: "Add Mark",
+        let addMarkItem = NSMenuItem(title: "Add Position Mark",
                                      action: #selector(promptForMarkMenu(_:)),
                                      keyEquivalent: "")
         addMarkItem.target = self
         marksMenu.addItem(addMarkItem)
 
-        let goToMarkItem = NSMenuItem(title: "Go To Mark", action: nil, keyEquivalent: "")
-        let goToSub = NSMenu(title: "Go To Mark")
+        let goToMarkItem = NSMenuItem(title: "Go To Position Mark", action: nil, keyEquivalent: "")
+        let goToSub = NSMenu(title: "Go To Position Mark")
         goToSub.delegate = self
         goToMarkItem.submenu = goToSub
         goToMarkSubmenu = goToSub
         marksMenu.addItem(goToMarkItem)
 
-        let deleteMarkItem = NSMenuItem(title: "Delete Mark", action: nil, keyEquivalent: "")
-        let deleteSub = NSMenu(title: "Delete Mark")
+        let deleteMarkItem = NSMenuItem(title: "Delete Position Mark", action: nil, keyEquivalent: "")
+        let deleteSub = NSMenu(title: "Delete Position Mark")
         deleteSub.delegate = self
         deleteMarkItem.submenu = deleteSub
         deleteMarkSubmenu = deleteSub
@@ -911,11 +916,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         marksMenu.addItem(.separator())
 
-        let showMarksItem = NSMenuItem(title: "Show Marks",
+        let showMarksItem = NSMenuItem(title: "Show Position Marks",
                                        action: #selector(toggleMarks(_:)),
                                        keyEquivalent: "")
         showMarksItem.target = self
         marksMenu.addItem(showMarksItem)
+
+        // ── Timeline menu — In/Out marks + range playback ──────────────────────
+        let timelineItem = NSMenuItem()
+        mainMenu.addItem(timelineItem)
+        let timelineMenu = NSMenu(title: "Timeline")
+        timelineItem.submenu = timelineMenu
+
+        let setInItem = NSMenuItem(title: "Set In Point",
+                                   action: #selector(setTimelineInPoint(_:)), keyEquivalent: "")
+        setInItem.target = self
+        timelineMenu.addItem(setInItem)
+
+        let setOutItem = NSMenuItem(title: "Set Out Point",
+                                    action: #selector(setTimelineOutPoint(_:)), keyEquivalent: "")
+        setOutItem.target = self
+        timelineMenu.addItem(setOutItem)
+
+        let clearInOutItem = NSMenuItem(title: "Clear In/Out",
+                                        action: #selector(clearTimelineInOut(_:)), keyEquivalent: "")
+        clearInOutItem.target = self
+        timelineMenu.addItem(clearInOutItem)
+
+        timelineMenu.addItem(.separator())
+
+        let loopInOutItem = NSMenuItem(title: "Loop In to Out",
+                                       action: #selector(toggleLoopInOut(_:)), keyEquivalent: "")
+        loopInOutItem.target = self
+        timelineMenu.addItem(loopInOutItem)
 
         // ── Window menu — panels + macOS-standard items ────────────────────────
         let windowItem = NSMenuItem()
@@ -2154,6 +2187,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if menuItem.action == #selector(toggleMarks(_:)) {
             menuItem.state = (viewportView?.probeConfig.marksVisible ?? false) ? .on : .off
         }
+        if menuItem.action == #selector(toggleLoopInOut(_:)) {
+            menuItem.state = (viewportView?.timeline.loopInOut ?? false) ? .on : .off
+        }
+        if menuItem.action == #selector(clearTimelineInOut(_:)) {
+            let tl = viewportView?.timeline
+            return tl?.inPoint != nil || tl?.outPoint != nil
+        }
         return true
     }
 
@@ -2874,6 +2914,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let viewport = viewportView else { return }
         viewport.probeConfig.marksVisible.toggle()
         if !viewport.probeConfig.marksVisible { viewport.overlayState.markName = nil }
+        markDirty()
+    }
+
+    // MARK: - Timeline In / Out marks
+
+    @objc private func setTimelineInPoint(_ sender: Any) {
+        guard let tl = viewportView?.timeline else { return }
+        tl.setIn(at: tl.currentTime)
+        timelineEditorWC?.editorView.needsDisplay = true
+        markDirty()
+    }
+
+    @objc private func setTimelineOutPoint(_ sender: Any) {
+        guard let tl = viewportView?.timeline else { return }
+        tl.setOut(at: tl.currentTime)
+        timelineEditorWC?.editorView.needsDisplay = true
+        markDirty()
+    }
+
+    @objc private func clearTimelineInOut(_ sender: Any) {
+        guard let tl = viewportView?.timeline else { return }
+        tl.clearInOut()
+        timelineEditorWC?.editorView.needsDisplay = true
+        markDirty()
+    }
+
+    @objc private func toggleLoopInOut(_ sender: Any) {
+        guard let tl = viewportView?.timeline else { return }
+        tl.loopInOut.toggle()
+        timelineEditorWC?.refreshLoopInOutButton()
         markDirty()
     }
 
@@ -4133,7 +4203,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let projectMovieDir = defaultDirectory(for: "Movies").appendingPathComponent(projectName)
         try? FileManager.default.createDirectory(at: projectMovieDir, withIntermediateDirectories: true)
 
-        let (accessory, codecPopup, resPopup, fpsPopup) = makeExportAccessoryView()
+        let (accessory, codecPopup, resPopup, fpsPopup, _) = makeExportAccessoryView()
         let alert = NSAlert()
         alert.messageText     = "Export All Passes"
         alert.informativeText = "Renders the full pass set (Scene; Actor / MacGuffin Solo + Matte; Background + Background Matte; FX Solo + Matte) into Movies/\(projectName)/ using one codec. The project is saved first and reloaded when the cycle finishes."
@@ -4222,7 +4292,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                                                  withIntermediateDirectories: true)
         let defaultName = nextMovieFilename(projectName: projectName, in: projectMovieDir)
 
-        let (accessory, codecPopup, resPopup, fpsPopup) = makeExportAccessoryView()
+        let (accessory, codecPopup, resPopup, fpsPopup, rangePopup) = makeExportAccessoryView(includeRange: true)
 
         let panel = NSSavePanel()
         panel.title                = "Export ProRes Video"
@@ -4262,11 +4332,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 self.markDirty()
             }
 
+            // Range: "In → Out" (index 1) limits the export to the marked region.
+            var rStart = 0.0
+            var rEnd: Double? = nil
+            if let rp = rangePopup, rp.indexOfSelectedItem == 1, let tl = self.viewportView?.timeline {
+                rStart = tl.playStart
+                rEnd   = tl.playEnd
+            }
+
             print("[DEBUG] AppDelegate: export — " + url.lastPathComponent
                 + " codec=" + codec.displayName
-                + " res=\(res.width)×\(res.height) fps=" + fps.display)
+                + " res=\(res.width)×\(res.height) fps=" + fps.display
+                + (rEnd != nil ? " range=\(rStart)…\(rEnd!)" : " range=full"))
             self.viewportView?.startExport(
-                to: url, codec: codec, fps: fps, exportState: self.exportState
+                to: url, codec: codec, fps: fps, exportState: self.exportState,
+                rangeStart: rStart, rangeEnd: rEnd
             ) { [weak self] error in
                 // Mirror the HDR export confirmation so the user gets explicit
                 // acknowledgement at the end of a (often long) video export.
@@ -4284,10 +4364,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
     }
 
-    private func makeExportAccessoryView() -> (view: NSView,
+    private func makeExportAccessoryView(includeRange: Bool = false) -> (view: NSView,
                                                codec: NSPopUpButton,
                                                resolution: NSPopUpButton,
-                                               fps: NSPopUpButton) {
+                                               fps: NSPopUpButton,
+                                               range: NSPopUpButton?) {
         func label(_ s: String) -> NSTextField {
             let l = NSTextField(labelWithString: s)
             l.font      = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
@@ -4322,20 +4403,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let curFps = ExportFrameRate.closest(to: viewportView?.timeline.frameRate ?? 30.0)
         fpsPopup.selectItem(at: ExportFrameRate.presets.firstIndex(of: curFps) ?? 4)
 
-        let stack = NSStackView(views: [
+        // Range — only on the single-clip Export panel.  "In → Out" is selectable
+        // only when both marks are set; otherwise it stays disabled on "Full".
+        var rangePopup: NSPopUpButton? = nil
+        var rows: [NSStackView] = [
             row("Format:",     codecPopup),
             row("Resolution:", resPopup),
             row("FPS:",        fpsPopup),
-        ])
+        ]
+        if includeRange {
+            let rp = NSPopUpButton(frame: .zero, pullsDown: false)
+            rp.addItem(withTitle: "Full Timeline")
+            let tl = viewportView?.timeline
+            let bothMarks = (tl?.inPoint != nil) && (tl?.outPoint != nil)
+            if bothMarks, let tl = tl {
+                rp.addItem(withTitle: String(format: "In \u{2192} Out  (%.2f\u{2013}%.2f s)",
+                                             tl.playStart, tl.playEnd))
+                rp.selectItem(at: 1)   // default to the marked range when available
+            }
+            rangePopup = rp
+            rows.append(row("Range:", rp))
+        }
+
+        let stack = NSStackView(views: rows)
         stack.orientation = .vertical
         stack.alignment   = .trailing
         stack.spacing     = 8
         stack.edgeInsets  = NSEdgeInsets(top: 12, left: 16, bottom: 12, right: 16)
         stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.frame = NSRect(x: 0, y: 0, width: 460, height: 132)
+        stack.frame = NSRect(x: 0, y: 0, width: 460, height: includeRange ? 164 : 132)
 
         print("[DEBUG] AppDelegate: export accessory view created")
-        return (stack, codecPopup, resPopup, fpsPopup)
+        return (stack, codecPopup, resPopup, fpsPopup, rangePopup)
     }
 
     // MARK: - Edit > Remove
@@ -4495,6 +4594,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                                              anchorIndex: options.anchor,
                                              memberIndices: members) {
             scene.selectedIndex = envIndex
+            // Select the new envelope as the active object so the Timeline highlights
+            // its lane (and a stale member-lane selection — now collapsed — is replaced).
+            viewportView?.setControlMode(.object)
             markDirty()
             timelineEditorWC?.updateWindowHeight()
             refreshCameraFollowTargets()

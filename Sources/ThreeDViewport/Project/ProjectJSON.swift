@@ -562,18 +562,26 @@ struct TimelineData: Codable {
     var duration:    Double
     var currentTime: Double
     var frameRate:   Double = 30.0   // v20; absent in older files → 30 fps
+    // Timeline In / Out marks (seconds).  Nil = unset; absent in older files.
+    var inPoint:     Double? = nil
+    var outPoint:    Double? = nil
 
     init(from decoder: Decoder) throws {
         let c       = try decoder.container(keyedBy: CodingKeys.self)
         duration    = try  c.decode(Double.self, forKey: .duration)
         currentTime = try  c.decode(Double.self, forKey: .currentTime)
         frameRate   = (try? c.decode(Double.self, forKey: .frameRate)) ?? 30.0
+        inPoint     = try? c.decode(Double.self, forKey: .inPoint)
+        outPoint    = try? c.decode(Double.self, forKey: .outPoint)
     }
 
-    init(duration: Double, currentTime: Double, frameRate: Double = 30.0) {
+    init(duration: Double, currentTime: Double, frameRate: Double = 30.0,
+         inPoint: Double? = nil, outPoint: Double? = nil) {
         self.duration    = duration
         self.currentTime = currentTime
         self.frameRate   = frameRate
+        self.inPoint     = inPoint
+        self.outPoint    = outPoint
     }
 }
 

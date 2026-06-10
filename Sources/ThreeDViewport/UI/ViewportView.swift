@@ -2000,6 +2000,7 @@ final class ViewportView: MTKView {
     func startExport(to url: URL, codec: ExportCodec, fps: ExportFrameRate,
                      exportState: ExportState, includeFX: Bool = true,
                      suppressGlass: Bool = false,
+                     rangeStart: Double = 0, rangeEnd: Double? = nil,
                      onCompletion: ((Error?) -> Void)? = nil) {
         guard let dev = device else {
             print("[DEBUG] ViewportView: startExport — Metal device is nil")
@@ -2022,6 +2023,8 @@ final class ViewportView: MTKView {
             backgroundConfig:  backgroundConfig,
             timeline:          timeline,
             fps:               fps,
+            rangeStart:        rangeStart,
+            rangeEnd:          rangeEnd,
             pipelineState:     pipeline,
             depthStencilState: depth,
             scenePipeline:     scenePipeline,

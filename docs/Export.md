@@ -15,6 +15,20 @@ Choose a codec in the save panel:
 | **ProRes 4444** | 12-bit RGB + alpha. **Color passes** write **Straight-looking full RGB with alpha = Rec.709 luma**, tagged **Premultiplied** so the RGB displays at full brightness while the luma rides in the alpha as a key — ready for DaVinci Resolve / LZX Videomancer. **Matte** passes keep a geometry-coverage alpha. |
 | **ProRes 422 HQ** | 10-bit 4:2:2, no alpha; pure black background. Standard for colour-grading pipelines. |
 
+### Range
+
+The save panel has a **Range** popup:
+
+| Range | Exports |
+|-------|---------|
+| **Full Timeline** | The whole timeline (default). |
+| **In → Out** | Only the [timeline In/Out range](Timeline-Editor.md#in--out-marks). |
+
+*In → Out* is offered only when **both** marks are set, and is pre-selected when
+available. The exported content starts at the In point — the sync countdown is still
+prepended, but the animation clock begins at In rather than 0. (Export All Passes
+always renders the full timeline.)
+
 ## Sync countdown
 
 Every export is prepended with a **3-second 3-2-1 countdown** on black followed by a

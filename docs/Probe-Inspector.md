@@ -4,6 +4,11 @@ The Probe is a movable world-space point. It does two jobs: it marks where the
 scene is captured from when **baking an environment HDR**, and it's the tool you
 use to set and recall **position marks**.
 
+> **Position marks** (saved world positions) are distinct from the timeline's
+> **In / Out marks** (a playback/export range) — see
+> [Timeline Editor](Timeline-Editor.md#in--out-marks). The app menus name them
+> **Position Marks** and **Timeline** respectively.
+
 **Open:** Window ▸ Probe Inspector…
 
 ## Controls
@@ -13,7 +18,7 @@ use to set and recall **position marks**.
 | **Show gizmo in viewport** | Toggles the probe's RGB axis-cross gizmo. The probe gizmo itself is never exported. |
 | **Position X / Y / Z** | Sliders (−100…100). Left/Right arrow keys nudge by the last displayed digit. Copy / Paste / Zero icons use the shared coordinate clipboard (you can paste a position copied from any other panel). |
 | **Mark Position** | Prompts for a **name** and a **colour**, then saves the probe's current position as a mark. The colour defaults to the last one you chose, so a run of related marks can share a colour. |
-| **Show marks** | Toggles all marks — in the viewport **and** in exports. |
+| **Show marks** | Toggles all position marks — in the viewport **and** in exports (also Position Marks ▸ **Show Position Marks**). |
 
 ## Marks
 
@@ -24,7 +29,7 @@ all in one colour, then key your animation against them.
 
 | Key | Action |
 |-----|--------|
-| **K** | Show / hide all marks (also Window ▸ Show Marks) |
+| **K** | Show / hide all marks (also Position Marks ▸ Show Position Marks) |
 | **N** | Cycle to the next mark — **moves the probe to it** (so you can copy/paste its coordinates), highlights it, and shows its name in the HUD |
 | **Shift+N** | Cycle to the previous mark |
 | **Delete** / **Backspace** | Delete the selected mark (only acts when marks are visible and one is selected) |

@@ -727,6 +727,44 @@ final class TimelineEditorView: NSView {
                                      width: w, height: 1))
         }
 
+        // ── In / Out range (NLE working range) ────────────────────────────────
+        // Tint the active [In, Out] band across the lanes and draw bracket lines.
+        // Drawn over the lanes but under keyframes/playhead so markers read clearly.
+        if let tl = timeline, tl.inPoint != nil || tl.outPoint != nil {
+            let inX  = timeToX(tl.playStart)
+            let outX = timeToX(tl.playEnd)
+            let bandTop = rulerHeight
+            let clampedIn  = max(inX,  labelWidth)
+            let clampedOut = min(outX, w)
+            if clampedOut > clampedIn {
+                let band = NSRect(x: clampedIn, y: bandTop,
+                                  width: clampedOut - clampedIn, height: totalH - bandTop)
+                NSColor.systemYellow.withAlphaComponent(0.06).setFill()
+                NSBezierPath.fill(band)
+            }
+            func bracket(at x: CGFloat, isIn: Bool, active: Bool) {
+                guard x >= labelWidth - 1 && x <= w + 1 else { return }
+                let col = active ? NSColor.systemYellow : NSColor(white: 0.55, alpha: 1)
+                let line = NSBezierPath()
+                line.move(to: NSPoint(x: x, y: bandTop))
+                line.line(to: NSPoint(x: x, y: totalH))
+                col.withAlphaComponent(0.85).setStroke()
+                line.lineWidth = 1.5
+                line.stroke()
+                // Small bracket tab pointing into the range, at the top of the lanes.
+                let dir: CGFloat = isIn ? 1 : -1
+                let tab = NSBezierPath()
+                tab.move(to: NSPoint(x: x, y: bandTop))
+                tab.line(to: NSPoint(x: x + dir * 6, y: bandTop))
+                tab.line(to: NSPoint(x: x, y: bandTop + 8))
+                tab.close()
+                col.setFill()
+                tab.fill()
+            }
+            bracket(at: inX,  isIn: true,  active: tl.inPoint  != nil)
+            bracket(at: outX, isIn: false, active: tl.outPoint != nil)
+        }
+
         // ── Duration end marker ───────────────────────────────────────────────
         let endX = timeToX(duration)
         if endX >= labelWidth && endX <= w {
@@ -1362,6 +1400,14 @@ final class TimelineEditorView: NSView {
 
     override func keyDown(with event: NSEvent) {
         let tracks = buildTracks()
+
+        // The track list can shrink between events — e.g. gluing collapses the members
+        // under a new envelope header — leaving `selectedTrackIndex` past the end.  Drop
+        // a now-out-of-range selection so the handlers below never index past the array.
+        if let ti = selectedTrackIndex, ti >= tracks.count {
+            selectedTrackIndex = nil
+            selectedKFIndex    = nil
+        }
 
         // ── Cmd+C / Cmd+V — copy / paste keyframe ────────────────────────────
         // Handled before the main switch so these never fall through to the

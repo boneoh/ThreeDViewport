@@ -281,7 +281,9 @@ final class ProjectFile {
         let timelineData = TimelineData(
             duration:    tl.duration,
             currentTime: tl.currentTime,
-            frameRate:   tl.frameRate
+            frameRate:   tl.frameRate,
+            inPoint:     tl.inPoint,
+            outPoint:    tl.outPoint
         )
 
         // ── Objects — paths + keyframes ───────────────────────────────────────
@@ -696,6 +698,8 @@ final class ProjectFile {
         // ── Timeline ──────────────────────────────────────────────────────────
         vp.timeline.duration    = data.timeline.duration
         vp.timeline.frameRate   = data.timeline.frameRate   // v20: project frame rate
+        vp.timeline.inPoint     = data.timeline.inPoint     // Timeline In / Out marks
+        vp.timeline.outPoint    = data.timeline.outPoint
         vp.timeline.currentTime = 0.0   // always start from the beginning on load
         vp.timeline.isPlaying   = false
         print("[DEBUG] ProjectFile: timeline duration=" + String(format: "%.2f", data.timeline.duration))

@@ -135,7 +135,8 @@ final class VideoExporter {
     // opacity<1 parts opaquely, matching pre-feature behaviour).
     private let transparentPipelineState: MTLRenderPipelineState?
     private let transparentDepthState:    MTLDepthStencilState?
-    private let animDuration:      Double
+    private let animStart:         Double   // first animation time (seconds); 0 = full timeline
+    private let animDuration:      Double   // length of the exported range (seconds)
     private let frameRate:         Double
     private let frameTimescale:    Int32   // CMTime timescale (rational, exact for NTSC)
     private let frameTicks:        Int32   // CMTime value advanced per frame
@@ -223,6 +224,8 @@ final class VideoExporter {
           backgroundConfig:  BackgroundConfig,
           timeline:          Timeline,
           fps:               ExportFrameRate,
+          rangeStart:        Double = 0,
+          rangeEnd:          Double? = nil,
           pipelineState:     MTLRenderPipelineState,
           depthStencilState: MTLDepthStencilState,
           scenePipeline:     ScenePipeline,
@@ -242,7 +245,13 @@ final class VideoExporter {
         self.holdoutPipelineState     = holdoutPipelineState
         self.transparentPipelineState = transparentPipelineState
         self.transparentDepthState    = transparentDepthState
-        self.animDuration      = timeline.duration
+        // Export range: clamp to [0, duration]; an empty/inverted range falls back
+        // to the full timeline so a bad In/Out can't produce a zero-length export.
+        let clampStart = max(0, min(rangeStart, timeline.duration))
+        let clampEnd   = max(clampStart, min(rangeEnd ?? timeline.duration, timeline.duration))
+        let len        = clampEnd - clampStart
+        self.animStart         = len > 0 ? clampStart : 0
+        self.animDuration      = len > 0 ? len : timeline.duration
         self.frameRate         = fps.value
         self.frameTimescale    = fps.timescale
         self.frameTicks        = fps.frameDuration
@@ -540,7 +549,7 @@ final class VideoExporter {
                 // Rational timing — exact for NTSC rates (e.g. 30000/1001).
                 let presentationTime = CMTime(value: CMTimeValue(writerIndex) * CMTimeValue(self.frameTicks),
                                               timescale: self.frameTimescale)
-                let t = Double(frameIndex) * Double(self.frameTicks) / Double(self.frameTimescale)
+                let t = self.animStart + Double(frameIndex) * Double(self.frameTicks) / Double(self.frameTimescale)
 
                 // Free the slot we're about to reuse (drains the GPU/readback of an
                 // earlier frame).  At depth 2 this is frame N-2, leaving N-1 in flight.

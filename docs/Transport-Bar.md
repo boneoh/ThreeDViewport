@@ -22,6 +22,10 @@ Playback advances by real wall-clock time, decoupled from the draw rate, so it
 runs at 1× regardless of display refresh. Pausing freezes the playhead; nothing in
 the scene animates while paused.
 
+When the [Timeline Editor](Timeline-Editor.md#in--out-marks)'s **Loop In/Out**
+toggle is on, playback is confined to the In…Out range instead of the whole
+timeline; the Loop toggle then wraps within that range.
+
 ## Related
 
 - The full keyframe view is the [Timeline Editor](Timeline-Editor.md) (**⌘J**).
