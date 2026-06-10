@@ -50,9 +50,11 @@ in only that slice:
 - Slicing only affects **animation timing**. Every object still appears — one whose
   keyframes all fall outside the range imports as a static hold of its pose at In.
 
-A source must have **both** marks set (or none) for this to be offered; a half-marked
-source is treated as having no range, so an ambiguous file can't produce a surprise
-slice. Position/Rotation/Scale and Include lights work exactly as for a full import.
+A source must have **both** marks set (or none) for this to be offered. If only **one**
+mark is set (or the pair is inverted), the dialog shows a warning that the stray mark
+is ignored and the **whole** project is imported — so an ambiguous file can't produce
+a surprise slice, but you can still proceed (or cancel and fix the marks).
+Position/Rotation/Scale and Include lights work exactly as for a full import.
 
 ## Notes
 

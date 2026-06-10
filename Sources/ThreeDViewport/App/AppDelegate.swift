@@ -1493,16 +1493,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             // marked source (one mark) is treated as no range, to avoid a surprise
             // slice from an ambiguous file.
             var sourceInOut: (in: Double, out: Double)? = nil
+            var sourceHalfMarked = false
             if let json = try? Data(contentsOf: url),
-               let data = try? JSONDecoder().decode(ProjectData.self, from: json),
-               let i = data.timeline.inPoint, let o = data.timeline.outPoint, o > i {
-                sourceInOut = (in: i, out: o)
+               let data = try? JSONDecoder().decode(ProjectData.self, from: json) {
+                let i = data.timeline.inPoint
+                let o = data.timeline.outPoint
+                if let i = i, let o = o, o > i {
+                    sourceInOut = (in: i, out: o)
+                } else if i != nil || o != nil {
+                    // Exactly one mark, or an inverted pair — slicing unavailable; warn.
+                    sourceHalfMarked = true
+                }
             }
 
             // Placement / timing dialog (position defaults to the Probe).
             let options = ImportProjectOptions(insertTime: viewport.timeline.currentTime,
                                                probe: viewport.probeConfig.position,
-                                               sourceInOut: sourceInOut)
+                                               sourceInOut: sourceInOut,
+                                               sourceHalfMarked: sourceHalfMarked)
             let alert = NSAlert()
             alert.messageText     = "Import \"\(url.deletingPathExtension().lastPathComponent)\""
             alert.informativeText = "Append its models, animation, and materials to the current scene."

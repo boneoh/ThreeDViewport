@@ -22,16 +22,22 @@ final class ImportProjectOptions: ObservableObject {
     /// The source project's saved In/Out range (seconds), or nil when it isn't a
     /// clean both-marks-set state (no marks, or only one mark — slicing unavailable).
     let sourceInOut: (in: Double, out: Double)?
+    /// True when the source has exactly one mark (or an inverted pair) — slicing is
+    /// unavailable, so the dialog warns the stray mark is ignored and the whole
+    /// project is imported.
+    let sourceHalfMarked: Bool
 
     init(insertTime: Double, probe: SIMD3<Float>,
-         sourceInOut: (in: Double, out: Double)? = nil) {
+         sourceInOut: (in: Double, out: Double)? = nil,
+         sourceHalfMarked: Bool = false) {
         self.insertTime = String(format: "%.3f", insertTime)
         self.probe = probe
         self.posX  = String(format: "%.3f", probe.x)
         self.posY  = String(format: "%.3f", probe.y)
         self.posZ  = String(format: "%.3f", probe.z)
-        self.sourceInOut    = sourceInOut
-        self.useSourceInOut = (sourceInOut != nil)
+        self.sourceInOut      = sourceInOut
+        self.sourceHalfMarked = sourceHalfMarked
+        self.useSourceInOut   = (sourceInOut != nil)
     }
 
     /// The slice to import, or nil when the user opted out (or none is available).
@@ -100,6 +106,12 @@ struct ImportProjectSheet: View {
                             + "imports only this slice, with its In at the insert time.",
                             r.in, r.out, r.out - r.in))
                     .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if options.sourceHalfMarked {
+                Label("The source has only one timeline mark (needs both In and Out to "
+                    + "slice). It will be ignored and the whole project imported.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
