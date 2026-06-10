@@ -20,6 +20,20 @@ The first column's name is the canonical name used throughout the app (the HUD, 
 dropdowns all match it). When the same model is loaded more than once, the copies are
 disambiguated with a numeric suffix — *hand 1*, *hand 2*, etc.
 
+### Import bundles
+
+Everything brought in by one [Import Project](Import-Project.md) is grouped under a
+collapsible **bundle header** named after the source file, so a large import folds
+away to a single row instead of scattering lanes through the timeline. The bundle is
+display-only — it groups the lanes (objects, model groups, glued envelopes, and any
+imported lights) but has no animation of its own. Group and envelope headers stay
+collapsible *inside* the bundle (two levels of disclosure). A freshly imported bundle
+starts expanded; click its triangle to collapse it. Bundles persist with the project.
+
+**Rename** the bundle header by right-clicking it ▸ *Rename Import Bundle…*. Member
+rows (objects and glued units) rename through the [Model Inspector](Model-Inspector.md)
+as usual and stay nested under the bundle.
+
 ## Keyboard
 
 | Command | Operation |

@@ -80,6 +80,8 @@ struct ProjectData: Codable {
     /// of truth behind the baked keyframes).  Empty for older files.
     var spinRateSchedules:      [SpinRateScheduleData]  = []
     var orbitRateSchedules:     [OrbitRateScheduleData] = []
+    /// Part B: display-only import-bundle table (id → name).  Empty for older files.
+    var importBundles:          [BundleData] = []
 
     // MARK: - Memberwise init (required because we define init(from:) below)
 
@@ -118,7 +120,8 @@ struct ProjectData: Codable {
          particleEmitterEasingModes: [Int]            = [],
          envelopes:           [EnvelopeData]          = [],
          spinRateSchedules:   [SpinRateScheduleData]  = [],
-         orbitRateSchedules:  [OrbitRateScheduleData] = []) {
+         orbitRateSchedules:  [OrbitRateScheduleData] = [],
+         importBundles:       [BundleData]            = []) {
         self.version             = version
         self.modelPath           = modelPath
         self.modelPaths          = modelPaths
@@ -155,6 +158,7 @@ struct ProjectData: Codable {
         self.envelopes           = envelopes
         self.spinRateSchedules   = spinRateSchedules
         self.orbitRateSchedules  = orbitRateSchedules
+        self.importBundles       = importBundles
     }
 
     // MARK: - Custom decoder
@@ -205,7 +209,15 @@ struct ProjectData: Codable {
         envelopes           = (try? c.decode([EnvelopeData].self, forKey: .envelopes)) ?? []
         spinRateSchedules   = (try? c.decode([SpinRateScheduleData].self,  forKey: .spinRateSchedules))  ?? []
         orbitRateSchedules  = (try? c.decode([OrbitRateScheduleData].self, forKey: .orbitRateSchedules)) ?? []
+        importBundles       = (try? c.decode([BundleData].self,            forKey: .importBundles))      ?? []
     }
+}
+
+// Part B: one display-only import bundle (Timeline Editor grouping).  `id` matches
+// the `importBundleID` stamped on objects / lights; `name` is the source filename.
+struct BundleData: Codable {
+    var id:   Int
+    var name: String
 }
 
 // v35: rate-marker schedules for the Spin / Orbit animators.  Tracks are matched
@@ -251,6 +263,9 @@ struct EnvelopeData: Codable {
     var keyframes:     [KeyframeData] = []
     var easingMode:    Int            = 0
     var memberIndices: [Int]          = []
+    // Part B: display-only import-bundle tag.  Envelopes are saved here (not in
+    // objectsData), so the tag must ride along or glued objects un-nest on reload.
+    var importBundleID: Int?          = nil
 
     init(from decoder: Decoder) throws {
         let c          = try decoder.container(keyedBy: CodingKeys.self)
@@ -259,15 +274,17 @@ struct EnvelopeData: Codable {
         keyframes      = (try? c.decode([KeyframeData].self, forKey: .keyframes))     ?? []
         easingMode     = (try? c.decode(Int.self,           forKey: .easingMode))    ?? 0
         memberIndices  = (try? c.decode([Int].self,         forKey: .memberIndices)) ?? []
+        importBundleID =  try? c.decode(Int.self,           forKey: .importBundleID)
     }
 
     init(name: String, transform: [Float], keyframes: [KeyframeData],
-         easingMode: Int, memberIndices: [Int]) {
+         easingMode: Int, memberIndices: [Int], importBundleID: Int? = nil) {
         self.name          = name
         self.transform     = transform
         self.keyframes     = keyframes
         self.easingMode    = easingMode
         self.memberIndices = memberIndices
+        self.importBundleID = importBundleID
     }
 }
 
@@ -652,6 +669,8 @@ struct ObjectData: Codable {
     // "Brightness": base-colour self-emission (0…1).  Default 0 → no glow, so older
     // files without the field load unchanged.
     var emissiveStrength: Float  = 0
+    // Part B: display-only import-bundle tag.  nil = not from a bundled import.
+    var importBundleID:  Int?    = nil
 
     // Custom decoder so older files without the v15 fields decode cleanly.
     init(from decoder: Decoder) throws {
@@ -670,6 +689,7 @@ struct ObjectData: Codable {
         baseColorFactor      = (try? c.decode([Float].self,       forKey: .baseColorFactor))     ?? []
         opacity              = (try? c.decode(Float.self,         forKey: .opacity))             ?? 1
         emissiveStrength     = (try? c.decode(Float.self,         forKey: .emissiveStrength))    ?? 0
+        importBundleID       =  try? c.decode(Int.self,           forKey: .importBundleID)
     }
 
     init(name: String, keyframes: [KeyframeData],
@@ -679,7 +699,7 @@ struct ObjectData: Codable {
          feedbackEnabled: Bool = true, normalMode: Int = 0,
          metallicFactor: Float = -1, roughnessFactor: Float = -1,
          baseColorFactor: [Float] = [], opacity: Float = 1,
-         emissiveStrength: Float = 0) {
+         emissiveStrength: Float = 0, importBundleID: Int? = nil) {
         self.name                = name
         self.keyframes           = keyframes
         self.baseTransformMatrix = baseTransformMatrix
@@ -694,6 +714,7 @@ struct ObjectData: Codable {
         self.baseColorFactor     = baseColorFactor
         self.opacity             = opacity
         self.emissiveStrength    = emissiveStrength
+        self.importBundleID      = importBundleID
     }
 }
 
@@ -848,6 +869,8 @@ struct LightConfigData: Codable {
     var range:                   Float = 15.0
     var beamThickness:           Float = 1.0
     var excludeBeamFromFeedback: Bool  = false
+    // Part B: display-only import-bundle tag (optional → older files decode to nil).
+    var importBundleID:          Int?  = nil
 }
 
 // v6: One saved light keyframe — intensity, colour, target, position.

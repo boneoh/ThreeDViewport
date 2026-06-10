@@ -37,6 +37,7 @@ enum TrackRef: Equatable, Hashable {
     case group(Int)    // groupID — multi-part model header row
     case fog            // the fog volume (single instance)
     case particles(Int) // index into ParticleManager.emitters
+    case importBundle(Int) // import-bundle ID — display-only collapsible header (Part B)
 }
 
 // One row in the timeline label/track area.
@@ -44,10 +45,11 @@ enum TrackRef: Equatable, Hashable {
 struct TrackRow {
     var name:          String
     var ref:           TrackRef
-    /// True for collapsed/expanded group-header rows.
+    /// True for collapsed/expanded group-header rows (groups, envelopes, bundles).
     var isGroupHeader: Bool  = false
-    /// True for part rows shown when a group is expanded (indented name, no easing popup).
-    var isIndented:    Bool  = false
+    /// Nesting depth for the label column (0 = top level).  1 = a group/envelope part
+    /// or a bundle member; 2 = a part nested under a bundled group/envelope.
+    var indentLevel:   Int   = 0
 }
 
 // MARK: - Coordinate channel paste (Part B2)
@@ -192,6 +194,8 @@ final class TimelineEditorView: NSView {
     /// on group-header rows.  Clicking inside this zone toggles group expansion.
     /// Clicking elsewhere on the header row only selects the lane (no expand/collapse).
     private let triangleZone:    CGFloat = 22
+    /// Horizontal shift per nesting level in the label column (bundle ▸ group ▸ part).
+    private let indentStep:      CGFloat = 12
     /// Width of each lane's easing-mode dropdown in the right of the label column.
     private let easingPopupW:    CGFloat = 58
 
@@ -416,6 +420,10 @@ final class TimelineEditorView: NSView {
     // Expanded header rows, keyed by the header's own ref so multi-part model groups
     // (.group) and glued envelopes (.object) can both be collapsed/expanded.
     private var expandedHeaders:     Set<TrackRef> = []
+
+    // Import-bundle IDs already shown once — a new bundle is expanded on first
+    // appearance, then remembers the user's collapse/expand toggle (Part B).
+    private var seenBundles:         Set<Int> = []
     private var lastExpandedHeaders: Set<TrackRef> = []
 
     // ── Easing popup buttons ──────────────────────────────────────────────────
@@ -564,31 +572,31 @@ final class TimelineEditorView: NSView {
         }
 
         var result: TrackList = []
-        for (_, _, entry) in entries {
+
+        // Emits one top-level entry (and its nested parts) at the given indent level.
+        func emit(_ entry: RowEntry, level: Int) {
             switch entry {
             case .camera:
-                result.append(TrackRow(name: "Camera", ref: .camera))
+                result.append(TrackRow(name: "Camera", ref: .camera, indentLevel: level))
             case .fog:
-                result.append(TrackRow(name: "Fog", ref: .fog))
+                result.append(TrackRow(name: "Fog", ref: .fog, indentLevel: level))
             case .particles(let idx, let name):
-                result.append(TrackRow(name: name, ref: .particles(idx)))
+                result.append(TrackRow(name: name, ref: .particles(idx), indentLevel: level))
             case .standalone(let idx, let obj):
                 result.append(TrackRow(name: sceneManager?.displayName(for: obj) ?? obj.name,
-                                       ref: .object(idx)))
+                                       ref: .object(idx), indentLevel: level))
             case .light(let idx):
-                result.append(TrackRow(name: lightLaneName(idx), ref: .light(idx)))
+                result.append(TrackRow(name: lightLaneName(idx), ref: .light(idx), indentLevel: level))
             case .group(let gid):
                 let gName = sceneManager?.groupName(for: gid) ?? "Group"
                 let parts = groupOrder[gid] ?? []
                 result.append(TrackRow(name: gName, ref: .group(gid),
-                                       isGroupHeader: true))
+                                       isGroupHeader: true, indentLevel: level))
                 if expandedHeaders.contains(.group(gid)) {
-                    // Parts sorted alphabetically by name, beneath their header.
                     let sorted = parts.sorted { $0.obj.name.localizedStandardCompare($1.obj.name) == .orderedAscending }
                     for pair in sorted {
                         result.append(TrackRow(name: sceneManager?.partName(for: pair.obj) ?? pair.obj.name,
-                                               ref: .object(pair.idx),
-                                               isIndented: true))
+                                               ref: .object(pair.idx), indentLevel: level + 1))
                     }
                 }
             case .envelope(let idx):
@@ -600,14 +608,65 @@ final class TimelineEditorView: NSView {
                     .sorted { $0.obj.name.localizedStandardCompare($1.obj.name) == .orderedAscending }
                 let name = sceneManager?.displayName(for: objects[idx]) ?? objects[idx].name
                 result.append(TrackRow(name: name, ref: .object(idx),
-                                       isGroupHeader: !members.isEmpty))
+                                       isGroupHeader: !members.isEmpty, indentLevel: level))
                 if !members.isEmpty, expandedHeaders.contains(.object(idx)) {
                     for m in members {
                         result.append(TrackRow(name: sceneManager?.displayName(for: m.obj) ?? m.obj.name,
-                                               ref: .object(m.idx),
-                                               isIndented: true))
+                                               ref: .object(m.idx), indentLevel: level + 1))
                     }
                 }
+            }
+        }
+
+        // ── Import bundles (Part B) ───────────────────────────────────────────
+        // Partition the alphabetical top-level entries into bundles (display-only
+        // collapsible headers grouping one File ▸ Import Project) and loose lanes.
+        func bundleID(of entry: RowEntry) -> Int? {
+            switch entry {
+            case .standalone(let idx, _): return objects[safe: idx]?.importBundleID
+            case .group(let gid):         return objects.first(where: { $0.groupID == gid })?.importBundleID
+            case .envelope(let idx):      return objects[safe: idx]?.importBundleID
+            case .light(let idx):         return lightManager?.lights[safe: idx]?.importBundleID
+            default:                      return nil
+            }
+        }
+
+        var bundleMembers: [Int: [(sortName: String, order: Int, entry: RowEntry)]] = [:]
+        var bundleFirstSeen: [Int] = []
+        // Top-level emission list: loose entries + one synthetic header per bundle.
+        var top: [(sortName: String, order: Int, bundleID: Int?, entry: RowEntry?)] = []
+        for e in entries {
+            if let bid = bundleID(of: e.entry) {
+                if bundleMembers[bid] == nil { bundleFirstSeen.append(bid) }
+                bundleMembers[bid, default: []].append((e.sortName, e.order, e.entry))
+            } else {
+                top.append((e.sortName, e.order, nil, e.entry))
+            }
+        }
+        for bid in bundleFirstSeen {
+            let members  = bundleMembers[bid] ?? []
+            let minOrder = members.map { $0.order }.min() ?? 0
+            top.append((sceneManager?.bundleName(for: bid) ?? "Import", minOrder, bid, nil))
+        }
+        top.sort {
+            let c = $0.sortName.localizedStandardCompare($1.sortName)
+            return c == .orderedSame ? ($0.order < $1.order) : (c == .orderedAscending)
+        }
+
+        for t in top {
+            if let bid = t.bundleID {
+                // A freshly imported bundle is shown expanded the first time it appears,
+                // then remembers the user's collapse/expand toggle.
+                if !seenBundles.contains(bid) {
+                    seenBundles.insert(bid)
+                    expandedHeaders.insert(.importBundle(bid))
+                }
+                result.append(TrackRow(name: t.sortName, ref: .importBundle(bid), isGroupHeader: true))
+                if expandedHeaders.contains(.importBundle(bid)) {
+                    for m in (bundleMembers[bid] ?? []) { emit(m.entry, level: 1) }
+                }
+            } else if let entry = t.entry {
+                emit(entry, level: 0)
             }
         }
         return result
@@ -629,6 +688,8 @@ final class TimelineEditorView: NSView {
             return fogSettings?.keyframeTrack?.keyframes.map { $0.time } ?? []
         case .particles(let i):
             return particleManager?.emitters[safe: i]?.keyframeTrack?.keyframes.map { $0.time } ?? []
+        case .importBundle:
+            return []   // display-only header — no track of its own
         }
     }
 
@@ -928,6 +989,8 @@ final class TimelineEditorView: NSView {
         let popupReserved: CGFloat = 64   // popup width (58) + right margin (3) + gap (3)
 
         for (i, row) in tracks.enumerated() {
+            // Each nesting level shifts the disclosure triangle + name to the right.
+            let indent = CGFloat(row.indentLevel) * indentStep
             if row.isGroupHeader {
                 let triStr  = (expandedHeaders.contains(row.ref) ? "▼" : "▶") as NSString
                 let triAttrs: [NSAttributedString.Key: Any] = [
@@ -935,7 +998,7 @@ final class TimelineEditorView: NSView {
                     .foregroundColor: NSColor(white: 0.92, alpha: 1)
                 ]
                 let triSize = triStr.size(withAttributes: triAttrs)
-                triStr.draw(at: NSPoint(x: lx + 7, y: laneCenter(i) - triSize.height / 2),
+                triStr.draw(at: NSPoint(x: lx + 7 + indent, y: laneCenter(i) - triSize.height / 2),
                             withAttributes: triAttrs)
             }
 
@@ -946,13 +1009,10 @@ final class TimelineEditorView: NSView {
             // camera/light/fog/particles) reserve the popup zone; indented child
             // part rows have no popup but still reserve it (harmless, keeps names short).
             if row.isGroupHeader {
-                nameX    = triangleZone
-                maxNameW = labelWidth - popupReserved - nameX
-            } else if case .object = row.ref {
-                nameX    = row.isIndented ? 20 : 8
+                nameX    = triangleZone + indent
                 maxNameW = labelWidth - popupReserved - nameX
             } else {
-                nameX    = 8
+                nameX    = 8 + indent
                 maxNameW = labelWidth - popupReserved - nameX
             }
 
@@ -1157,8 +1217,11 @@ final class TimelineEditorView: NSView {
             }
 
             if row.isGroupHeader {
-                // Toggle expansion only via the disclosure triangle.
-                if pt.x - labelOriginX < triangleZone {
+                // Toggle expansion only via the disclosure triangle, which shifts
+                // right with the row's nesting level (bundle ▸ group ▸ part).
+                let indent  = CGFloat(row.indentLevel) * indentStep
+                let localX  = pt.x - labelOriginX
+                if localX >= indent && localX < triangleZone + indent {
                     if expandedHeaders.contains(row.ref) {
                         expandedHeaders.remove(row.ref)
                     } else {
@@ -1313,6 +1376,20 @@ final class TimelineEditorView: NSView {
     override func menu(for event: NSEvent) -> NSMenu? {
         let tracks = buildTracks()
         let pt     = convert(event.locationInWindow, from: nil)
+
+        // Right-click on an import-bundle header → rename the bundle.
+        if let lane = hitTestLane(at: pt, tracks: tracks),
+           case .importBundle(let bid) = tracks[lane].ref {
+            let menu = NSMenu()
+            let item = NSMenuItem(title: "Rename Import Bundle…",
+                                  action: #selector(renameBundleMenuAction(_:)),
+                                  keyEquivalent: "")
+            item.target            = self
+            item.representedObject = bid
+            menu.addItem(item)
+            return menu
+        }
+
         guard let hit = hitTestDiamond(at: pt, tracks: tracks) else { return nil }
         let ref = tracks[hit.trackIndex].ref
 
@@ -1344,6 +1421,26 @@ final class TimelineEditorView: NSView {
             menu.addItem(item)
         }
         return menu
+    }
+
+    @objc private func renameBundleMenuAction(_ sender: NSMenuItem) {
+        guard let bid = sender.representedObject as? Int, let sm = sceneManager else { return }
+        let alert = NSAlert()
+        alert.messageText     = "Rename Import Bundle"
+        alert.informativeText = "Enter a new name for this import bundle's Timeline header."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.stringValue     = sm.importBundles[bid] ?? sm.bundleName(for: bid)
+        alert.accessoryView   = field
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let newName = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !newName.isEmpty else { return }
+        sm.importBundles[bid] = newName
+        NSApp.sendAction(#selector(AppDelegate.markDirtyFromUI), to: nil, from: self)
+        rebuildEasingPopups()
+        needsDisplay = true
     }
 
     private func clipboardHasValue(_ clip: CoordinateClipboard, _ ch: CoordChannel) -> Bool {
@@ -1698,6 +1795,9 @@ final class TimelineEditorView: NSView {
                   let idx   = track.keyframes.firstIndex(where: { abs($0.time - fromTime) < 0.0005 })
             else { return }
             track.retimeKeyframe(at: idx, to: toTime)
+
+        case .importBundle:
+            return   // display-only header — no track
         }
     }
 
@@ -1728,6 +1828,8 @@ final class TimelineEditorView: NSView {
                 fogSettings?.keyframeTrack?.moveKeyframes(from: from, to: to)
             case .particles(let i):
                 particleManager?.emitters[safe: i]?.keyframeTrack?.moveKeyframes(from: from, to: to)
+            case .importBundle:
+                break   // display-only header — no track
             }
         }
     }
@@ -1772,6 +1874,8 @@ final class TimelineEditorView: NSView {
             fogSettings?.keyframeTrack?.removeKeyframe(at: ki)
         case .particles(let i):
             particleManager?.emitters[safe: i]?.keyframeTrack?.removeKeyframe(at: ki)
+        case .importBundle:
+            break   // display-only header — no track
         }
         selectedKFIndex = nil
         needsDisplay    = true
@@ -1817,6 +1921,8 @@ final class TimelineEditorView: NSView {
                   let idx   = track.keyframes.firstIndex(where: { abs($0.time - time) < eps })
             else { return }
             track.removeKeyframe(at: idx)
+        case .importBundle:
+            return   // display-only header — no track
         }
     }
 
@@ -1830,6 +1936,7 @@ final class TimelineEditorView: NSView {
         case .group(let gid): onInsertGroupKeyframe?(gid)
         case .fog:            onInsertFogKeyframe?()
         case .particles(let i): onInsertParticleKeyframe?(i)
+        case .importBundle:   return   // display-only header — no track
         }
         // The stamp call above triggers ViewportView.onKeyframeStamped, which
         // AppDelegate routes back to `selectKeyframe(ref:atTime:)` — so the new
@@ -1997,6 +2104,7 @@ final class TimelineEditorView: NSView {
         case .group(let gid):   return (sceneManager?.groupName(for: gid), nil)
         case .light(let i):     return (nil, i)
         case .particles(let i): return (nil, i)
+        case .importBundle:     return (nil, nil)   // display-only header — not copyable
         }
     }
 
@@ -2112,6 +2220,8 @@ final class TimelineEditorView: NSView {
                 case .particles(let i):
                     guard let kf = particleManager?.emitters[safe: i]?.keyframeTrack?.keyframes[safe: d.kfIndex] else { continue }
                     entries.append((.particles(kf), t, ref))
+                case .importBundle:
+                    continue   // display-only header — no track
                 }
             }
             guard !entries.isEmpty else { return }
@@ -2161,6 +2271,8 @@ final class TimelineEditorView: NSView {
             clipboardKeyframe = .particles(kf)
             coordinateClipboard?.position = kf.position
             coordinateClipboard?.size     = kf.size
+        case .importBundle:
+            return   // display-only header — no track
         }
         if let clip = clipboardKeyframe {
             writeKeyframePasteboard([(clip, 0, ref)])   // mirror for cross-instance paste
@@ -2432,6 +2544,8 @@ final class TimelineEditorView: NSView {
                 action  = #selector(easingPopupTrackChanged(_:))
                 tag     = 0
                 current = mode
+            case .importBundle:
+                continue   // display-only header — no easing popup
             }
 
             let popup = NSPopUpButton(frame: NSRect(x: popupX, y: popupY,
@@ -2495,6 +2609,7 @@ final class TimelineEditorView: NSView {
         case .light(let i):     return lightManager?.keyframeTracks[safe: i]??.easingMode
         case .fog:              return fogSettings?.keyframeTrack?.easingMode
         case .particles(let i): return particleManager?.emitters[safe: i]?.keyframeTrack?.easingMode
+        case .importBundle:     return nil   // display-only header — no track
         }
     }
 
@@ -2507,6 +2622,7 @@ final class TimelineEditorView: NSView {
         case .light(let i):     lightManager?.keyframeTracks[safe: i]??.easingMode = mode
         case .fog:              fogSettings?.keyframeTrack?.easingMode = mode
         case .particles(let i): particleManager?.emitters[safe: i]?.keyframeTrack?.easingMode = mode
+        case .importBundle:     break   // display-only header — no track
         }
     }
 }

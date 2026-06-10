@@ -62,6 +62,11 @@ struct LightConfig {
     /// never captured in the delay-line ring buffer (no trailing copies).
     var excludeBeamFromFeedback: Bool = false
 
+    /// Display-only "import bundle" tag (Phase 2 Part B): lights brought in by one
+    /// File ▸ Import Project (with Include lights) share a bundle ID so the Timeline
+    /// Editor can fold their lanes under the bundle header.  Nil = not bundled.
+    var importBundleID: Int? = nil
+
     // ── Derived aim direction ─────────────────────────────────────────────────
     /// Unit vector from `position` toward `target`.  Setting it moves `target`
     /// along the new direction, preserving the current position→target distance

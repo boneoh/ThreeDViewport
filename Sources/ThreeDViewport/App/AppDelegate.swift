@@ -3937,6 +3937,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 self.kfEditSnapshot = .particles(index: i, kfTime: kfTime)
                 print("[DEBUG] AppDelegate: entered particle keyframe edit emitter=\(i) t="
                     + String(format: "%.3f", kfTime))
+            case .importBundle:
+                return   // display-only header — no track to edit
             }
         }
 
@@ -4098,6 +4100,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             case .particles(let i):
                 // Make the panel show the clicked emitter (no viewport control mode).
                 viewport.particleManager.selectedIndex = i
+            case .importBundle:
+                // Display-only header — selecting it just highlights the lane; no
+                // viewport control mode and no selection change.
+                break
             }
         }
 

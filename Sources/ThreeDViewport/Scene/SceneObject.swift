@@ -47,6 +47,12 @@ final class SceneObject {
     // Nil = not part of any group (single-mesh models).
     var groupID: Int?
 
+    // Display-only "import bundle" tag (Phase 2 Part B): objects brought in by one
+    // File ▸ Import Project share a bundle ID so the Timeline Editor can group their
+    // lanes under one collapsible header.  Nil = not from a bundled import.  Purely
+    // a display grouping — no scene-graph / transform meaning.
+    var importBundleID: Int?
+
     // True for "envelope" null nodes — a geometryless transform parent created by
     // the Glue feature.  Members set their parentIndex to the envelope's index so
     // applyHierarchy() drives them as a unit.  Has no GPU buffers (indexCount == 0),

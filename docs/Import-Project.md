@@ -35,6 +35,10 @@ like any other object in the host scene.
 
 The host scene keeps its own camera and scene-wide effects.
 
+Imported lanes are grouped under a collapsible **bundle header** in the
+[Timeline Editor](Timeline-Editor.md#import-bundles) (named after the source file), so
+a large import can be folded away to a single row.
+
 ## Importing a slice (source In/Out)
 
 Mark an **In** and **Out** range on the source project's timeline (the Timeline Editor

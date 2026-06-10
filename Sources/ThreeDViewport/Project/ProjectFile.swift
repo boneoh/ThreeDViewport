@@ -132,9 +132,16 @@ final class ProjectFile {
         let imported = Array(sm.objects[modelStart...])
         guard !imported.isEmpty else { return true }
 
+        // One display-only bundle for this import so the Timeline Editor can fold its
+        // lanes under a single collapsible header (Part B).  Stamped onto every
+        // imported object (after restoreObject, which would otherwise re-set the tag
+        // from the source's own bundles), envelope node, and opt-in light.
+        let bundleID = sm.makeImportBundle(name: url.deletingPathExtension().lastPathComponent)
+
         // 2. Restore per-object data positionally, shifting keyframe times by T.
         let n = min(imported.count, data.objects.count)
         for i in 0..<n { restoreObject(data.objects[i], into: imported[i], vp: vp, timeOffset: T) }
+        for o in imported { o.importBundleID = bundleID }
 
         // 3. Group placement + group-level animation, composed with M.  Keyed by
         //    (filename, occurrence among imported groups), which matches the saved
@@ -159,6 +166,7 @@ final class ProjectFile {
             let node = SceneObject(name: env.name)
             node.isEnvelope = true
             node.transform = M * envT; node.baseTransform = node.transform; node.localTransform = node.transform
+            node.importBundleID = bundleID
             if !env.keyframes.isEmpty {
                 let track = KeyframeTrack()
                 track.easingMode = EasingMode(rawValue: env.easingMode) ?? .linear
@@ -183,7 +191,7 @@ final class ProjectFile {
         }
 
         // 6. Lights (opt-in).
-        if options.includeLights { appendImportedLights(data, by: M, timeOffset: T, vp: vp) }
+        if options.includeLights { appendImportedLights(data, by: M, timeOffset: T, bundleID: bundleID, vp: vp) }
 
         // 7. Extend the timeline to fit the imported clip.  In HOST time the clip
         //    spans [insertTime, insertTime + length], where length is the slice span
@@ -331,6 +339,7 @@ final class ProjectFile {
     private static func appendImportedLights(_ data: ProjectData,
                                              by M: matrix_float4x4,
                                              timeOffset: Double,
+                                             bundleID: Int,
                                              vp: ViewportView) {
         let lm = vp.lightManager
         func point(_ x: Float, _ y: Float, _ z: Float) -> SIMD3<Float> {
@@ -352,6 +361,7 @@ final class ProjectFile {
             l.range                   = lcd.range
             l.beamThickness           = lcd.beamThickness
             l.excludeBeamFromFeedback = lcd.excludeBeamFromFeedback
+            l.importBundleID          = bundleID
             lm.lights.append(l)
             lm.keyframeTracks.append(nil)
         }
@@ -465,7 +475,8 @@ final class ProjectFile {
                 roughnessFactor:     obj.material.roughnessFactor,
                 baseColorFactor:     [bcf.x, bcf.y, bcf.z, bcf.w],
                 opacity:             obj.material.opacity,
-                emissiveStrength:    obj.material.emissiveStrength
+                emissiveStrength:    obj.material.emissiveStrength,
+                importBundleID:      obj.importBundleID
             )
         }
 
@@ -538,7 +549,8 @@ final class ProjectFile {
                 outerConeAngle:          l.outerConeAngle,
                 range:                   l.range,
                 beamThickness:           l.beamThickness,
-                excludeBeamFromFeedback: l.excludeBeamFromFeedback
+                excludeBeamFromFeedback: l.excludeBeamFromFeedback,
+                importBundleID:          l.importBundleID
             )
         }
 
@@ -634,7 +646,8 @@ final class ProjectFile {
                 transform:     encodeMatrix(env.baseTransform),
                 keyframes:     kfData,
                 easingMode:    (env.keyframeTrack?.easingMode ?? .linear).rawValue,
-                memberIndices: members
+                memberIndices: members,
+                importBundleID: env.importBundleID
             )
         }
 
@@ -735,7 +748,8 @@ final class ProjectFile {
             particleEmitterEasingModes: vp.particleManager.emitters.map { ($0.keyframeTrack?.easingMode ?? .linear).rawValue },
             envelopes:           envelopeData,
             spinRateSchedules:   spinSchedData,
-            orbitRateSchedules:  orbitSchedData
+            orbitRateSchedules:  orbitSchedData,
+            importBundles:       vp.sceneManager.importBundles.map { BundleData(id: $0.key, name: $0.value) }
         )
     }
 
@@ -913,6 +927,12 @@ final class ProjectFile {
             print("[DEBUG] ProjectFile: no model paths stored in project")
         }
 
+        // ── Import bundles (Part B) ───────────────────────────────────────────
+        // Restore the id→name table (clear() emptied it); per-object / per-light
+        // importBundleID tags are reattached by applyKeyframes / the light restore.
+        for b in data.importBundles { vp.sceneManager.importBundles[b.id] = b.name }
+        vp.sceneManager.syncImportBundleCounter()
+
         // ── Color mode ────────────────────────────────────────────────────────
         vp.renderSettings.colorMode = RenderColorMode(rawValue: data.colorMode) ?? .color
         print("[DEBUG] ProjectFile: colorMode=" + vp.renderSettings.colorMode.displayName)
@@ -974,6 +994,7 @@ final class ProjectFile {
                 l.range                   = lcd.range
                 l.beamThickness           = lcd.beamThickness
                 l.excludeBeamFromFeedback = lcd.excludeBeamFromFeedback
+                l.importBundleID          = lcd.importBundleID   // Part B
                 return l
             }
             // Pad keyframe tracks array to match new light count
@@ -1215,6 +1236,7 @@ final class ProjectFile {
         obj.occludeWhenHidden = saved.occludeWhenHidden   // v17
         obj.objectClass = ObjectClass(rawValue: saved.objectClass) ?? .background
         obj.feedbackEnabled = saved.feedbackEnabled
+        obj.importBundleID  = saved.importBundleID   // Part B (import overrides this later)
         if let mode = NormalMode(rawValue: saved.normalMode), mode != .auto {
             vp.applyNormalMode(mode, toTargets: [obj])
             obj.normalMode = mode
@@ -1281,6 +1303,7 @@ final class ProjectFile {
             node.transform      = m
             node.baseTransform  = m
             node.localTransform = m
+            node.importBundleID = env.importBundleID   // Part B: keep glued objects nested
 
             if !env.keyframes.isEmpty {
                 let track = KeyframeTrack()

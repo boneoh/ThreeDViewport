@@ -53,6 +53,13 @@ final class SceneManager {
     // system writes it by evaluating groupKeyframeTracks.
     var groupTransforms:     [Int: matrix_float4x4] = [:]
 
+    // ── Import bundles (Phase 2 Part B — display-only) ───────────────────────
+    // id → bundle name (the source project's filename at import time).  Objects /
+    // lights from one File ▸ Import Project share a bundle ID so the Timeline Editor
+    // can fold their lanes under one collapsible header.  No scene-graph meaning.
+    var importBundles: [Int: String] = [:]
+    private var nextImportBundleID: Int = 0
+
     init() {
         print("[DEBUG] SceneManager: initialized, objects count = 0")
     }
@@ -62,6 +69,37 @@ final class SceneManager {
         let id = nextGroupID
         nextGroupID += 1
         return id
+    }
+
+    /// Allocates a fresh import-bundle ID and records its (source-file) name.
+    func makeImportBundle(name: String) -> Int {
+        let id = nextImportBundleID
+        nextImportBundleID += 1
+        importBundles[id] = name
+        return id
+    }
+
+    /// After restoring bundles from a loaded project, bump the allocator so a later
+    /// import can't reuse a loaded ID.
+    func syncImportBundleCounter() {
+        nextImportBundleID = max(nextImportBundleID, (importBundles.keys.max() ?? -1) + 1)
+    }
+
+    /// Display name for an import bundle — numbered ("scene 1", "scene 2") when more
+    /// than one live bundle shares the same base name.  Display only (mirrors
+    /// `groupName(for:)`); identity is the bundle ID.
+    func bundleName(for id: Int) -> String {
+        let base = importBundles[id] ?? "Import \(id)"
+        var seen = Set<Int>()
+        var total = 0
+        var occurrence = 0
+        for obj in objects {
+            guard let bid = obj.importBundleID, seen.insert(bid).inserted,
+                  (importBundles[bid] ?? "Import \(bid)") == base else { continue }
+            total += 1
+            if bid == id { occurrence = total }   // 1-based, by object order
+        }
+        return total > 1 ? "\(base) \(occurrence)" : base
     }
 
     /// All objects that share the given group ID.
@@ -149,6 +187,7 @@ final class SceneManager {
         objects.removeAll()
         groupKeyframeTracks.removeAll()
         groupTransforms.removeAll()
+        importBundles.removeAll()
         selectedIndex = 0
     }
 
