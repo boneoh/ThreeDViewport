@@ -4525,17 +4525,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let objects  = scene.objects
         let selIndex = scene.selectedIndex
 
-        // World rest pose of `i` = product of baseTransforms up to the true root.
-        func worldRest(_ i: Int) -> matrix_float4x4 {
-            var m = matrix_identity_float4x4
-            var cur: Int? = i
-            var hops = 0
-            while let c = cur, hops <= objects.count {
-                m = objects[c].baseTransform * m
-                cur = objects[c].parentIndex
-                hops += 1
-            }
-            return m
+        // Live displayed world of `i` at the current playhead.  obj.transform already
+        // holds the keyframe-evaluated world (applyHierarchy composes the parent chain);
+        // the group matrix adds a multi-part model's placement.  Baking THIS (not the
+        // REST baseTransform) captures the pose you see — including a keyframed assembly
+        // like a posed "cone head" — which the rest pose would lose.
+        func liveWorld(_ i: Int) -> matrix_float4x4 {
+            let o  = objects[i]
+            let gt = o.groupID.flatMap { scene.groupTransforms[$0] } ?? matrix_identity_float4x4
+            return gt * o.transform
         }
         // True when `i` equals `root` or sits under it in the parent chain.
         func isUnder(_ i: Int, _ root: Int) -> Bool {
@@ -4571,14 +4569,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             frameIndex    = selIndex
             assetName = scene.displayName(for: sel)
         }
-        let frameInv = simd_inverse(worldRest(frameIndex))
+        let frameInv = simd_inverse(liveWorld(frameIndex))
 
         var meshes: [GLBExporter.Mesh] = []
         var droppedTextures = false
         for i in memberIndices {
             let obj = objects[i]
             guard !obj.cpuPositions.isEmpty, !obj.cpuIndices.isEmpty else { continue }
-            let rel = frameInv * worldRest(i)
+            let rel = frameInv * liveWorld(i)
             let mat = obj.material
             // A texture that's loaded but whose source bytes weren't retained can't
             // be embedded (rare — e.g. an external image that moved); flag those.
