@@ -82,6 +82,183 @@ final class ProjectFile {
         return data
     }
 
+    // MARK: - Import another project into the current scene
+
+    /// Placement + timing for a project import (Phase 1: bake-on-import).
+    struct ImportOptions {
+        var insertTime:    Double          = 0                          // host time the clip begins at
+        var transform:     matrix_float4x4 = matrix_identity_float4x4    // TRS world placement (baked in)
+        var includeLights: Bool            = false
+    }
+
+    /// Imports another `.3dvp`'s models, animation, materials, and envelopes (and,
+    /// optionally, its lights) INTO the current scene — appending, not replacing.
+    /// Every imported keyframe time is shifted by `options.insertTime`, and the whole
+    /// import is placed by `options.transform` (baked into base / group / envelope /
+    /// light transforms).  Camera and global FX (fog / particles / grade / background
+    /// / feedback) are ignored — the host keeps its own.  Returns false if unreadable.
+    @discardableResult
+    static func importProject(from url: URL, into vp: ViewportView,
+                              options: ImportOptions) -> Bool {
+        guard let json = try? Data(contentsOf: url),
+              let data = try? JSONDecoder().decode(ProjectData.self, from: json) else {
+            return false
+        }
+        let sm = vp.sceneManager
+        let T  = options.insertTime
+        let M  = options.transform
+
+        // 1. Append the import's models (reproduces its object order/structure).
+        let modelStart = sm.objects.count
+        let paths = data.modelPaths.isEmpty ? (data.modelPath.map { [$0] } ?? []) : data.modelPaths
+        for p in paths where FileManager.default.fileExists(atPath: p) {
+            vp.addModelToScene(url: URL(fileURLWithPath: p))
+        }
+        let imported = Array(sm.objects[modelStart...])
+        guard !imported.isEmpty else { return true }
+
+        // 2. Restore per-object data positionally, shifting keyframe times by T.
+        let n = min(imported.count, data.objects.count)
+        for i in 0..<n { restoreObject(data.objects[i], into: imported[i], vp: vp, timeOffset: T) }
+
+        // 3. Group placement + group-level animation, composed with M.  Keyed by
+        //    (filename, occurrence among imported groups), which matches the saved
+        //    occurrence because the append reproduces the import's structure.
+        let gmap = importedGroupMap(imported)
+        var bGT: [String: matrix_float4x4] = [:]
+        for e in data.groupBaseTransforms { if let m = decodeMatrix(e.matrix) { bGT["\(e.sourceFileName)#\(e.occurrence)"] = m } }
+        for (key, gid) in gmap { sm.groupTransforms[gid] = M * (bGT[key] ?? matrix_identity_float4x4) }
+        for td in data.groupKeyframeTracks where !td.keyframes.isEmpty {
+            guard let gid = gmap["\(td.sourceFileName)#\(td.occurrence)"] else { continue }
+            let track = KeyframeTrack()
+            track.easingMode = EasingMode(rawValue: td.easingMode) ?? .linear
+            for kf in transformedKeyframes(td.keyframes, by: M, timeOffset: T) { track.addKeyframe(kf) }
+            sm.groupKeyframeTracks[gid] = track
+        }
+
+        // 4. Envelopes — re-created among the imported model objects (member indices
+        //    are relative to the import's model array, so offset by modelStart), and
+        //    placed by M·envelopeTransform.
+        for env in data.envelopes {
+            guard let envT = decodeMatrix(env.transform) else { continue }
+            let node = SceneObject(name: env.name)
+            node.isEnvelope = true
+            node.transform = M * envT; node.baseTransform = node.transform; node.localTransform = node.transform
+            if !env.keyframes.isEmpty {
+                let track = KeyframeTrack()
+                track.easingMode = EasingMode(rawValue: env.easingMode) ?? .linear
+                for kf in transformedKeyframes(env.keyframes, by: M, timeOffset: T) { track.addKeyframe(kf) }
+                node.keyframeTrack = track
+            }
+            sm.objects.append(node)
+            let envIndex = sm.objects.count - 1
+            for mi in env.memberIndices {
+                let live = modelStart + mi
+                guard live >= 0, live < sm.objects.count, !sm.objects[live].isEnvelope else { continue }
+                sm.objects[live].parentIndex    = envIndex
+                sm.objects[live].localTransform = sm.objects[live].baseTransform
+            }
+        }
+
+        // 5. Place every imported SIMPLE top-level root by M (envelope members now
+        //    carry a parentIndex → excluded; grouped roots use their group transform).
+        for o in imported where o.parentIndex == nil && o.groupID == nil && !o.isEnvelope {
+            o.baseTransform = M * o.baseTransform
+            o.transform     = o.baseTransform
+        }
+
+        // 6. Lights (opt-in).
+        if options.includeLights { appendImportedLights(data, by: M, timeOffset: T, vp: vp) }
+
+        // 7. Extend the timeline to fit the imported clip.
+        vp.timeline.duration = max(vp.timeline.duration, T + data.timeline.duration)
+
+        print("[DEBUG] ProjectFile: imported \(imported.count) object(s) from "
+            + url.lastPathComponent + " at t=\(T)")
+        return true
+    }
+
+    /// "filename#occurrence" → gid for the imported groups (occurrence counted among
+    /// imported groups only, in object order — matching the saved occurrence).
+    private static func importedGroupMap(_ imported: [SceneObject]) -> [String: Int] {
+        var occByFile: [String: Int] = [:]
+        var map:       [String: Int] = [:]
+        var seen = Set<Int>()
+        for o in imported {
+            guard let gid = o.groupID, seen.insert(gid).inserted else { continue }
+            let file = o.sourceURL?.lastPathComponent ?? ""
+            let occ  = occByFile[file, default: 0]
+            occByFile[file] = occ + 1
+            map["\(file)#\(occ)"] = gid
+        }
+        return map
+    }
+
+    /// Premultiplies M onto each saved keyframe's transform and shifts its time by T —
+    /// used to bake an import's placement into group / envelope animation tracks.
+    private static func transformedKeyframes(_ kfs: [KeyframeData],
+                                             by M: matrix_float4x4,
+                                             timeOffset: Double) -> [TransformKeyframe] {
+        kfs.map { kf in
+            let mat = PathGenerator.makeTransform(
+                translation: SIMD3<Float>(kf.tx, kf.ty, kf.tz),
+                rotation:    simd_quatf(ix: kf.rx, iy: kf.ry, iz: kf.rz, r: kf.rw),
+                scale:       SIMD3<Float>(kf.sx, kf.sy, kf.sz))
+            let (t, r, s) = PathGenerator.decompose(M * mat)
+            return TransformKeyframe(time: kf.time + timeOffset, translation: t,
+                                     rotation: r, scale: s, opacity: kf.opacity)
+        }
+    }
+
+    /// Appends the import's light fixtures + keyframe tracks, with positions/targets
+    /// transformed by M and times shifted by T.
+    private static func appendImportedLights(_ data: ProjectData,
+                                             by M: matrix_float4x4,
+                                             timeOffset: Double,
+                                             vp: ViewportView) {
+        let lm = vp.lightManager
+        func point(_ x: Float, _ y: Float, _ z: Float) -> SIMD3<Float> {
+            let v = M * SIMD4<Float>(x, y, z, 1)
+            return SIMD3<Float>(v.x, v.y, v.z)
+        }
+        let lightStart = lm.lights.count
+        for lcd in data.lightConfigs {
+            guard let type = LightType(rawValue: lcd.type) else { continue }
+            var l = LightConfig()
+            l.type                    = type
+            l.isEnabled               = lcd.isEnabled
+            l.color                   = SIMD3<Float>(lcd.colorR, lcd.colorG, lcd.colorB)
+            l.intensity               = lcd.intensity
+            l.position                = point(lcd.posX, lcd.posY, lcd.posZ)
+            l.target                  = point(lcd.targetX, lcd.targetY, lcd.targetZ)
+            l.innerConeAngle          = lcd.innerConeAngle
+            l.outerConeAngle          = lcd.outerConeAngle
+            l.range                   = lcd.range
+            l.beamThickness           = lcd.beamThickness
+            l.excludeBeamFromFeedback = lcd.excludeBeamFromFeedback
+            lm.lights.append(l)
+            lm.keyframeTracks.append(nil)
+        }
+        for (i, kfArray) in data.lightKeyframeTracks.enumerated() where !kfArray.isEmpty {
+            let track = LightKeyframeTrack()
+            let em = i < data.lightEasingModes.count ? data.lightEasingModes[i] : 0
+            track.easingMode = EasingMode(rawValue: em) ?? .linear
+            for kf in kfArray {
+                track.addKeyframe(LightKeyframe(
+                    time:          kf.time + timeOffset,
+                    intensity:     kf.intensity,
+                    color:         SIMD3<Float>(kf.r, kf.g, kf.b),
+                    target:        point(kf.tx, kf.ty, kf.tz),
+                    position:      point(kf.px, kf.py, kf.pz),
+                    range:         kf.range,
+                    beamThickness: kf.beamThickness))
+            }
+            let slot = lightStart + i
+            while lm.keyframeTracks.count <= slot { lm.keyframeTracks.append(nil) }
+            lm.keyframeTracks[slot] = track
+        }
+    }
+
     // MARK: - Capture live state → ProjectData
 
     private static func captureData(from vp: ViewportView,
@@ -907,8 +1084,12 @@ final class ProjectFile {
     }
 
     /// Restores Inspector state, baseTransform, and the keyframe track for one part.
+    /// `timeOffset` shifts every keyframe time (used by project IMPORT to drop the
+    /// clip in at a chosen playhead).  Spatial placement of an import is applied by
+    /// `importProject` in separate passes (after envelopes re-parent their members).
     private static func restoreObject(_ saved: ObjectData, into obj: SceneObject,
-                                      vp: ViewportView) {
+                                      vp: ViewportView,
+                                      timeOffset: Double = 0) {
         // ── v15: restore Model Inspector state ───────────────────────────────────
         obj.isVisible = saved.isVisible
         obj.occludeWhenHidden = saved.occludeWhenHidden   // v17
@@ -947,7 +1128,7 @@ final class ProjectFile {
         track.easingMode = EasingMode(rawValue: saved.easingMode) ?? .linear
         for kf in saved.keyframes {
             track.addKeyframe(TransformKeyframe(
-                time:        kf.time,
+                time:        kf.time + timeOffset,
                 translation: SIMD3<Float>(kf.tx, kf.ty, kf.tz),
                 rotation:    simd_quatf(ix: kf.rx, iy: kf.ry, iz: kf.rz, r: kf.rw),
                 scale:       SIMD3<Float>(kf.sx, kf.sy, kf.sz),

@@ -688,6 +688,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         openProjectItem.target = self
         fileMenu.addItem(openProjectItem)
 
+        let importProjectItem = NSMenuItem(
+            title: "Import Project…",
+            action: #selector(importProject(_:)),
+            keyEquivalent: ""
+        )
+        importProjectItem.target = self
+        fileMenu.addItem(importProjectItem)
+
         let saveProjectItem = NSMenuItem(
             title: "Save Project",
             action: #selector(saveProject(_:)),
@@ -1428,6 +1436,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
             self?.loadProject(from: url)
+        }
+    }
+
+    // MARK: - Import Project (append into the current scene)
+
+    @objc private func importProject(_ sender: Any) {
+        guard let window = window, let viewport = viewportView else { return }
+
+        let panel = NSOpenPanel()
+        panel.title                   = "Import Project"
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories    = false
+        panel.canChooseFiles          = true
+        panel.directoryURL            = defaultDirectory(for: "Projects")
+        if let projType = UTType(filenameExtension: "3dvp") { panel.allowedContentTypes = [projType] }
+
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .OK, let url = panel.url else { return }
+
+            // Placement / timing dialog (position defaults to the Probe).
+            let options = ImportProjectOptions(insertTime: viewport.timeline.currentTime,
+                                               probe: viewport.probeConfig.position)
+            let alert = NSAlert()
+            alert.messageText     = "Import \"\(url.deletingPathExtension().lastPathComponent)\""
+            alert.informativeText = "Append its models, animation, and materials to the current scene."
+            alert.addButton(withTitle: "Import")
+            alert.addButton(withTitle: "Cancel")
+            let hosting = NSHostingView(rootView: ImportProjectSheet(options: options))
+            hosting.frame = NSRect(origin: .zero, size: hosting.fittingSize)
+            alert.accessoryView = hosting
+            alert.layout()
+            alert.window.makeFirstResponder(hosting)
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+            let opts = ProjectFile.ImportOptions(
+                insertTime:    options.insertTimeValue,
+                transform:     options.transformMatrix(),
+                includeLights: options.includeLights)
+            guard ProjectFile.importProject(from: url, into: viewport, options: opts) else {
+                self.showErrorAlert(message: "Import failed",
+                                    detail: "Could not read the project file.")
+                return
+            }
+            self.markDirty()
+            viewport.syncOverlayState()
+            self.refreshCameraFollowTargets()
+            self.timelineEditorWC?.editorView.needsDisplay = true
+            self.timelineEditorWC?.updateWindowHeight()
+            viewport.renderer?.invalidateAnimationCache()
+            print("[DEBUG] AppDelegate: imported project " + url.lastPathComponent)
         }
     }
 

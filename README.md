@@ -86,6 +86,7 @@ Each panel has its own page under [`docs/`](docs/) with full controls, keystroke
 | Path Animator — Curve | Window → Path Animator → Curve… | [Curve-Path-Animator](docs/Curve-Path-Animator.md) |
 | Path Animator — Spin | Window → Path Animator → Spin… | [Spin-Path-Animator](docs/Spin-Path-Animator.md) |
 | Glue (Envelopes) | Edit → Glue Objects… | [Glue](docs/Glue.md) |
+| Import Project | File → Import Project… | [Import-Project](docs/Import-Project.md) |
 | Settings | ThreeDViewport → Settings… · ⌘, | [Settings](docs/Settings.md) |
 | New Instance | ThreeDViewport → New Instance | [Settings](docs/Settings.md#new-instance) |
 
