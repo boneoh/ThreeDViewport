@@ -386,6 +386,15 @@ final class TimelineEditorView: NSView {
     }
     private var multiDragSecondary: [MultiDragEntry] = []
 
+    // ── Bundle move-as-unit drag (Part B2) ────────────────────────────────────
+    // Dragging an import-bundle header's span bar shifts every member track's
+    // keyframes by the same (frame-snapped) dt.
+    private var isBundleDragging:     Bool       = false
+    private var bundleDragRefs:       [TrackRef] = []   // member tracks being shifted
+    private var bundleDragMouseStartX: CGFloat   = 0
+    private var bundleDragMinT:        Double    = 0    // span min at drag start (start clamp)
+    private var bundleDragAppliedDt:   Double    = 0    // dt already applied to the tracks
+
     // ── Multi-clipboard (Cmd+C / Cmd+V with multi-select) ─────────────────────
     // Each entry stores a pose snapshot, a time offset relative to the earliest
     // copied diamond, and the original track reference for paste-back.
@@ -693,6 +702,63 @@ final class TimelineEditorView: NSView {
         }
     }
 
+    // MARK: - Import-bundle move-as-unit (Part B2)
+
+    /// Every keyframe-bearing member track of a bundle: each member object's own
+    /// track (incl. envelopes + group parts), each group-level track, and each
+    /// imported light's track.  Empty tracks are skipped.
+    private func bundleMemberRefs(_ bid: Int) -> [TrackRef] {
+        var refs: [TrackRef] = []
+        if let sm = sceneManager {
+            var seenGroups = Set<Int>()
+            for (i, obj) in sm.objects.enumerated() where obj.importBundleID == bid {
+                if obj.keyframeTrack?.keyframes.isEmpty == false { refs.append(.object(i)) }
+                if let gid = obj.groupID, seenGroups.insert(gid).inserted,
+                   sm.groupKeyframeTracks[gid]?.keyframes.isEmpty == false {
+                    refs.append(.group(gid))
+                }
+            }
+        }
+        if let lm = lightManager {
+            for i in 0..<lm.lights.count
+            where lm.lights[i].importBundleID == bid
+               && (i < lm.keyframeTracks.count && lm.keyframeTracks[i]?.keyframes.isEmpty == false) {
+                refs.append(.light(i))
+            }
+        }
+        return refs
+    }
+
+    /// Earliest / latest keyframe time across a bundle's member tracks, or nil when
+    /// it has no keyframes.
+    private func bundleSpan(_ bid: Int) -> (min: Double, max: Double)? {
+        var lo = Double.infinity, hi = -Double.infinity
+        for ref in bundleMemberRefs(bid) {
+            for t in keyframeTimes(for: ref) { lo = min(lo, t); hi = max(hi, t) }
+        }
+        return lo.isFinite ? (lo, hi) : nil
+    }
+
+    /// Shifts every keyframe on a track by `delta` seconds (uniform → order preserved).
+    private func shiftTrack(_ ref: TrackRef, by delta: Double) {
+        switch ref {
+        case .object(let i):
+            sceneManager?.objects[safe: i]?.keyframeTrack?.keyframes.indices.forEach {
+                sceneManager?.objects[safe: i]?.keyframeTrack?.keyframes[$0].time += delta
+            }
+        case .group(let gid):
+            sceneManager?.groupKeyframeTracks[gid]?.keyframes.indices.forEach {
+                sceneManager?.groupKeyframeTracks[gid]?.keyframes[$0].time += delta
+            }
+        case .light(let i):
+            if let track = lightManager?.keyframeTracks[safe: i] ?? nil {
+                track.keyframes.indices.forEach { track.keyframes[$0].time += delta }
+            }
+        default:
+            break
+        }
+    }
+
     // MARK: - Geometry helpers
 
     private func timeToX(_ t: Double) -> CGFloat {
@@ -837,6 +903,25 @@ final class TimelineEditorView: NSView {
             endLine.lineWidth = 1
             NSColor(white: 0.50, alpha: 0.5).setStroke()
             endLine.stroke()
+        }
+
+        // ── Import-bundle span bars (Part B2) ─────────────────────────────────
+        // A grab handle on each bundle header spanning its earliest→latest keyframe.
+        // Drag it to shift the whole import in time.
+        for (ti, row) in tracks.enumerated() {
+            guard case .importBundle(let bid) = row.ref, let span = bundleSpan(bid) else { continue }
+            let x0 = max(timeToX(span.min), labelWidth)
+            let x1 = timeToX(span.max)
+            guard x1 > labelWidth else { continue }
+            let barH: CGFloat = 8
+            let rect = NSRect(x: x0, y: laneCenter(ti) - barH / 2,
+                              width: max(barH, x1 - x0), height: barH)
+            let path = NSBezierPath(roundedRect: rect, xRadius: barH / 2, yRadius: barH / 2)
+            NSColor.systemTeal.withAlphaComponent(0.40).setFill()
+            path.fill()
+            NSColor.systemTeal.withAlphaComponent(0.85).setStroke()
+            path.lineWidth = 1
+            path.stroke()
         }
 
         // ── Keyframe diamonds ─────────────────────────────────────────────────
@@ -1230,6 +1315,22 @@ final class TimelineEditorView: NSView {
                     rebuildEasingPopups()
                     onLayoutChanged?()   // resize document view / panel for new row count
                 }
+                // Bundle header: grabbing the span bar starts a move-as-unit drag.
+                if case .importBundle(let bid) = row.ref, pt.x >= labelRightX,
+                   let span = bundleSpan(bid) {
+                    let x0 = max(timeToX(span.min), labelWidth)
+                    let x1 = timeToX(span.max)
+                    if pt.x >= x0 - 4 && pt.x <= max(x0, x1) + 4 {
+                        isBundleDragging      = true
+                        bundleDragRefs        = bundleMemberRefs(bid)
+                        bundleDragMinT        = span.min
+                        bundleDragMouseStartX = pt.x
+                        bundleDragAppliedDt   = 0
+                        select(trackIndex: lane, kfIndex: nil)
+                        onLaneSelected?(row.ref)
+                        return
+                    }
+                }
                 select(trackIndex: lane, kfIndex: nil)
                 onLaneSelected?(row.ref)
                 if pt.x >= labelRightX { scrubToX(pt.x) }
@@ -1252,6 +1353,27 @@ final class TimelineEditorView: NSView {
 
         let pt     = convert(event.locationInWindow, from: nil)
         let tracks = buildTracks()
+
+        // ── Bundle move-as-unit drag ──────────────────────────────────────────
+        if isBundleDragging {
+            let fr        = timeline?.frameRate ?? 30
+            let rawDt      = Double((pt.x - bundleDragMouseStartX) / pxPerSecond)
+            var snappedDt  = (rawDt * fr).rounded() / fr          // frame snap
+            snappedDt      = max(snappedDt, -bundleDragMinT)      // can't move start below 0
+            let delta      = snappedDt - bundleDragAppliedDt
+            if delta != 0 {
+                for ref in bundleDragRefs { shiftTrack(ref, by: delta) }
+                bundleDragAppliedDt = snappedDt
+                // Grow the timeline if the import now runs past the end.
+                if let tl = timeline {
+                    var maxT = 0.0
+                    for ref in bundleDragRefs { for t in keyframeTimes(for: ref) { maxT = max(maxT, t) } }
+                    if maxT > tl.duration { tl.duration = maxT }
+                }
+                needsDisplay = true
+            }
+            return
+        }
 
         // ── Rubber-band in progress: just track the cursor and redraw ─────────
         if isRubberBanding {
@@ -1330,6 +1452,18 @@ final class TimelineEditorView: NSView {
 
     override func mouseUp(with event: NSEvent) {
         isMouseDownInView = false
+
+        // Finalise a bundle move-as-unit drag.
+        if isBundleDragging {
+            isBundleDragging = false
+            if bundleDragAppliedDt != 0 {
+                onKeyframePasted?()   // markDirty + invalidate animation cache + panel refresh
+            }
+            bundleDragRefs.removeAll()
+            needsDisplay = true
+            return
+        }
+
         // Finalise rubber-band: compute which diamonds fall inside the rect.
         if isRubberBanding {
             finalizeRubberBandSelection(tracks: buildTracks())

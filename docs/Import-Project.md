@@ -67,8 +67,9 @@ Position/Rotation/Scale and Include lights work exactly as for a full import.
   the merged scene saves/reloads correctly.
 - **Times are in seconds**, so importing a 30 fps project into a 24 fps one (or vice
   versa) keeps the timing.
-- The import is **baked** — you can edit any imported object afterwards, but you can't
-  re-slide the whole import as a unit (re-import to reposition in time).
+- The import is **baked** — you can edit any imported object afterwards, and you can
+  re-slide the whole import in time by dragging its bundle's span bar in the
+  [Timeline Editor](Timeline-Editor.md#import-bundles).
 - Imported spin/orbit play exactly as authored, but aren't re-editable as rate markers
   on the imported objects.
 - Imports the **whole** source project by default, or just the source's In/Out slice

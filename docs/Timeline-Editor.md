@@ -34,6 +34,12 @@ starts expanded; click its triangle to collapse it. Bundles persist with the pro
 rows (objects and glued units) rename through the [Model Inspector](Model-Inspector.md)
 as usual and stay nested under the bundle.
 
+**Move the whole import in time** by dragging the teal **span bar** on the bundle
+header — it spans the import's first→last keyframe. Every member track shifts by the
+same (frame-snapped) amount, so the import keeps its internal timing. It won't move
+earlier than t=0; dragging past the end grows the timeline duration to fit. (A bundle
+with no keyframes has no bar — there's nothing to move in time.)
+
 ## Keyboard
 
 | Command | Operation |
