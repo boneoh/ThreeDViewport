@@ -1677,9 +1677,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             let t      = root.transform.columns.3
             let offset = SIMD3<Float>(t.x, t.y, t.z)
             let len    = simd_length(offset)
+            // The arcing artifact only occurs when the group keyframes' ROTATION varies
+            // — slerp then sweeps the baked offset around an arc.  A pure translation /
+            // scale animation (all keyframe rotations equal) keeps the offset constant,
+            // so there is nothing to fix.  This is now common because Export Model bakes
+            // each part's DISPLAYED pose, so a re-imported model's root part is legitimately
+            // off-origin; don't nag about it.
+            let rotates: Bool = {
+                guard let first = track.keyframes.first?.rotation else { return false }
+                let q0 = simd_normalize(first)
+                return track.keyframes.dropFirst().contains {
+                    abs(simd_dot(q0, simd_normalize($0.rotation))) < 0.9999
+                }
+            }()
             print("[DEBUG] AppDelegate: offset-migration — gid=\(gid) root='\(root.name)'"
-                + " offset=(\(t.x), \(t.y), \(t.z)) len=\(len)")
-            if len > 1e-4 {
+                + " offset=(\(t.x), \(t.y), \(t.z)) len=\(len) rotates=\(rotates)")
+            if len > 1e-4 && rotates {
                 candidates.append(Candidate(name: root.name, root: root,
                                             track: track, offset: offset))
             }
