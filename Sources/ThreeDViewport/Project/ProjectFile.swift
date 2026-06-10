@@ -109,14 +109,19 @@ final class ProjectFile {
 
         // ── Objects — paths + keyframes ───────────────────────────────────────
         // Phase 6: each object carries its own sourceURL.
-        // Deduplicate: save one path per unique model file so multi-part models
-        // (32 SceneObjects all sharing the same sourceURL) are not loaded 32 times
-        // when the project is reopened.
-        var _seenPaths = Set<String>()
+        // One path per loaded MODEL INSTANCE — so the reload re-creates exactly the
+        // instances that were in the scene.  A multi-part model (many objects sharing
+        // ONE groupID) emits a single path (it isn't reloaded once per part), while
+        // each single-mesh object emits its own path.  This makes the *same file
+        // loaded more than once* (Open Model again, or Duplicate Object) round-trip:
+        // deduplicating by path alone would collapse the duplicates into one load.
+        var _seenGids = Set<Int>()
         let modelPaths: [String] = vp.sceneManager.objects.compactMap { obj -> String? in
-            guard let path = obj.sourceURL?.path else { return nil }
-            guard _seenPaths.insert(path).inserted else { return nil }
-            return path
+            guard !obj.isEnvelope, let path = obj.sourceURL?.path else { return nil }
+            if let gid = obj.groupID {
+                guard _seenGids.insert(gid).inserted else { return nil }   // one per group
+            }
+            return path   // single-mesh object → one instance each
         }
 
         // Exclude envelope null nodes — they have no geometry / sourceURL and are

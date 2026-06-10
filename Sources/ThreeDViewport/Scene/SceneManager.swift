@@ -109,20 +109,39 @@ final class SceneManager {
     /// **numbered** ("cube 1", "cube 2") when more than one simple object shares it;
     /// group members keep their part name.
     func displayName(for obj: SceneObject) -> String {
-        // Members (of a group or a glued envelope) keep their own part name.
-        guard obj.parentIndex == nil else { return obj.name }
-        // A grouped model's root resolves to the group name.
-        if let gid = obj.groupID { return groupName(for: gid) }
-        // Simple top-level object: number duplicates by object/load order.
+        // A grouped model's root resolves to the group name (already suffixed).
+        if obj.parentIndex == nil, let gid = obj.groupID { return groupName(for: gid) }
+        // A multi-part model's part keeps its own glTF part name (heavy / hydrogen / …).
+        if obj.groupID != nil { return obj.name }
+        // An envelope keeps its given (unique) name.
+        if obj.isEnvelope { return obj.name }
+        // A single-mesh object — top-level OR a glued envelope member — is numbered
+        // when more than one instance of the same name exists, so duplicates stay
+        // distinguishable even after gluing (when they gain a parentIndex).
         let name = obj.name
         var total = 0
         var occurrence = 0
-        for o in objects where o.parentIndex == nil && o.groupID == nil {
-            guard o.name == name else { continue }
+        for o in objects where o.groupID == nil && !o.isEnvelope && o.name == name {
             total += 1
-            if o === obj { occurrence = total }   // 1-based
+            if o === obj { occurrence = total }   // 1-based, by object/load order
         }
         return total > 1 ? "\(name) \(occurrence)" : name
+    }
+
+    /// Display name for one PART of a multi-part model: its own name, numbered
+    /// ("buckyball 1", "buckyball 2") when other parts in the SAME group share that
+    /// name — e.g. a glued model exported to .glb and re-imported, whose flattened
+    /// members carry identical mesh names.  Parts with distinct names (heavy /
+    /// hydrogen / bonds) are returned unchanged.
+    func partName(for obj: SceneObject) -> String {
+        guard let gid = obj.groupID else { return obj.name }
+        var total = 0
+        var occurrence = 0
+        for o in objects where o.groupID == gid && o.name == obj.name {
+            total += 1
+            if o === obj { occurrence = total }   // 1-based, by object/load order
+        }
+        return total > 1 ? "\(obj.name) \(occurrence)" : obj.name
     }
 
     func clear() {
@@ -233,8 +252,19 @@ final class SceneManager {
             return nil
         }
 
-        // Envelope origin = anchor object's world origin (translation only).
-        let aPos = objects[anchorIndex].transform.columns.3
+        // Freeze each member at its REST pose — the anchor of its keyframe deltas —
+        // NOT its current animated transform.  Using `transform` (which already
+        // includes the keyframe delta at the playhead) would bake that one frame
+        // into the new baseTransform, and the unchanged keyframes would then re-apply
+        // on top, shifting any existing spin/orbit.  An *animated* member's rest pose
+        // is its `baseTransform`; a *static* (possibly dragged) member's is its
+        // current `transform`.
+        func restPose(_ o: SceneObject) -> matrix_float4x4 {
+            (o.keyframeTrack?.keyframes.isEmpty == false) ? o.baseTransform : o.transform
+        }
+
+        // Envelope origin = anchor object's rest world origin (translation only).
+        let aPos = restPose(objects[anchorIndex]).columns.3
         let envT = TransformMath.translation(SIMD3<Float>(aPos.x, aPos.y, aPos.z))
 
         let env            = SceneObject(name: name)
@@ -245,11 +275,11 @@ final class SceneManager {
         objects.append(env)
         let envIndex = objects.count - 1
 
-        // Freeze each member's current world pose relative to the envelope origin.
+        // Re-base each member's rest pose into the envelope's frame.
         let invEnv = simd_inverse(envT)
         for mi in members {
             let m = objects[mi]
-            let local = invEnv * m.transform
+            let local = invEnv * restPose(m)
             m.parentIndex    = envIndex
             m.localTransform = local
             m.baseTransform  = local   // hierarchical parts store base = LOCAL

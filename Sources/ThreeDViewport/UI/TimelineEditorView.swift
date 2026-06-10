@@ -586,7 +586,7 @@ final class TimelineEditorView: NSView {
                     // Parts sorted alphabetically by name, beneath their header.
                     let sorted = parts.sorted { $0.obj.name.localizedStandardCompare($1.obj.name) == .orderedAscending }
                     for pair in sorted {
-                        result.append(TrackRow(name: pair.obj.name,
+                        result.append(TrackRow(name: sceneManager?.partName(for: pair.obj) ?? pair.obj.name,
                                                ref: .object(pair.idx),
                                                isIndented: true))
                     }
@@ -603,7 +603,7 @@ final class TimelineEditorView: NSView {
                                        isGroupHeader: !members.isEmpty))
                 if !members.isEmpty, expandedHeaders.contains(.object(idx)) {
                     for m in members {
-                        result.append(TrackRow(name: m.obj.name,
+                        result.append(TrackRow(name: sceneManager?.displayName(for: m.obj) ?? m.obj.name,
                                                ref: .object(m.idx),
                                                isIndented: true))
                     }

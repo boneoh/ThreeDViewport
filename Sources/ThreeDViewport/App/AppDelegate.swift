@@ -3233,7 +3233,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     result.append(PathTarget(label: sm.groupName(for: gid), ref: .group(gid)))
                 }
                 if groupParts {
-                    result.append(PathTarget(label: "\(sm.groupName(for: gid)) ▸ \(obj.name)",
+                    result.append(PathTarget(label: "\(sm.groupName(for: gid)) ▸ \(sm.partName(for: obj))",
                                              ref: .object(i)))
                 }
             } else if objects {
@@ -4371,11 +4371,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let roots = scene.rootObjectIndicesSorted.filter { !scene.objects[$0].isEnvelope }
         guard roots.count >= 2 else { return }
 
-        // Candidate display name: group name for grouped models, else object name.
+        // Candidate display name = the Timeline's first-column name (group name for a
+        // model, else object name) — including the duplicate-instance suffix so two
+        // copies of the same file read as "name 1" / "name 2".
         let candidates: [GlueOptions.Candidate] = roots.map { idx in
-            let obj = scene.objects[idx]
-            let name = obj.groupID.map { scene.groupName(for: $0) } ?? obj.name
-            return GlueOptions.Candidate(id: idx, name: name)
+            GlueOptions.Candidate(id: idx, name: scene.displayName(for: scene.objects[idx]))
         }
 
         // Pre-select the currently selected root (plus a sensible second one) so the
@@ -4603,7 +4603,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let sourceGid   = sel.groupID
         let sourceParts = sourceGid.map { sm.objects(inGroup: $0) } ?? [sel]
         let sourceGroupT = sourceGid.flatMap { sm.groupTransforms[$0] }
-        let sourceXform  = sel.transform
+        // Use the REST pose (not the animated `transform`, which folds in the current
+        // keyframe delta) so a copy of a spinning/orbiting object lands cleanly.
+        let sourceXform  = (sel.keyframeTrack?.keyframes.isEmpty == false)
+                           ? sel.baseTransform : sel.transform
         let before       = sm.objects.count
 
         guard viewport.addModelToScene(url: url) == .added else { return }
