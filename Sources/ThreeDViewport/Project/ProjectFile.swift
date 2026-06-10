@@ -89,6 +89,10 @@ final class ProjectFile {
         var insertTime:    Double          = 0                          // host time the clip begins at
         var transform:     matrix_float4x4 = matrix_identity_float4x4    // TRS world placement (baked in)
         var includeLights: Bool            = false
+        /// When set, import only the source's `[in, out]` slice — keyframes outside
+        /// the range are dropped, the boundaries are resampled, and the slice is
+        /// remapped so source `in` lands at `insertTime`.  nil = import the full clip.
+        var sliceRange:    (in: Double, out: Double)? = nil
     }
 
     /// Imports another `.3dvp`'s models, animation, materials, and envelopes (and,
@@ -101,12 +105,23 @@ final class ProjectFile {
     static func importProject(from url: URL, into vp: ViewportView,
                               options: ImportOptions) -> Bool {
         guard let json = try? Data(contentsOf: url),
-              let data = try? JSONDecoder().decode(ProjectData.self, from: json) else {
+              var data = try? JSONDecoder().decode(ProjectData.self, from: json) else {
             return false
         }
         let sm = vp.sceneManager
-        let T  = options.insertTime
         let M  = options.transform
+
+        // Ranged import: keep only the source's [in, out] slice (boundary-sampled),
+        // and remap so source `in` lands at insertTime.  After slicing every kept
+        // keyframe still sits at its SOURCE time, so the rest of the import shifts
+        // by T = insertTime − in (vs. T = insertTime for a full import).
+        let T: Double
+        if let s = options.sliceRange {
+            sliceProjectData(&data, in: s.in, out: s.out)
+            T = options.insertTime - s.in
+        } else {
+            T = options.insertTime
+        }
 
         // 1. Append the import's models (reproduces its object order/structure).
         let modelStart = sm.objects.count
@@ -170,8 +185,11 @@ final class ProjectFile {
         // 6. Lights (opt-in).
         if options.includeLights { appendImportedLights(data, by: M, timeOffset: T, vp: vp) }
 
-        // 7. Extend the timeline to fit the imported clip.
-        vp.timeline.duration = max(vp.timeline.duration, T + data.timeline.duration)
+        // 7. Extend the timeline to fit the imported clip.  In HOST time the clip
+        //    spans [insertTime, insertTime + length], where length is the slice span
+        //    (out − in) or the full source duration.
+        let clipLength = options.sliceRange.map { $0.out - $0.in } ?? data.timeline.duration
+        vp.timeline.duration = max(vp.timeline.duration, options.insertTime + clipLength)
 
         print("[DEBUG] ProjectFile: imported \(imported.count) object(s) from "
             + url.lastPathComponent + " at t=\(T)")
@@ -208,6 +226,104 @@ final class ProjectFile {
             return TransformKeyframe(time: kf.time + timeOffset, translation: t,
                                      rotation: r, scale: s, opacity: kf.opacity)
         }
+    }
+
+    // MARK: - Ranged import (slice the source's [in, out])
+
+    /// Rewrites every keyframe array in `data` to the `[lo, hi]` slice, boundary-
+    /// sampled at the endpoints.  Times stay in SOURCE coordinates (the caller shifts
+    /// them by T = insertTime − lo afterward).  Static placement (base / group /
+    /// envelope transforms) is untouched — slicing only affects animation timing.
+    private static func sliceProjectData(_ data: inout ProjectData, in lo: Double, out hi: Double) {
+        for i in data.objects.indices {
+            data.objects[i].keyframes = sliceTransformKeyframes(data.objects[i].keyframes, in: lo, out: hi)
+        }
+        for i in data.groupKeyframeTracks.indices {
+            data.groupKeyframeTracks[i].keyframes =
+                sliceTransformKeyframes(data.groupKeyframeTracks[i].keyframes, in: lo, out: hi)
+        }
+        for i in data.envelopes.indices {
+            data.envelopes[i].keyframes = sliceTransformKeyframes(data.envelopes[i].keyframes, in: lo, out: hi)
+        }
+        for i in data.lightKeyframeTracks.indices {
+            data.lightKeyframeTracks[i] = sliceLightKeyframes(data.lightKeyframeTracks[i], in: lo, out: hi)
+        }
+    }
+
+    /// Keeps the `[lo, hi]` slice of a transform track, resampling the endpoints so
+    /// the slice starts / ends on the exact source pose (no jump at the cut).  An
+    /// endpoint that coincides with a real keyframe (within tolerance) isn't
+    /// duplicated.  Empty in → empty out.
+    private static func sliceTransformKeyframes(_ kfs: [KeyframeData],
+                                                in lo: Double, out hi: Double) -> [KeyframeData] {
+        guard !kfs.isEmpty else { return [] }
+        let track = KeyframeTrack()
+        for kf in kfs {
+            track.addKeyframe(TransformKeyframe(
+                time:        kf.time,
+                translation: SIMD3<Float>(kf.tx, kf.ty, kf.tz),
+                rotation:    simd_quatf(ix: kf.rx, iy: kf.ry, iz: kf.rz, r: kf.rw),
+                scale:       SIMD3<Float>(kf.sx, kf.sy, kf.sz),
+                opacity:     kf.opacity))
+        }
+        let tol = 1e-4
+        var result: [KeyframeData] = []
+        if !kfs.contains(where: { abs($0.time - lo) <= tol }), let s = sampleTransform(track, at: lo) {
+            result.append(s)
+        }
+        for kf in kfs where kf.time >= lo - tol && kf.time <= hi + tol { result.append(kf) }
+        if !kfs.contains(where: { abs($0.time - hi) <= tol }), let s = sampleTransform(track, at: hi) {
+            result.append(s)
+        }
+        result.sort { $0.time < $1.time }
+        return result
+    }
+
+    private static func sampleTransform(_ track: KeyframeTrack, at t: Double) -> KeyframeData? {
+        guard let m = track.evaluate(at: t) else { return nil }
+        let (tr, r, s) = PathGenerator.decompose(m)
+        let op = track.evaluateOpacity(at: t) ?? 1
+        return KeyframeData(time: t,
+                            tx: tr.x, ty: tr.y, tz: tr.z,
+                            rx: r.imag.x, ry: r.imag.y, rz: r.imag.z, rw: r.real,
+                            sx: s.x, sy: s.y, sz: s.z, opacity: op)
+    }
+
+    /// Light-track counterpart of `sliceTransformKeyframes`.
+    private static func sliceLightKeyframes(_ kfs: [LightKeyframeData],
+                                            in lo: Double, out hi: Double) -> [LightKeyframeData] {
+        guard !kfs.isEmpty else { return [] }
+        let track = LightKeyframeTrack()
+        for kf in kfs {
+            track.addKeyframe(LightKeyframe(
+                time:          kf.time,
+                intensity:     kf.intensity,
+                color:         SIMD3<Float>(kf.r, kf.g, kf.b),
+                target:        SIMD3<Float>(kf.tx, kf.ty, kf.tz),
+                position:      SIMD3<Float>(kf.px, kf.py, kf.pz),
+                range:         kf.range,
+                beamThickness: kf.beamThickness))
+        }
+        let tol = 1e-4
+        var result: [LightKeyframeData] = []
+        if !kfs.contains(where: { abs($0.time - lo) <= tol }), let s = sampleLight(track, at: lo) {
+            result.append(s)
+        }
+        for kf in kfs where kf.time >= lo - tol && kf.time <= hi + tol { result.append(kf) }
+        if !kfs.contains(where: { abs($0.time - hi) <= tol }), let s = sampleLight(track, at: hi) {
+            result.append(s)
+        }
+        result.sort { $0.time < $1.time }
+        return result
+    }
+
+    private static func sampleLight(_ track: LightKeyframeTrack, at t: Double) -> LightKeyframeData? {
+        guard let k = track.evaluate(at: t) else { return nil }
+        return LightKeyframeData(time: t, intensity: k.intensity,
+                                 r: k.color.x, g: k.color.y, b: k.color.z,
+                                 tx: k.target.x, ty: k.target.y, tz: k.target.z,
+                                 px: k.position.x, py: k.position.y, pz: k.position.z,
+                                 range: k.range, beamThickness: k.beamThickness)
     }
 
     /// Appends the import's light fixtures + keyframe tracks, with positions/targets

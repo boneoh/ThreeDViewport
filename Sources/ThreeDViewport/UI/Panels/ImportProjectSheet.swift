@@ -14,15 +14,29 @@ final class ImportProjectOptions: ObservableObject {
     @Published var rotZ: String = "0"
     @Published var scale: String = "1"
     @Published var includeLights: Bool = false
+    /// When the source has both In/Out marks, import only that slice (remapped so
+    /// the source In lands at `insertTime`).  Defaults on when a range is available.
+    @Published var useSourceInOut: Bool
 
     let probe: SIMD3<Float>
+    /// The source project's saved In/Out range (seconds), or nil when it isn't a
+    /// clean both-marks-set state (no marks, or only one mark — slicing unavailable).
+    let sourceInOut: (in: Double, out: Double)?
 
-    init(insertTime: Double, probe: SIMD3<Float>) {
+    init(insertTime: Double, probe: SIMD3<Float>,
+         sourceInOut: (in: Double, out: Double)? = nil) {
         self.insertTime = String(format: "%.3f", insertTime)
         self.probe = probe
         self.posX  = String(format: "%.3f", probe.x)
         self.posY  = String(format: "%.3f", probe.y)
         self.posZ  = String(format: "%.3f", probe.z)
+        self.sourceInOut    = sourceInOut
+        self.useSourceInOut = (sourceInOut != nil)
+    }
+
+    /// The slice to import, or nil when the user opted out (or none is available).
+    var effectiveSlice: (in: Double, out: Double)? {
+        (useSourceInOut ? sourceInOut : nil)
     }
 
     func usingProbe() {
@@ -79,6 +93,15 @@ struct ImportProjectSheet: View {
             }
 
             Toggle("Include lights", isOn: $options.includeLights)
+
+            if let r = options.sourceInOut {
+                Toggle("Use source In/Out range", isOn: $options.useSourceInOut)
+                Text(String(format: "source: %.2f\u{2013}%.2f s  (%.2f s)\u{2002}\u{2014}\u{2002}"
+                            + "imports only this slice, with its In at the insert time.",
+                            r.in, r.out, r.out - r.in))
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             Text("Models, animation, materials, and glued units are appended to the "
                + "current scene at the chosen time + placement. Camera and scene-wide "

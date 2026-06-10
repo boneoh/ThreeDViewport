@@ -17,6 +17,9 @@ like any other object in the host scene.
      the [Probe](Probe-Inspector.md); the **Probe** button re-reads it. Rotation is in
      degrees; Scale is uniform.
    - **Include lights** — also append the import's lights (off by default).
+   - **Use source In/Out range** — appears only when the source has **both** an In and
+     an Out [timeline mark](Timeline-Editor.md#in--out-marks); imports just that slice
+     (see below). Defaults on when available.
 3. **Import.** The models, their keyframes, materials (incl.
    [Brightness](Model-Inspector.md#brightness-self-emission)), and any glued
    [envelopes](Glue.md) are appended, every keyframe time shifted by the insert time
@@ -32,6 +35,25 @@ like any other object in the host scene.
 
 The host scene keeps its own camera and scene-wide effects.
 
+## Importing a slice (source In/Out)
+
+Mark an **In** and **Out** range on the source project's timeline (the Timeline Editor
+footer or **Timeline** menu — see [Timeline Editor](Timeline-Editor.md#in--out-marks))
+and save it. When you import that project, **Use source In/Out range** lets you bring
+in only that slice:
+
+- Keyframes **outside** `[In, Out]` are dropped; the slice's boundaries are
+  **resampled**, so each track starts and ends on the exact pose it had at In / Out —
+  no jump at the cut.
+- The slice is **remapped** so the source **In lands at the Insert time**. A 2–5 s
+  source slice inserted at 10 s plays over 10–13 s in the host.
+- Slicing only affects **animation timing**. Every object still appears — one whose
+  keyframes all fall outside the range imports as a static hold of its pose at In.
+
+A source must have **both** marks set (or none) for this to be offered; a half-marked
+source is treated as having no range, so an ambiguous file can't produce a surprise
+slice. Position/Rotation/Scale and Include lights work exactly as for a full import.
+
 ## Notes
 
 - **Names just work.** If the import shares a model with the host (e.g. both use
@@ -43,5 +65,5 @@ The host scene keeps its own camera and scene-wide effects.
   re-slide the whole import as a unit (re-import to reposition in time).
 - Imported spin/orbit play exactly as authored, but aren't re-editable as rate markers
   on the imported objects.
-- Current version imports the **whole** source project (shifted to the insert time); a
-  From/To window to import just a slice is planned.
+- Imports the **whole** source project by default, or just the source's In/Out slice
+  when **Use source In/Out range** is on (see above).

@@ -1488,9 +1488,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.beginSheetModal(for: window) { [weak self] response in
             guard let self, response == .OK, let url = panel.url else { return }
 
+            // Peek the source's timeline marks so the dialog can offer a ranged
+            // import.  Only a clean both-marks-set state enables slicing; a half-
+            // marked source (one mark) is treated as no range, to avoid a surprise
+            // slice from an ambiguous file.
+            var sourceInOut: (in: Double, out: Double)? = nil
+            if let json = try? Data(contentsOf: url),
+               let data = try? JSONDecoder().decode(ProjectData.self, from: json),
+               let i = data.timeline.inPoint, let o = data.timeline.outPoint, o > i {
+                sourceInOut = (in: i, out: o)
+            }
+
             // Placement / timing dialog (position defaults to the Probe).
             let options = ImportProjectOptions(insertTime: viewport.timeline.currentTime,
-                                               probe: viewport.probeConfig.position)
+                                               probe: viewport.probeConfig.position,
+                                               sourceInOut: sourceInOut)
             let alert = NSAlert()
             alert.messageText     = "Import \"\(url.deletingPathExtension().lastPathComponent)\""
             alert.informativeText = "Append its models, animation, and materials to the current scene."
@@ -1506,7 +1518,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             let opts = ProjectFile.ImportOptions(
                 insertTime:    options.insertTimeValue,
                 transform:     options.transformMatrix(),
-                includeLights: options.includeLights)
+                includeLights: options.includeLights,
+                sliceRange:    options.effectiveSlice)
             guard ProjectFile.importProject(from: url, into: viewport, options: opts) else {
                 self.showErrorAlert(message: "Import failed",
                                     detail: "Could not read the project file.")
