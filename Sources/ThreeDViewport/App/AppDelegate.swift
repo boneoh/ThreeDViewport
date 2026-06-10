@@ -4485,6 +4485,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             markDirty()
             timelineEditorWC?.updateWindowHeight()
             refreshCameraFollowTargets()
+            // Re-parenting changed members from roots to hierarchical parts; force the
+            // animation to re-evaluate so animated members show their keyframed pose
+            // immediately (otherwise they snap to their rest pose until the next scrub).
+            viewportView?.renderer?.invalidateAnimationCache()
             print("[DEBUG] AppDelegate: glued \(members.count) objects into '\(envName)'")
         }
     }
@@ -4506,6 +4510,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         markDirty()
         timelineEditorWC?.updateWindowHeight()
         refreshCameraFollowTargets()
+        // Re-rooting changed members back to roots — re-evaluate the animation so
+        // animated members keep showing their keyframed pose, not their rest pose.
+        viewportView?.renderer?.invalidateAnimationCache()
     }
 
     /// Exports the current selection as one reusable `.glb` model — a single object,
