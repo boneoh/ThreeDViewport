@@ -24,6 +24,7 @@ let package = Package(
                 .process("Renderer/WidgetShaders.metal"),
                 .process("Renderer/ColorGradeShaders.metal"),
                 .process("Renderer/IBLShaders.metal"),
+                .process("Renderer/ParticleFXShaders.metal"),
                 .copy("Renderer/brown_photostudio_02_2k.hdr"),
                 .copy("Renderer/studio_small_08_2k.hdr")
             ],

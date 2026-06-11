@@ -98,12 +98,13 @@ final class ProjectFile {
         var sliceRange:    (in: Double, out: Double)? = nil
     }
 
-    /// Imports another `.3dvp`'s models, animation, materials, and envelopes (and,
-    /// optionally, its lights) INTO the current scene — appending, not replacing.
+    /// Imports another `.3dvp`'s models, animation, materials, and envelopes INTO the
+    /// current scene — appending, not replacing.  Lights (opt-in) and effects (opt-in:
+    /// particle emitters appended, fog adopted only when the host has none) come too.
     /// Every imported keyframe time is shifted by `options.insertTime`, and the whole
     /// import is placed by `options.transform` (baked into base / group / envelope /
-    /// light transforms).  Camera and global FX (fog / particles / grade / background
-    /// / feedback) are ignored — the host keeps its own.  Returns false if unreadable.
+    /// light / emitter transforms).  Camera, colour grade, background, and feedback are
+    /// not imported — the host keeps its own.  Returns false if unreadable.
     @discardableResult
     static func importProject(from url: URL, into vp: ViewportView,
                               options: ImportOptions) -> Bool {

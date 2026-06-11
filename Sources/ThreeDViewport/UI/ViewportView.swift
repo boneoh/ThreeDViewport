@@ -1228,6 +1228,7 @@ final class ViewportView: MTKView {
         spinRateSchedules  = remapObjectKeys(spinRateSchedules)
         orbitRateSchedules = remapObjectKeys(orbitRateSchedules)
         sceneManager.removeObjects(at: del)
+        pruneEmptyImportBundles()
         renderer?.invalidateAnimationCache()
     }
 
@@ -1243,6 +1244,7 @@ final class ViewportView: MTKView {
         }
         orbitRateSchedules = out
         lightManager.removeLight(at: index)
+        pruneEmptyImportBundles()
         renderer?.invalidateAnimationCache()
     }
 
@@ -1250,7 +1252,22 @@ final class ViewportView: MTKView {
     func deleteParticleEmitter(_ index: Int) {
         guard index >= 0, index < particleManager.emitters.count, particleManager.emitters.count > 1 else { return }
         particleManager.removeEmitter(at: index)
+        pruneEmptyImportBundles()
         renderer?.invalidateAnimationCache()
+    }
+
+    /// Drops bundle metadata (name / loop / source) for any import bundle that no
+    /// longer has a member object, light, or emitter — so deleting an import doesn't
+    /// leave an empty bundle behind (which would persist on save).
+    private func pruneEmptyImportBundles() {
+        let live = Set(sceneManager.objects.compactMap { $0.importBundleID })
+            .union(lightManager.lights.compactMap { $0.importBundleID })
+            .union(particleManager.emitters.compactMap { $0.importBundleID })
+        for bid in Array(sceneManager.importBundles.keys) where !live.contains(bid) {
+            sceneManager.importBundles.removeValue(forKey: bid)
+            sceneManager.importBundleLoops.removeValue(forKey: bid)
+            sceneManager.importBundleSources.removeValue(forKey: bid)
+        }
     }
 
     // MARK: - Import-bundle looping ("Repeat to Fill Timeline")

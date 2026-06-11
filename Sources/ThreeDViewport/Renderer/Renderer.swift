@@ -605,7 +605,7 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         view.clearColor = backgroundConfig.clearColor
 
-        guard let pipeline      = pipelineState else { return }
+        guard pipelineState != nil else { return }
         guard let drawable      = view.currentDrawable,
               let commandBuffer = commandQueue.makeCommandBuffer() else { return }
 

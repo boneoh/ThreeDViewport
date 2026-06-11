@@ -16,12 +16,12 @@ Where a workaround exists it's noted in *italics*.
 
 See [Import Project](docs/Import-Project.md).
 
-- **Effects and globals aren't imported** — camera + camera moves, fog,
-  particles/weather, color grade, background/HDRI, and feedback are skipped; the host
-  scene keeps its own. **[by design]**
-- **Imported spin/orbit aren't re-editable as rate markers** — they import as baked
-  keyframes, so the motion plays identically but the rate can't be tweaked on the
-  imported objects. **[by design / gap]**
+- **Camera + globals aren't imported** — camera + camera moves, color grade,
+  background/HDRI, and feedback are skipped; the host scene keeps its own. (Fog and
+  particles **are** imported, opt-in — fog only when the host has none.) **[by design]**
+- **Imported spin/orbit import as baked keyframes** (the live rate markers aren't), so
+  they stop at the source's duration. Recover the editable, host-length rate via the
+  bundle header's **Extend Spin/Orbit to End** (re-reads the source file). **[by design]**
 - **A referenced model file missing on disk blocks the import** — rather than mis-map
   the (positional) per-object restore, the import is refused with a message naming the
   missing file. Restore the file or fix its path. **[by design]** *(was a silent

@@ -714,7 +714,8 @@ final class TimelineEditorView: NSView {
     // MARK: - Import-bundle move-as-unit (Part B2)
 
     /// Every keyframe-bearing member track of a bundle: each member object's own
-    /// track (incl. envelopes + group parts), each group-level track, and each
+    /// track (incl. envelopes + group parts), each group-level track, each imported
+    /// emitter's track, and each
     /// imported light's track.  Empty tracks are skipped.
     private func bundleMemberRefs(_ bid: Int) -> [TrackRef] {
         var refs: [TrackRef] = []
