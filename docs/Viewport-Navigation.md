@@ -25,6 +25,7 @@ inspector dropdowns, and Timeline highlight all follow).
 | Input | Effect (mode-dependent) |
 |-------|-------------------------|
 | **Left click** | Select the object under the cursor (a multi-part model selects as a unit → Model mode; a single object → Object mode). Clicking empty space keeps the current selection. |
+| **Option + Left click** | Select the individual **part** under the cursor (Object mode), even within a multi-part model — the HUD reads *model ▸ part*. |
 | **Left drag** | Axis-locked translate (truck + pedestal for camera). |
 | **Right drag** | Free rotate / free-look. |
 | **Space + Left drag** | Free orbit. |

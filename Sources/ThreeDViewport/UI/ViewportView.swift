@@ -679,8 +679,19 @@ final class ViewportView: MTKView {
             overlayState.selectedItemName = ""
         case .object:
             let idx = sceneManager.selectedIndex
-            overlayState.selectedItemName = idx < sceneManager.objects.count
-                ? sceneManager.displayName(for: sceneManager.objects[idx]) : ""
+            if idx < sceneManager.objects.count {
+                let o = sceneManager.objects[idx]
+                // An isolated model part reads "model ▸ part" so it's clear which part
+                // of which model is selected; everything else uses its display name.
+                if let gid = o.groupID {
+                    overlayState.selectedItemName =
+                        "\(sceneManager.groupName(for: gid)) ▸ \(sceneManager.partName(for: o))"
+                } else {
+                    overlayState.selectedItemName = sceneManager.displayName(for: o)
+                }
+            } else {
+                overlayState.selectedItemName = ""
+            }
         case .light:
             let li = lightManager.selectedIndex
             overlayState.selectedItemName = li < lightManager.lights.count
@@ -2465,7 +2476,11 @@ final class ViewportView: MTKView {
         // Skip while space-orbiting or in Scene/Director mode (a POV-navigation view).
         guard !leftMouseDragged, !isSpaceDown, !sceneModeActive else { return }
         let pt = convert(event.locationInWindow, from: nil)
-        if let hit = pickObject(at: pt) { selectByPick(objectIndex: hit) }
+        if let hit = pickObject(at: pt) {
+            // Option-click isolates the individual part under the cursor; a plain click
+            // selects the whole multi-part model.
+            selectByPick(objectIndex: hit, isolatePart: event.modifierFlags.contains(.option))
+        }
     }
 
     // MARK: - Click-to-select picking
@@ -2576,17 +2591,18 @@ final class ViewportView: MTKView {
 
     /// Applies a picked object to the selection, driving the same path the keystroke
     /// cycle and Timeline-row click use (so the dropdowns / HUD / grid all follow).
-    private func selectByPick(objectIndex i: Int) {
+    private func selectByPick(objectIndex i: Int, isolatePart: Bool) {
         guard i >= 0, i < sceneManager.objects.count else { return }
         let obj = sceneManager.objects[i]
-        if let gid = obj.groupID {
-            // A multi-part model → select it as a unit in Model mode.
+        if let gid = obj.groupID, !isolatePart {
+            // Plain click on a multi-part model → select it as a unit in Model mode.
             if let rootIdx = sceneManager.objects.firstIndex(where: { $0.groupID == gid }) {
                 sceneManager.selectedIndex = rootIdx
             }
             setControlMode(.model)
         } else {
-            // Standalone object or a glued single-mesh member → Object mode.
+            // Standalone object, glued member, or (Option) the isolated part under the
+            // cursor → Object mode on exactly that object.
             sceneManager.selectedIndex = i
             setControlMode(.object)
         }
