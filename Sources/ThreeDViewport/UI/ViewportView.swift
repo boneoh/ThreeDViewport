@@ -1910,58 +1910,12 @@ final class ViewportView: MTKView {
             print("[DEBUG] ViewportView: addFollowCameraKeyframe — no object selected")
             return
         }
-        if camera.keyframeTrack == nil {
-            camera.keyframeTrack = CameraKeyframeTrack()
-            print("[DEBUG] ViewportView: created new CameraKeyframeTrack")
-        }
-
-        var followYawOffset:    Float? = nil
-        var followPitchOffset:  Float? = nil
-        var targetOffset = SIMD3<Float>(0, 0, 0)
-        var followForwardLocal: SIMD3<Float>? = nil
-        if let anchor = sceneManager.worldOrbitAnchor(ofObjectNamed: obj.name) {
-            followYawOffset   = camera.yaw    - anchor.behindYaw
-            followPitchOffset = camera.pitch  - anchor.behindPitch
-            // Convert the world-space delta into the followed object's local
-            // frame.  For orthonormal basis, transpose = inverse.
-            let worldDelta = camera.target - anchor.pos
-            targetOffset   = anchor.basis.transpose * worldDelta
-            // Capture the camera's forward direction in the object's local
-            // frame so playback can rotate it by the object's current basis
-            // and reproduce the camera-to-head direction exactly, regardless
-            // of the object's later orientation.  See CameraKeyframe docs.
-            let forwardWorld = cameraForward(yaw: camera.yaw, pitch: camera.pitch)
-            followForwardLocal = anchor.basis.transpose * forwardWorld
-        }
-
-        let kf = CameraKeyframe(
-            time:               timeline.currentTime,
-            yaw:                camera.yaw,
-            pitch:              camera.pitch,
-            distance:           camera.distance,
-            target:             camera.target,
-            fov:                camera.fovYRadians,
-            // Store the disambiguated display name ("cube 2") so a duplicated single-
-            // mesh object follows the RIGHT instance (worldOrbitAnchor matches display
-            // name first); matches the Camera panel's follow-target dropdown.
-            followTargetName:   sceneManager.displayName(for: obj),
-            followYawOffset:    followYawOffset,
-            followPitchOffset:  followPitchOffset,
-            targetOffset:       targetOffset,
-            followForwardLocal: followForwardLocal
-        )
-        camera.keyframeTrack?.addKeyframe(kf, mergeTolerance: stampMergeTolerance)
-
-        let yawOffStr   = followYawOffset  .map { String(format: "%.4f", $0) } ?? "nil"
-        let pitchOffStr = followPitchOffset.map { String(format: "%.4f", $0) } ?? "nil"
-        print("[DEBUG] ViewportView: follow camera keyframe added at t="
-            + String(format: "%.3f", timeline.currentTime)
-            + " followTarget='\(obj.name)'"
-            + " yaw=" + String(format: "%.4f", camera.yaw)
-            + " followYawOffset=" + yawOffStr
-            + " followPitchOffset=" + pitchOffStr
-            + " distance=" + String(format: "%.4f", camera.distance))
-        onKeyframeStamped?(.camera)
+        // Resolve the selection to its disambiguated display name ("cube 2") and reuse
+        // the named variant, so the anchor lookup AND the stored follow target are the
+        // SAME instance.  (Looking the anchor up by obj.name alone resolved a duplicate
+        // single-mesh object to the FIRST instance — the camera aimed at the wrong cube.)
+        addFollowCameraKeyframeAtCurrentTime(
+            followingObjectNamed: sceneManager.displayName(for: obj))
     }
 
     /// Variant of `addFollowCameraKeyframeAtCurrentTime()` that follows a specific named
@@ -2078,7 +2032,12 @@ final class ViewportView: MTKView {
     /// free keyframe and logs.
     func addCameraKeyframeFromPanel() {
         if let name = cameraPanelState.followTargetName {
-            if sceneManager.objects.contains(where: { $0.name == name }) {
+            // The dropdown stores a DISPLAY name ("cube 2"), so match by display name
+            // (raw name as a fallback for older projects); comparing only against the
+            // raw object name failed for duplicates and silently stamped a free keyframe.
+            if sceneManager.objects.contains(where: {
+                sceneManager.displayName(for: $0) == name || $0.name == name
+            }) {
                 addFollowCameraKeyframeAtCurrentTime(followingObjectNamed: name)
             } else {
                 print("[DEBUG] ViewportView: panel follow target '\(name)' missing"
