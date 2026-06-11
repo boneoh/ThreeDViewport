@@ -88,9 +88,15 @@ See [Model Inspector](docs/Model-Inspector.md).
 - **Euler X rotation is limited to ±90°** near the poles (gimbal lock); Y and Z cover
   the full ±180° cleanly. **[by design, math]**
 
+## Other
+
+- **Cross-instance keyframe paste matches tracks by name** — pasting keyframes into a
+  *second* app instance resolves the target object/group by name, so a duplicated
+  single-mesh object can land on the first instance. Coordinate copy/paste (channel-
+  based) has no such ambiguity. **[gap, minor]** *(Cross-instance copy/paste itself —
+  both coordinates and keyframes — is built and works between two running instances.)*
+
 ## Not built yet (planned)
 
 - **Forward Kinematics** — walk/wave Animation-Path preset helpers, and a
   hierarchy-preserving Glue export so complex rigs stay articulated. **[not built]**
-- **Cross-instance copy/paste** — mirroring the coordinate/keyframe clipboard through
-  the system pasteboard so two app instances can share copies. **[not built, queued]**
