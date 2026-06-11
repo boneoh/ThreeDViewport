@@ -359,13 +359,11 @@ final class SceneManager {
             print("[DEBUG] SceneManager: removeEnvelope — index \(index) is not an envelope")
             return
         }
-        // Re-root members: world transform already holds their current pose; make
-        // localTransform match it (roots store local == world) and drop the parent.
-        for m in objects where m.parentIndex == index {
-            m.parentIndex    = nil
-            m.localTransform = m.transform
-            m.baseTransform  = m.transform
-        }
+        // Re-root each member at its REST world pose so animation replays cleanly
+        // (see reRootMember — using the current `transform` would re-bake the playhead
+        // delta and scatter animated parts).
+        let envRest = restPose(objects[index])
+        for m in objects where m.parentIndex == index { reRootMember(m, envRest: envRest) }
         objects.remove(at: index)
         // Removal shifts every later index down by one — fix up any parentIndex that
         // pointed past the removed slot so other hierarchies stay valid.
@@ -396,16 +394,33 @@ final class SceneManager {
         }
     }
 
-    /// Removes specific members from an envelope, re-rooting each in place (its current
-    /// world pose is preserved, parent link cleared).  The envelope and array are kept
-    /// (use removeEnvelope to dissolve the whole unit).
+    /// Removes specific members from an envelope, re-rooting each at its rest world
+    /// pose (animation preserved without scatter — see reRootMember).  The envelope and
+    /// array are kept (use removeEnvelope to dissolve the whole unit).
     func removeEnvelopeMembers(envIndex: Int, memberIndices: [Int]) {
+        guard envIndex >= 0, envIndex < objects.count else { return }
+        let envRest = restPose(objects[envIndex])
         for mi in memberIndices where mi >= 0 && mi < objects.count && objects[mi].parentIndex == envIndex {
-            let m = objects[mi]
-            m.parentIndex    = nil
-            m.localTransform = m.transform
-            m.baseTransform  = m.transform
+            reRootMember(objects[mi], envRest: envRest)
         }
+    }
+
+    /// A member's REST pose — its `baseTransform` when animated (the anchor of its
+    /// keyframe deltas), else its current `transform` (covers a statically dragged one).
+    private func restPose(_ o: SceneObject) -> matrix_float4x4 {
+        (o.keyframeTrack?.keyframes.isEmpty == false) ? o.baseTransform : o.transform
+    }
+
+    /// Re-roots a member leaving an envelope.  An ANIMATED member is restored to its
+    /// REST WORLD pose (envelope rest × member local rest) so its unchanged keyframes
+    /// replay in world space WITHOUT re-baking the playhead's delta into the base
+    /// (which scattered the parts).  A STATIC member keeps its current world transform.
+    private func reRootMember(_ m: SceneObject, envRest: matrix_float4x4) {
+        let worldRest: matrix_float4x4 =
+            (m.keyframeTrack?.keyframes.isEmpty == false) ? (envRest * m.baseTransform) : m.transform
+        m.parentIndex    = nil
+        m.localTransform = worldRest
+        m.baseTransform  = worldRest
     }
 
     // MARK: - Camera follow helpers
