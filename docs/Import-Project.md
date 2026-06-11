@@ -86,3 +86,7 @@ Position/Rotation/Scale and Include lights work exactly as for a full import.
   on the imported objects.
 - Imports the **whole** source project by default, or just the source's In/Out slice
   when **Use source In/Out range** is on (see above).
+- **The source's timeline duration is respected.** Keyframes left *past* the source's
+  last frame — e.g. stale baked spin/orbit keyframes after you shortened that project's
+  timeline — are **not** imported. They stay in the source file; the import just stops
+  at the last frame (boundary-sampled, so the end pose is exact).

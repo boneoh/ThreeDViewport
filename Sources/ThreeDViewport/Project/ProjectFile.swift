@@ -115,11 +115,16 @@ final class ProjectFile {
         // and remap so source `in` lands at insertTime.  After slicing every kept
         // keyframe still sits at its SOURCE time, so the rest of the import shifts
         // by T = insertTime − in (vs. T = insertTime for a full import).
+        //
+        // A full import is treated as the slice [0, source duration]: keyframes left
+        // PAST the source's last frame (e.g. stale baked keyframes after the timeline
+        // was shortened) are off the source timeline and must not be imported.
         let T: Double
         if let s = options.sliceRange {
             sliceProjectData(&data, in: s.in, out: s.out)
             T = options.insertTime - s.in
         } else {
+            sliceProjectData(&data, in: 0, out: data.timeline.duration)
             T = options.insertTime
         }
 
