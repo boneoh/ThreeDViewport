@@ -90,3 +90,6 @@ Position/Rotation/Scale and Include lights work exactly as for a full import.
   last frame — e.g. stale baked spin/orbit keyframes after you shortened that project's
   timeline — are **not** imported. They stay in the source file; the import just stops
   at the last frame (boundary-sampled, so the end pose is exact).
+- **All referenced model files must be present.** If the source project points at a
+  model file that isn't on disk, the import is refused with a message naming it (rather
+  than mis-placing the remaining objects). Restore the file or fix its path, then retry.

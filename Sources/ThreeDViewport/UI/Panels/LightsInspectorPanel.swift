@@ -180,9 +180,35 @@ struct LightsInspectorPanel: View {
             }
             .padding(.bottom, 2)
 
-            // Light list
-            ForEach(lightManager.lights.indices, id: \.self) { i in
-                lightRow(at: i)
+            // Light selector — a dropdown scales to the many lights an Import Project
+            // can bring in (a flat list would run off the panel).  Names match the
+            // Timeline Editor's lane labels ("Light 1 - Directional").
+            if !lightManager.lights.isEmpty {
+                HStack(spacing: 6) {
+                    Picker("", selection: Binding<Int>(
+                        get: { min(lightManager.selectedIndex, lightManager.lights.count - 1) },
+                        set: { lightManager.selectedIndex = $0 }
+                    )) {
+                        ForEach(lightManager.lights.indices, id: \.self) { i in
+                            Label(lightName(at: i), systemImage: lightManager.lights[i].type.systemImage)
+                                .tag(i)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .frame(maxWidth: .infinity)
+
+                    // Remove the selected light (never remove the last one).
+                    Button {
+                        lightManager.removeLight(at: lightManager.selectedIndex)
+                    } label: {
+                        Image(systemName: "minus.circle")
+                            .foregroundColor(.red.opacity(0.7))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(lightManager.lights.count <= 1)
+                    .help("Remove the selected light")
+                }
             }
 
             // Selected light detail editor
@@ -193,49 +219,9 @@ struct LightsInspectorPanel: View {
         }
     }
 
-    // MARK: - Light row (list item)
-
-    private func lightRow(at i: Int) -> some View {
-        let light = lightManager.lights[i]
-        let isSelected = i == lightManager.selectedIndex
-
-        return HStack(spacing: 6) {
-            Image(systemName: light.type.systemImage)
-                .frame(width: 16)
-                .foregroundColor(isSelected ? .accentColor : .secondary)
-
-            Text(light.type.displayName)
-                .fontWeight(isSelected ? .semibold : .regular)
-                .foregroundColor(isSelected ? .primary : .secondary)
-
-            Spacer()
-
-            // Enabled toggle
-            Toggle("", isOn: Binding<Bool>(
-                get: { lightManager.lights[i].isEnabled },
-                set: { lightManager.lights[i].isEnabled = $0 }
-            ))
-            .toggleStyle(.checkbox)
-            .labelsHidden()
-            .environment(\.controlActiveState, .active)
-
-            // Remove button (never remove last light)
-            Button {
-                lightManager.removeLight(at: i)
-            } label: {
-                Image(systemName: "minus.circle")
-                    .foregroundColor(.red.opacity(0.7))
-            }
-            .buttonStyle(.plain)
-            .disabled(lightManager.lights.count <= 1)
-        }
-        .padding(6)
-        .background(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
-        .cornerRadius(6)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            lightManager.selectedIndex = i
-        }
+    /// "Light N - <Type>" — mirrors the Timeline Editor's light lane label.
+    private func lightName(at i: Int) -> String {
+        "Light \(i + 1) - \(lightManager.lights[i].type.displayName)"
     }
 
     // MARK: - Light detail editor
@@ -248,7 +234,7 @@ struct LightsInspectorPanel: View {
 
             // Enabled toggle — prominent at the top so you can solo/mute lights quickly
             HStack {
-                Text(light.type.displayName + " Light")
+                Text(lightName(at: i))
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                 Spacer()

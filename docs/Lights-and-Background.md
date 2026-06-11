@@ -27,8 +27,11 @@ For the full story on IBL intensity, lighting vs background HDRs, and baking, se
 
 ## Lights
 
-Add a light from the **+ type** menu (Ambient / Directional / Point / Spot / Laser);
-up to four. Per light:
+Add a light from the **+ type** menu (Ambient / Directional / Point / Spot / Laser).
+Pick the light to edit from the **dropdown** — entries are named like the Timeline
+Editor's lanes (*Light 1 - Directional*), so a scene with many lights (e.g. after an
+[Import Project](Import-Project.md)) stays manageable. The **–** button beside it
+removes the selected light (the last one can't be removed). Per light:
 
 | Control | Notes |
 |---------|-------|

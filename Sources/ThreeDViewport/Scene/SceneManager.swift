@@ -367,6 +367,39 @@ final class SceneManager {
         print("[DEBUG] SceneManager: removeEnvelope — removed idx=\(index), remaining=\(objects.count)")
     }
 
+    /// Adds existing top-level roots to an EXISTING envelope, re-basing each into the
+    /// envelope's rest frame exactly as makeEnvelope does.  The array is NOT mutated
+    /// (only parent links change), so indices stay valid.  Re-anchoring isn't done —
+    /// the envelope keeps its current origin.
+    func addEnvelopeMembers(envIndex: Int, memberIndices: [Int]) {
+        guard envIndex >= 0, envIndex < objects.count, objects[envIndex].isEnvelope else { return }
+        let envT   = objects[envIndex].baseTransform   // envelope REST frame
+        let invEnv = simd_inverse(envT)
+        func restPose(_ o: SceneObject) -> matrix_float4x4 {
+            (o.keyframeTrack?.keyframes.isEmpty == false) ? o.baseTransform : o.transform
+        }
+        for mi in memberIndices where mi >= 0 && mi < objects.count
+            && !objects[mi].isEnvelope && objects[mi].parentIndex == nil && mi != envIndex {
+            let m = objects[mi]
+            let local = invEnv * restPose(m)
+            m.parentIndex    = envIndex
+            m.localTransform = local
+            m.baseTransform  = local   // hierarchical parts store base = LOCAL
+        }
+    }
+
+    /// Removes specific members from an envelope, re-rooting each in place (its current
+    /// world pose is preserved, parent link cleared).  The envelope and array are kept
+    /// (use removeEnvelope to dissolve the whole unit).
+    func removeEnvelopeMembers(envIndex: Int, memberIndices: [Int]) {
+        for mi in memberIndices where mi >= 0 && mi < objects.count && objects[mi].parentIndex == envIndex {
+            let m = objects[mi]
+            m.parentIndex    = nil
+            m.localTransform = m.transform
+            m.baseTransform  = m.transform
+        }
+    }
+
     // MARK: - Camera follow helpers
 
     /// Returns the world-space follow state for the named object — the data needed

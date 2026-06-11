@@ -28,9 +28,8 @@ just edit a rate instead of re-keying a whole sweep.
    when valid). A part orbits **relative to its model** (see Notes).
 3. **Orbit Rate:** set the **Radius**, **Rate (rev/s)** (negative reverses
    direction), and **Keyframes / rev**.
-4. Click **Create Keyframes** to drop a rate marker. The **first** marker for a
-   target anchors at **frame 0** so the orbit covers the whole timeline by default —
-   no need to scrub to the start first.
+4. Click **Create Keyframes** to drop a rate marker **at the playhead** — scrub to
+   where the orbit should begin first (frame 0 for a whole-timeline orbit).
 5. For a later rate change, scrub the playhead to where it should take effect and
    click **Create Keyframes** again; add a **Rate 0** marker to stop.
 

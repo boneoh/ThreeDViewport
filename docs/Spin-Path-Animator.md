@@ -29,10 +29,11 @@ which moves an object *around* an external axis.
    selection when that selection is something spinnable.
 2. **Spin Rate:** choose the **Local axis** (X / Y / Z — Y is a top-like spin), set
    the **Rate (rev/s)** (negative reverses direction), and **Keyframes / rev**.
-3. Click **Create Keyframes** to drop a rate marker. The **first** marker for a
-   target anchors at **frame 0** so the spin covers the whole timeline by default —
-   in fact, opening the panel for an object that has no spin yet **seeds that frame-0
-   marker for you** using the current Rate, so it spins start-to-end immediately.
+3. Click **Create Keyframes** to drop a rate marker **at the playhead** — scrub to
+   where the spin should begin first (frame 0 for a whole-timeline spin). The spin
+   then holds that rate from the marker to the next one (or the timeline end).
+   (Opening the panel never creates keyframes on its own — it only shows the target's
+   existing markers — so it can't disturb animation you already have.)
 4. For a later rate change, scrub the playhead to where it should take effect and
    click **Create Keyframes** again. Add a marker with **Rate 0** where you want the
    spin to stop and hold.

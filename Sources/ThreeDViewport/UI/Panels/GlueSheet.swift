@@ -9,12 +9,17 @@ final class GlueOptions: ObservableObject {
     @Published var selected: Set<Int>
     @Published var anchor:   Int
     @Published var name:     String
+    /// True when editing an existing envelope's membership: the origin/anchor is
+    /// already set, so the anchor picker is hidden.
+    let isEditing: Bool
 
-    init(candidates: [Candidate], selected: Set<Int>, anchor: Int, name: String) {
+    init(candidates: [Candidate], selected: Set<Int>, anchor: Int, name: String,
+         isEditing: Bool = false) {
         self.candidates = candidates
         self.selected   = selected
         self.anchor     = anchor
         self.name       = name
+        self.isEditing  = isEditing
     }
 
     /// Keeps the anchor valid as the selection changes — if the anchor is no longer
@@ -62,19 +67,24 @@ struct GlueSheetView: View {
             }
             .frame(height: 160)
 
-            HStack {
-                Text("Anchor (pivot)").frame(width: 100, alignment: .leading)
-                Picker("", selection: $options.anchor) {
-                    ForEach(options.candidates.filter { options.selected.contains($0.id) }) { c in
-                        Text(c.name).tag(c.id)
+            if !options.isEditing {
+                HStack {
+                    Text("Anchor (pivot)").frame(width: 100, alignment: .leading)
+                    Picker("", selection: $options.anchor) {
+                        ForEach(options.candidates.filter { options.selected.contains($0.id) }) { c in
+                            Text(c.name).tag(c.id)
+                        }
                     }
+                    .labelsHidden()
+                    .frame(maxWidth: .infinity)
                 }
-                .labelsHidden()
-                .frame(maxWidth: .infinity)
             }
 
-            Text("The envelope origin sits at the anchor's position. Select the "
-                + "envelope to move the whole unit; select a member to move it alone.")
+            Text(options.isEditing
+                ? "Check objects to add to this unit, uncheck to remove. The envelope "
+                    + "keeps its current pivot. An envelope needs at least two members."
+                : "The envelope origin sits at the anchor's position. Select the "
+                    + "envelope to move the whole unit; select a member to move it alone.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }

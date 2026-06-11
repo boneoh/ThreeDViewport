@@ -111,6 +111,14 @@ final class ProjectFile {
         let sm = vp.sceneManager
         let M  = options.transform
 
+        // Per-object restore below is POSITIONAL (data.objects[i] ↔ imported[i]).  A
+        // model file that fails to load would append fewer objects and shift every
+        // later object's saved data (and envelope member indices) onto the wrong part,
+        // and we can't know a missing model's part count to compensate.  So refuse the
+        // whole import if any referenced file is absent — the caller surfaces which.
+        let allPaths = data.modelPaths.isEmpty ? (data.modelPath.map { [$0] } ?? []) : data.modelPaths
+        if allPaths.contains(where: { !FileManager.default.fileExists(atPath: $0) }) { return false }
+
         // Ranged import: keep only the source's [in, out] slice (boundary-sampled),
         // and remap so source `in` lands at insertTime.  After slicing every kept
         // keyframe still sits at its SOURCE time, so the rest of the import shifts
@@ -669,8 +677,11 @@ final class ProjectFile {
             switch ref {
             case .object(let i):
                 guard i >= 0, i < vp.sceneManager.objects.count else { continue }
+                // targetIndex carries the occurrence among same-named objects so a
+                // duplicated single-mesh object reloads onto the RIGHT instance.
                 spinSchedData.append(SpinRateScheduleData(
-                    targetKind: 2, targetName: vp.sceneManager.objects[i].name, targetIndex: 0, markers: md))
+                    targetKind: 2, targetName: vp.sceneManager.objects[i].name,
+                    targetIndex: objectOccurrence(vp.sceneManager.objects, at: i), markers: md))
             case .group(let gid):
                 // Key by (filename, occurrence) so it survives reload + duplicates.
                 let fn = vp.sceneManager.objects.first { $0.groupID == gid }?
@@ -697,8 +708,10 @@ final class ProjectFile {
                     axisStart: aS, axisEnd: aE, radius: sched.radius, markers: md))
             case .object(let i):
                 guard i >= 0, i < vp.sceneManager.objects.count else { continue }
+                // targetIndex carries the occurrence among same-named objects (see spin).
                 orbitSchedData.append(OrbitRateScheduleData(
-                    targetKind: 2, targetName: vp.sceneManager.objects[i].name, targetIndex: -1,
+                    targetKind: 2, targetName: vp.sceneManager.objects[i].name,
+                    targetIndex: objectOccurrence(vp.sceneManager.objects, at: i),
                     axisStart: aS, axisEnd: aE, radius: sched.radius, markers: md))
             default:
                 continue
@@ -1420,7 +1433,10 @@ final class ProjectFile {
             guard !markers.isEmpty else { continue }
             switch sd.targetKind {
             case 2:
-                if let i = vp.sceneManager.objects.firstIndex(where: { $0.name == sd.targetName }) {
+                // Match the occurrence-th object of that name (legacy files: targetIndex
+                // 0/-1 → clamp to occurrence 0 = first instance, the old behavior).
+                if let i = objectIndex(vp.sceneManager.objects, name: sd.targetName,
+                                       occurrence: max(0, sd.targetIndex)) {
                     vp.spinRateSchedules[.object(i)] = markers
                 }
             case 3:
@@ -1447,13 +1463,34 @@ final class ProjectFile {
             case 1:
                 vp.orbitRateSchedules[.light(od.targetIndex)] = sched
             case 2:
-                if let i = vp.sceneManager.objects.firstIndex(where: { $0.name == od.targetName }) {
+                if let i = objectIndex(vp.sceneManager.objects, name: od.targetName,
+                                       occurrence: max(0, od.targetIndex)) {
                     vp.orbitRateSchedules[.object(i)] = sched
                 }
             default:
                 break
             }
         }
+    }
+
+    /// 0-based occurrence of the object at `i` among objects sharing its name, in
+    /// object-array order — the identity used to disambiguate duplicated single-mesh
+    /// objects in persisted rate schedules.
+    private static func objectOccurrence(_ objects: [SceneObject], at i: Int) -> Int {
+        let name = objects[i].name
+        var occ = 0
+        for k in 0..<i where objects[k].name == name { occ += 1 }
+        return occ
+    }
+
+    /// Index of the `occurrence`-th object named `name` (object-array order), or nil.
+    private static func objectIndex(_ objects: [SceneObject], name: String, occurrence: Int) -> Int? {
+        var count = 0
+        for (k, o) in objects.enumerated() where o.name == name {
+            if count == occurrence { return k }
+            count += 1
+        }
+        return nil
     }
 
     // MARK: - Apply group keyframe tracks (v14 / Phase 2)

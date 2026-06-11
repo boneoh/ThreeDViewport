@@ -49,6 +49,20 @@ A member's own animation **composes on top of** the envelope's, so e.g. B can or
 spin each member on a different axis — A in X, B in Y, the envelope C in Z — for
 layered, compound motion.
 
+## Edit members (add / remove)
+
+To change what's in an existing unit without rebuilding it, select the envelope and
+choose **Edit ▸ Edit Glue Members…**. The dialog lists the current members (checked)
+plus any other top-level objects you can add. Check to add, uncheck to remove, then
+**Apply**:
+
+- **Added** objects are re-based into the envelope's frame, exactly as if they'd been
+  glued originally.
+- **Removed** objects re-root in place, keeping their current pose — nothing jumps.
+- The envelope keeps its **current pivot** (the anchor is set when you first glue and
+  isn't re-chosen here), and you can rename the unit from the same dialog.
+- A unit needs **at least two members**; to drop below that, use **Unglue** instead.
+
 ## Unglue
 
 Select the envelope and choose **Edit ▸ Unglue** (or remove it via Edit ▸ Remove).
@@ -91,7 +105,8 @@ re-imports auto-normalised at the origin.
 
 - **Saved with the project** — envelopes, membership, the envelope's transform, and
   its keyframes all persist.
-- **One-time bind:** to change membership, unglue and re-glue (no add/remove yet).
+- **Membership is editable** via *Edit ▸ Edit Glue Members…* (add/remove without
+  ungluing); the **anchor/pivot** is still fixed at glue time — re-glue to change it.
 - **Models only** for now — lights and effects can't be glued.
 - **Glue first, then keyframe a member.** A track that already exists on an object
   *before* gluing is reinterpreted relative to the envelope; add member animation

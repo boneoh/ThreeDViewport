@@ -676,7 +676,10 @@ final class ViewportView: MTKView {
             overlayState.selectedItemName = idx < sceneManager.objects.count
                 ? sceneManager.displayName(for: sceneManager.objects[idx]) : ""
         case .light:
-            overlayState.selectedItemName = "Light \(lightManager.selectedIndex + 1)"
+            let li = lightManager.selectedIndex
+            overlayState.selectedItemName = li < lightManager.lights.count
+                ? "Light \(li + 1) - \(lightManager.lights[li].type.displayName)"
+                : ""
         case .model:
             // Show the model's timeline name (with any duplicate-instance suffix).
             if let gid = sceneManager.selectedGroupID {
@@ -1609,6 +1612,7 @@ final class ViewportView: MTKView {
         spinRateSchedules[ref] = cleaned
         regenerateSpinRate(ref: ref, markers: cleaned ?? [],
                            keyframesPerRevolution: keyframesPerRevolution, clearFrom: clearFrom)
+        regenerateLoopForRef(ref)   // re-tile if this track is in a looped import bundle
     }
 
     /// Replaces a camera/light/object orbit schedule and rebakes its keyframes.
@@ -1622,6 +1626,7 @@ final class ViewportView: MTKView {
         orbitRateSchedules[ref] = cleaned
         regenerateOrbitRate(ref: ref, schedule: cleaned,
                             keyframesPerRevolution: keyframesPerRevolution, clearFrom: clearFrom)
+        regenerateLoopForRef(ref)   // re-tile if this track is in a looped import bundle
     }
 
     /// Rebuilds an object/model spin track from its rate markers.  Clears the owned
@@ -1936,7 +1941,10 @@ final class ViewportView: MTKView {
             distance:           camera.distance,
             target:             camera.target,
             fov:                camera.fovYRadians,
-            followTargetName:   obj.name,
+            // Store the disambiguated display name ("cube 2") so a duplicated single-
+            // mesh object follows the RIGHT instance (worldOrbitAnchor matches display
+            // name first); matches the Camera panel's follow-target dropdown.
+            followTargetName:   sceneManager.displayName(for: obj),
             followYawOffset:    followYawOffset,
             followPitchOffset:  followPitchOffset,
             targetOffset:       targetOffset,

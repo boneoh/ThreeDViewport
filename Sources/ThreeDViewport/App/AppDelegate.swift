@@ -825,6 +825,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         glueItem.target = self
         editMenu.addItem(glueItem)
 
+        // Edit Glue Members — enabled (via validateMenuItem) only when an envelope is
+        // selected; add/remove members without ungluing.
+        let editGlueItem = NSMenuItem(
+            title: "Edit Glue Members…",
+            action: #selector(editGlueMembers(_:)),
+            keyEquivalent: ""
+        )
+        editGlueItem.target = self
+        editMenu.addItem(editGlueItem)
+
         // Unglue — enabled (via validateMenuItem) only when an envelope is selected.
         let unglueItem = NSMenuItem(
             title: "Unglue",
@@ -1496,6 +1506,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             var sourceHalfMarked = false
             if let json = try? Data(contentsOf: url),
                let data = try? JSONDecoder().decode(ProjectData.self, from: json) {
+                // Refuse up front if any referenced model file is missing — the import's
+                // positional per-object restore would otherwise mis-map every later
+                // object (and can't recover a missing model's part count).
+                let paths   = data.modelPaths.isEmpty ? (data.modelPath.map { [$0] } ?? []) : data.modelPaths
+                let missing = paths.filter { !FileManager.default.fileExists(atPath: $0) }
+                if !missing.isEmpty {
+                    let list = missing.map { "• " + ($0 as NSString).lastPathComponent }.joined(separator: "\n")
+                    self.showErrorAlert(
+                        message: "Can't import — model file(s) missing",
+                        detail: "This project references model files that aren't on disk:\n\n\(list)\n\n"
+                              + "Restore the file(s) or fix their paths, then try again.")
+                    return
+                }
                 let i = data.timeline.inPoint
                 let o = data.timeline.outPoint
                 if let i = i, let o = o, o > i {
@@ -2170,7 +2193,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             // Need at least two root objects to bind together.
             return (viewportView?.sceneManager.rootObjectIndicesSorted.count ?? 0) >= 2
         }
-        if menuItem.action == #selector(unglueSelected(_:)) {
+        if menuItem.action == #selector(unglueSelected(_:))
+            || menuItem.action == #selector(editGlueMembers(_:)) {
             // Enabled only when the current selection is an envelope.
             return viewportView?.sceneManager.selectedObject?.isEnvelope == true
         }
@@ -3317,7 +3341,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private func pathAnimatorTrackLabel(_ ref: TrackRef) -> String {
         switch ref {
         case .camera:        return "Camera"
-        case .light(let i):  return "Light \(i + 1)"
+        case .light(let i):
+            if let lights = viewportView?.lightManager.lights, i >= 0, i < lights.count {
+                return "Light \(i + 1) - \(lights[i].type.displayName)"
+            }
+            return "Light \(i + 1)"
         case .object(let i):
             if let objs = viewportView?.sceneManager.objects, i >= 0, i < objs.count {
                 return objs[i].name
@@ -3459,9 +3487,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let rate = Double(state.rate) else {
             state.validationAlert = "Rate must be a number (rev/s)."; return
         }
-        // The first rate keyframe anchors at frame 0 so the orbit covers the whole
-        // timeline by default; later ones land at the playhead.
-        let t = state.markers.isEmpty ? 0 : viewport.timeline.currentTime
+        // Every rate keyframe lands at the playhead — scrub to frame 0 first for a
+        // whole-timeline orbit.  (Forcing the first one to frame 0 ignored a playhead
+        // the user had deliberately positioned.)
+        let t = viewport.timeline.currentTime
         var markers = state.markers.filter { abs($0.time - t) >= 1e-3 }
         markers.append(OrbitRateMarker(time: t, rate: rate))
         markers.sort { $0.time < $1.time }
@@ -3509,7 +3538,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             if panel.isVisible {
                 panel.orderOut(nil)
             } else {
-                spinSeedDefaultMarkerIfEmpty()
                 panel.makeKeyAndOrderFront(nil)
             }
             return
@@ -3544,27 +3572,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
 
         spinPanel = panel
-        spinSeedDefaultMarkerIfEmpty()
         panel.makeKeyAndOrderFront(nil)
         print("[DEBUG] AppDelegate: spin animator panel opened")
-    }
-
-    /// On first showing the Spin panel for a target that has no markers yet, seed a
-    /// rate marker at frame 0 (using the current Rate / axis fields) so the object
-    /// spins across the whole timeline by default — the rate-marker analog of
-    /// Linear/Curve defaulting their time window to the full timeline.
-    private func spinSeedDefaultMarkerIfEmpty() {
-        guard let viewport = viewportView else { return }
-        let state = viewport.spinAnimatorState
-        guard let ref = state.capturedRef, state.markers.isEmpty,
-              let rate = Double(state.rate),
-              let perRev = Float(state.perRev), perRev >= 3 else { return }
-        let markers = [SpinRateMarker(time: 0, rate: rate, axisIndex: state.axisIndex)]
-        viewport.setSpinSchedule(ref: ref, markers: markers, keyframesPerRevolution: perRev)
-        state.markers = markers
-        timelineEditorWC?.editorView.needsDisplay = true
-        markDirty()
-        state.status = "Seeded full-timeline spin at frame 0."
     }
 
     /// Loads the selected target's persisted spin markers into the panel.
@@ -3590,9 +3599,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let perRev = Float(state.perRev), perRev >= 3 else {
             state.validationAlert = "Keyframes / rev must be ≥ 3."; return
         }
-        // The first rate keyframe anchors at frame 0 so the spin covers the whole
-        // timeline by default; later ones land at the playhead.
-        let t = state.markers.isEmpty ? 0 : viewport.timeline.currentTime
+        // Every rate keyframe lands at the playhead — scrub to frame 0 first for a
+        // whole-timeline spin.  (Forcing the first one to frame 0 ignored a playhead
+        // the user had deliberately positioned.)
+        let t = viewport.timeline.currentTime
         var markers = (viewport.spinRateSchedules[ref] ?? []).filter { abs($0.time - t) >= 1e-3 }
         markers.append(SpinRateMarker(time: t, rate: rate, axisIndex: state.axisIndex))
         markers.sort { $0.time < $1.time }
@@ -4655,6 +4665,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // Re-rooting changed members back to roots — re-evaluate the animation so
         // animated members keep showing their keyframed pose, not their rest pose.
         viewportView?.renderer?.invalidateAnimationCache()
+    }
+
+    @objc private func editGlueMembers(_ sender: Any) {
+        guard let scene = viewportView?.sceneManager,
+              let env = scene.selectedObject, env.isEnvelope else { return }
+        let envIndex = scene.selectedIndex
+
+        // Candidates: the envelope's current members + any addable non-envelope roots.
+        let current = scene.objects.indices.filter { scene.objects[$0].parentIndex == envIndex }
+        let addable = scene.rootObjectIndicesSorted.filter { !scene.objects[$0].isEnvelope }
+        let ids     = Array(Set(current).union(addable))
+        let candidates: [GlueOptions.Candidate] = ids
+            .map { GlueOptions.Candidate(id: $0, name: scene.displayName(for: scene.objects[$0])) }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+
+        let options = GlueOptions(
+            candidates: candidates,
+            selected:   Set(current),
+            anchor:     current.first ?? -1,
+            name:       env.name,
+            isEditing:  true
+        )
+
+        let alert = NSAlert()
+        alert.messageText     = "Edit Glue Members"
+        alert.informativeText = "Add or remove objects in \"\(env.name)\" without ungluing."
+        alert.addButton(withTitle: "Apply")
+        alert.addButton(withTitle: "Cancel")
+        let hosting = NSHostingView(rootView: GlueSheetView(options: options))
+        hosting.frame = NSRect(origin: .zero, size: hosting.fittingSize)
+        alert.accessoryView = hosting
+        alert.layout()
+        alert.window.makeFirstResponder(hosting)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let selected = options.selected
+        guard selected.count >= 2 else {
+            let warn = NSAlert()
+            warn.messageText     = "An envelope needs at least two members."
+            warn.informativeText = "Use Unglue to dissolve the unit entirely."
+            warn.runModal()
+            return
+        }
+
+        let cur     = Set(current)
+        let added   = Array(selected.subtracting(cur))
+        let removed = Array(cur.subtracting(selected))
+        // No-op apply still lets a rename through, below.
+        scene.addEnvelopeMembers(envIndex: envIndex, memberIndices: added)
+        scene.removeEnvelopeMembers(envIndex: envIndex, memberIndices: removed)
+
+        let trimmed = options.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { env.name = trimmed }
+
+        scene.selectedIndex = envIndex
+        markDirty()
+        timelineEditorWC?.updateWindowHeight()
+        refreshCameraFollowTargets()
+        viewportView?.renderer?.invalidateAnimationCache()
+        print("[DEBUG] AppDelegate: edited '\(env.name)' — added \(added.count), removed \(removed.count)")
     }
 
     /// Exports the current selection as one reusable `.glb` model — a single object,
