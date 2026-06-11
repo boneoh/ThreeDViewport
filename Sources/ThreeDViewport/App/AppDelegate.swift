@@ -4121,6 +4121,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // Right-click ▸ Delete on a grid row.
         wc.editorView.onDeleteRow = { [weak self] ref in self?.deleteTimelineRow(ref) }
 
+        // Bundle header ▸ Extend Spin/Orbit to End.
+        wc.editorView.onExtendBundleSpinOrbit = { [weak self] bid in self?.extendBundleSpinOrbit(bid) }
+
         // (Viewport mode / selection-change handling — including timeline lane
         // highlight + Path Animator Target sync — is wired centrally in setup, so
         // it works whether or not the timeline editor has been opened.)
@@ -4589,10 +4592,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         case .importBundle(let bid):
             title   = "Delete import \"\(sm.bundleName(for: bid))\" and all its content?"
             perform = {
-                // Imported lights first (descending so indices stay valid), then objects.
+                // Imported lights + emitters first (descending so indices stay valid),
+                // then objects.
                 for li in vp.lightManager.lights.indices
                     .filter({ vp.lightManager.lights[$0].importBundleID == bid }).sorted(by: >) {
                     vp.deleteLight(li)
+                }
+                for pi in vp.particleManager.emitters.indices
+                    .filter({ vp.particleManager.emitters[$0].importBundleID == bid }).sorted(by: >) {
+                    vp.deleteParticleEmitter(pi)
                 }
                 let set = Set(sm.objects.indices.filter { sm.objects[$0].importBundleID == bid })
                 vp.deleteObjects(set)
@@ -4616,6 +4624,104 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         refreshCameraFollowTargets()
         timelineEditorWC?.editorView.needsDisplay = true
         vp.syncOverlayState()
+    }
+
+    /// Bundle header ▸ "Extend Spin/Orbit to End" — re-reads the source project's spin
+    /// and orbit rate markers and re-places them onto this bundle's imported objects
+    /// (time-offset by the import's T, orbit geometry by its M).  Because rate markers
+    /// always bake out to the host timeline's end, the motion now runs to the end of
+    /// the big scene AND is editable (change rate, reverse, drop a rate-0 to stop).
+    private func extendBundleSpinOrbit(_ bid: Int) {
+        guard let vp = viewportView else { return }
+        let sm = vp.sceneManager
+        guard let src = sm.importBundleSources[bid], !src.path.isEmpty else { return }
+
+        guard FileManager.default.fileExists(atPath: src.path),
+              let json = try? Data(contentsOf: URL(fileURLWithPath: src.path)),
+              let data = try? JSONDecoder().decode(ProjectData.self, from: json) else {
+            showErrorAlert(message: "Can't extend spin/orbit",
+                           detail: "The source project couldn't be opened:\n\n\(src.path)\n\n"
+                                 + "Restore the file or re-import to refresh the link.")
+            return
+        }
+
+        let T = src.insertOffset
+        let M = src.transform
+        func point(_ a: [Float]) -> SIMD3<Float> {
+            guard a.count == 3 else { return .zero }
+            let p = M * SIMD4<Float>(a[0], a[1], a[2], 1); return SIMD3<Float>(p.x, p.y, p.z)
+        }
+        let scaleMag = simd_length(SIMD3<Float>(M.columns.0.x, M.columns.0.y, M.columns.0.z))
+
+        var applied = 0
+
+        // Spin — kind 2 (object), kind 3 (group).  Axis is local, so only the time
+        // markers need the import's offset.
+        for sd in data.spinRateSchedules where !sd.markers.isEmpty {
+            let markers = sd.markers.map { SpinRateMarker(time: $0.time + T, rate: $0.rate, axisIndex: $0.axisIndex) }
+            switch sd.targetKind {
+            case 2:
+                if let idx = bundleObjectIndex(bid, name: sd.targetName, occurrence: max(0, sd.targetIndex), sm: sm) {
+                    vp.setSpinSchedule(ref: .object(idx), markers: markers, keyframesPerRevolution: 12)
+                    applied += 1
+                }
+            case 3:
+                if let gid = bundleGroupGid(bid, filename: sd.targetName, occurrence: max(0, sd.targetIndex), sm: sm) {
+                    vp.setSpinSchedule(ref: .group(gid), markers: markers, keyframesPerRevolution: 12)
+                    applied += 1
+                }
+            default: break
+            }
+        }
+
+        // Orbit — kind 2 (object).  Centre/axis are world points → transform by M;
+        // radius by M's scale.
+        for od in data.orbitRateSchedules
+        where !od.markers.isEmpty && od.targetKind == 2 && od.axisStart.count == 3 && od.axisEnd.count == 3 {
+            guard let idx = bundleObjectIndex(bid, name: od.targetName, occurrence: max(0, od.targetIndex), sm: sm)
+            else { continue }
+            let markers = od.markers.map { OrbitRateMarker(time: $0.time + T, rate: $0.rate) }
+            let sched = OrbitRateSchedule(axisStart: point(od.axisStart), axisEnd: point(od.axisEnd),
+                                          radius: od.radius * scaleMag, markers: markers)
+            vp.setOrbitSchedule(ref: .object(idx), schedule: sched, keyframesPerRevolution: 12)
+            applied += 1
+        }
+
+        guard applied > 0 else {
+            let a = NSAlert()
+            a.messageText     = "No editable spin/orbit found"
+            a.informativeText = "The source project \"\(sm.bundleName(for: bid))\" has no spin or orbit "
+                              + "rate markers to extend."
+            a.runModal()
+            return
+        }
+        markDirty()
+        timelineEditorWC?.editorView.needsDisplay = true
+        vp.renderer?.invalidateAnimationCache()
+        print("[DEBUG] AppDelegate: extended \(applied) spin/orbit track(s) for bundle \(bid)")
+    }
+
+    /// The `occurrence`-th object named `name` within a bundle (object order), or nil.
+    private func bundleObjectIndex(_ bid: Int, name: String, occurrence: Int, sm: SceneManager) -> Int? {
+        var count = 0
+        for (i, o) in sm.objects.enumerated() where o.importBundleID == bid && o.name == name {
+            if count == occurrence { return i }
+            count += 1
+        }
+        return nil
+    }
+
+    /// The gid of the `occurrence`-th group in a bundle whose source file is `filename`.
+    private func bundleGroupGid(_ bid: Int, filename: String, occurrence: Int, sm: SceneManager) -> Int? {
+        var seen = Set<Int>(); var count = 0
+        for o in sm.objects where o.importBundleID == bid {
+            guard let gid = o.groupID, seen.insert(gid).inserted else { continue }
+            if (o.sourceURL?.lastPathComponent ?? "") == filename {
+                if count == occurrence { return gid }
+                count += 1
+            }
+        }
+        return nil
     }
 
     /// Object indices for a glued unit: the envelope, its direct members, and any

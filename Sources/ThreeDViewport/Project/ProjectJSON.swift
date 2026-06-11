@@ -223,16 +223,28 @@ struct BundleData: Codable {
     var loopEnabled: Bool   = false
     var cycleStart:  Double = 0
     var cycleLength: Double = 0
+    // Provenance for "Extend Spin/Orbit to End": the source `.3dvp` path plus the
+    // time offset (T) and placement (M, 16 floats column-major) applied at import,
+    // so its rate markers can be re-read and re-placed onto the imported objects.
+    var sourcePath:   String  = ""
+    var insertOffset: Double  = 0
+    var transform:    [Float] = []
 
     init(id: Int, name: String,
-         loopEnabled: Bool = false, cycleStart: Double = 0, cycleLength: Double = 0) {
+         loopEnabled: Bool = false, cycleStart: Double = 0, cycleLength: Double = 0,
+         sourcePath: String = "", insertOffset: Double = 0, transform: [Float] = []) {
         self.id = id; self.name = name
         self.loopEnabled = loopEnabled
         self.cycleStart  = cycleStart
         self.cycleLength = cycleLength
+        self.sourcePath   = sourcePath
+        self.insertOffset = insertOffset
+        self.transform    = transform
     }
 
-    enum CodingKeys: String, CodingKey { case id, name, loopEnabled, cycleStart, cycleLength }
+    enum CodingKeys: String, CodingKey {
+        case id, name, loopEnabled, cycleStart, cycleLength, sourcePath, insertOffset, transform
+    }
 
     init(from decoder: Decoder) throws {
         let c       = try decoder.container(keyedBy: CodingKeys.self)
@@ -241,6 +253,9 @@ struct BundleData: Codable {
         loopEnabled = (try? c.decode(Bool.self,   forKey: .loopEnabled)) ?? false
         cycleStart  = (try? c.decode(Double.self, forKey: .cycleStart))  ?? 0
         cycleLength = (try? c.decode(Double.self, forKey: .cycleLength)) ?? 0
+        sourcePath   = (try? c.decode(String.self,  forKey: .sourcePath))   ?? ""
+        insertOffset = (try? c.decode(Double.self,  forKey: .insertOffset)) ?? 0
+        transform    = (try? c.decode([Float].self, forKey: .transform))    ?? []
     }
 }
 
@@ -430,6 +445,8 @@ struct ParticleEffectData: Codable {
     var lifetime:     Float? = nil
     var growth:       Float? = nil
     var baseAlpha:    Float? = nil
+    /// Import-bundle membership (groups an imported emitter under its bundle header).
+    var importBundleID: Int? = nil
 
     init(from decoder: Decoder) throws {
         let c     = try decoder.container(keyedBy: CodingKeys.self)
@@ -452,6 +469,7 @@ struct ParticleEffectData: Codable {
         lifetime     = try? c.decode(Float.self, forKey: .lifetime)
         growth       = try? c.decode(Float.self, forKey: .growth)
         baseAlpha    = try? c.decode(Float.self, forKey: .baseAlpha)
+        importBundleID = try? c.decode(Int.self, forKey: .importBundleID)
     }
 
     init(isEnabled: Bool = false, type: Int = 0,
@@ -460,7 +478,8 @@ struct ParticleEffectData: Codable {
          density: Float = 0.5, variance: Float = 0.5,
          r: Float = 1, g: Float = 1, b: Float = 1,
          particleSize: Float? = nil, fallSpeed: Float? = nil, streak: Float? = nil,
-         lifetime: Float? = nil, growth: Float? = nil, baseAlpha: Float? = nil) {
+         lifetime: Float? = nil, growth: Float? = nil, baseAlpha: Float? = nil,
+         importBundleID: Int? = nil) {
         self.isEnabled = isEnabled; self.type = type
         self.px = px; self.py = py; self.pz = pz
         self.sx = sx; self.sy = sy; self.sz = sz
@@ -468,6 +487,7 @@ struct ParticleEffectData: Codable {
         self.r = r; self.g = g; self.b = b
         self.particleSize = particleSize; self.fallSpeed = fallSpeed; self.streak = streak
         self.lifetime = lifetime; self.growth = growth; self.baseAlpha = baseAlpha
+        self.importBundleID = importBundleID
     }
 }
 

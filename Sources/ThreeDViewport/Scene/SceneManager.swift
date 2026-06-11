@@ -74,6 +74,17 @@ final class SceneManager {
     }
     var importBundleLoops: [Int: BundleLoop] = [:]
 
+    // ── Import-bundle source provenance ("Extend Spin/Orbit to End") ─────────
+    // The source `.3dvp` path + the time offset (T) and placement (M) applied at
+    // import, so the source's rate markers can be re-read and re-placed onto the
+    // imported objects later.
+    struct BundleSource {
+        var path:         String          = ""
+        var insertOffset: Double          = 0
+        var transform:    matrix_float4x4 = matrix_identity_float4x4
+    }
+    var importBundleSources: [Int: BundleSource] = [:]
+
     init() {
         print("[DEBUG] SceneManager: initialized, objects count = 0")
     }
@@ -203,6 +214,7 @@ final class SceneManager {
         groupTransforms.removeAll()
         importBundles.removeAll()
         importBundleLoops.removeAll()
+        importBundleSources.removeAll()
         selectedIndex = 0
     }
 

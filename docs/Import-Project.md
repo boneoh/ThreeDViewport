@@ -45,7 +45,9 @@ With **Include fog & particles** on:
 
 - **Particle emitters are appended** — each enabled source emitter becomes a new
   emitter in the host (placed by Position/Rotation/Scale, times shifted by the insert
-  time), up to the 8-emitter limit; any beyond that are skipped.
+  time), up to the 8-emitter limit; any beyond that are skipped. Imported emitters
+  join the import's **bundle**, so they move with the bundle's span-bar drag and tile
+  under **Repeat to Fill Timeline** along with its models.
 - **Fog is adopted only when the host has none.** Fog is a single global volume, so it
   can't be merged — if the host already has fog enabled, the imported fog is skipped
   (the host's is kept). Clear the host fog first if you want the import's.
@@ -89,6 +91,25 @@ mark is set (or the pair is inverted), the dialog shows a warning that the stray
 is ignored and the **whole** project is imported — so an ambiguous file can't produce
 a surprise slice, but you can still proceed (or cancel and fix the marks).
 Position/Rotation/Scale and Include lights work exactly as for a full import.
+
+## Extending an import's spin / orbit
+
+Imported spin/orbit come in as **baked keyframes that stop at the source's duration** —
+the editable rate markers aren't imported, so a spinning gizmo dropped into a longer
+scene stops partway. To carry it through:
+
+**Right-click the bundle header ▸ Extend Spin/Orbit to End.** ThreeDViewport re-opens the
+source `.3dvp`, reads its spin/orbit **rate markers**, and re-applies them to the
+imported objects (placed and time-shifted to match the import). The motion then runs to
+the **end of the host timeline** — and it's now **editable**: open the
+[Spin](Spin-Path-Animator.md) / [Orbit](Orbit-Path-Animator.md) animator to change the
+rate, reverse it, or drop a **rate-0** marker to stop it wherever you like.
+
+- The menu item appears only when the bundle remembers its source file. If the source
+  has been **moved or deleted**, you'll get a message — restore it or re-import.
+- On a **ranged** (In/Out) import, extending re-bakes the full host length, so the slice
+  boundary is dropped for those objects (you're explicitly opting into host-length
+  motion).
 
 ## Notes
 

@@ -32,7 +32,10 @@ starts expanded; click its triangle to collapse it. Bundles persist with the pro
 
 **Rename** the bundle header by right-clicking it ▸ *Rename Import Bundle…*. Member
 rows (objects and glued units) rename through the [Model Inspector](Model-Inspector.md)
-as usual and stay nested under the bundle.
+as usual and stay nested under the bundle. The same right-click menu also offers
+*Repeat to Fill Timeline*, *Extend Spin/Orbit to End* (see
+[Import Project](Import-Project.md#extending-an-imports-spin--orbit)), and *Delete Import*.
+Imported **particle emitters** join the bundle too — they move and tile with it.
 
 **Move the whole import in time** by dragging the teal **span bar** on the bundle
 header — it spans the import's first→last keyframe. Every member track shifts by the

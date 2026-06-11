@@ -171,6 +171,9 @@ final class TimelineEditorView: NSView {
     /// confirms + performs the deletion and refreshes.
     var onDeleteRow: ((TrackRef) -> Void)?
 
+    /// Called from a bundle header's "Extend Spin/Orbit to End" item with the bundle ID.
+    var onExtendBundleSpinOrbit: ((Int) -> Void)?
+
     /// Called whenever group expansion state changes (rows added/removed).
     /// TimelineEditorWindowController wires this to updateWindowHeight() so the
     /// document view frame and panel height stay in sync with the visible row count.
@@ -641,6 +644,7 @@ final class TimelineEditorView: NSView {
             case .group(let gid):         return objects.first(where: { $0.groupID == gid })?.importBundleID
             case .envelope(let idx):      return objects[safe: idx]?.importBundleID
             case .light(let idx):         return lightManager?.lights[safe: idx]?.importBundleID
+            case .particles(let idx, _):  return particleManager?.emitters[safe: idx]?.importBundleID
             default:                      return nil
             }
         }
@@ -731,6 +735,13 @@ final class TimelineEditorView: NSView {
                 refs.append(.light(i))
             }
         }
+        if let pm = particleManager {
+            for i in 0..<pm.emitters.count
+            where pm.emitters[i].importBundleID == bid
+               && pm.emitters[i].keyframeTrack?.keyframes.isEmpty == false {
+                refs.append(.particles(i))
+            }
+        }
         return refs
     }
 
@@ -799,6 +810,8 @@ final class TimelineEditorView: NSView {
                 if let lm = lightManager, i < lm.keyframeTracks.count, let tr = lm.keyframeTracks[i] {
                     tr.keyframes.removeAll { $0.time > cutoff }
                 }
+            case .particles(let i):
+                particleManager?.emitters[safe: i]?.keyframeTrack?.keyframes.removeAll { $0.time > cutoff }
             default: break
             }
         }
@@ -817,6 +830,10 @@ final class TimelineEditorView: NSView {
             }
         case .light(let i):
             if let track = lightManager?.keyframeTracks[safe: i] ?? nil {
+                track.keyframes.indices.forEach { track.keyframes[$0].time += delta }
+            }
+        case .particles(let i):
+            if let track = particleManager?.emitters[safe: i]?.keyframeTrack {
                 track.keyframes.indices.forEach { track.keyframes[$0].time += delta }
             }
         default:
@@ -1535,6 +1552,13 @@ final class TimelineEditorView: NSView {
         // Finalise a bundle move-as-unit drag.
         if isBundleDragging {
             isBundleDragging = false
+            // Advance the bundle's stored source offset (T) so a later "Extend Spin/
+            // Orbit to End" re-places the markers at the moved start, not the original.
+            if let bid = bundleDragBid, bundleDragAppliedDt != 0,
+               var src = sceneManager?.importBundleSources[bid] {
+                src.insertOffset += bundleDragAppliedDt
+                sceneManager?.importBundleSources[bid] = src
+            }
             // For a looped bundle, advance its cycle window by the applied shift and
             // re-tile (also restores the repeats stripped at drag start, even on a
             // zero-distance click).
@@ -1632,6 +1656,14 @@ final class TimelineEditorView: NSView {
             loopItem.target = self; loopItem.representedObject = bid
             loopItem.state  = (sceneManager?.importBundleLoops[bid]?.enabled == true) ? .on : .off
             menu.addItem(loopItem)
+
+            // Only when we know the source file (re-reads its spin/orbit rate markers).
+            if sceneManager?.importBundleSources[bid]?.path.isEmpty == false {
+                let extItem = NSMenuItem(title: "Extend Spin/Orbit to End",
+                                         action: #selector(extendBundleSpinOrbitMenuAction(_:)), keyEquivalent: "")
+                extItem.target = self; extItem.representedObject = bid
+                menu.addItem(extItem)
+            }
         }
 
         // Keyframe diamond under the cursor → coordinate-channel paste (light/fog/particles).
@@ -1695,6 +1727,11 @@ final class TimelineEditorView: NSView {
     @objc private func deleteRowMenuAction(_ sender: NSMenuItem) {
         guard let ref = sender.representedObject as? TrackRef else { return }
         onDeleteRow?(ref)
+    }
+
+    @objc private func extendBundleSpinOrbitMenuAction(_ sender: NSMenuItem) {
+        guard let bid = sender.representedObject as? Int else { return }
+        onExtendBundleSpinOrbit?(bid)
     }
 
     @objc private func renameBundleMenuAction(_ sender: NSMenuItem) {

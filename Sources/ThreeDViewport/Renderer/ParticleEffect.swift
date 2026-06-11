@@ -123,6 +123,11 @@ final class ParticleEffect: ObservableObject {
     /// Evaluated at render time (not written back) so playback never marks dirty.
     var keyframeTrack: AtmosphereKeyframeTrack?
 
+    /// Set when this emitter was brought in by File ▸ Import Project, so the Timeline
+    /// groups it under the import's bundle header and the bundle's move/loop apply to
+    /// its keyframe times.  nil = a host emitter.
+    var importBundleID: Int? = nil
+
     /// Set while `syncToPlayhead` writes the static fields so the dirty sink can
     /// ignore it — scrubbing follows the animation without marking dirty.
     var suppressDirty: Bool = false

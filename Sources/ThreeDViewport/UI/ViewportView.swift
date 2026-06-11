@@ -1322,6 +1322,11 @@ final class ViewportView: MTKView {
                 retile(&ltrack.keyframes, time: { $0.time }, setTime: { $0.time = $1 })
             }
         }
+        for fx in particleManager.emitters where fx.importBundleID == bid {
+            if let ptrack = fx.keyframeTrack {
+                retile(&ptrack.keyframes, time: { $0.time }, setTime: { $0.time = $1 })
+            }
+        }
         renderer?.invalidateAnimationCache()
     }
 

@@ -208,7 +208,7 @@ final class ProjectFile {
 
         // 6. Lights (opt-in).
         if options.includeLights { appendImportedLights(data, by: M, timeOffset: T, bundleID: bundleID, vp: vp) }
-        if options.includeEffects { appendImportedEffects(data, by: M, timeOffset: T, vp: vp) }
+        if options.includeEffects { appendImportedEffects(data, by: M, timeOffset: T, bundleID: bundleID, vp: vp) }
 
         // 7. Extend the timeline to fit the imported clip.  In HOST time the clip
         //    spans [insertTime, insertTime + length], where length is the slice span
@@ -221,6 +221,10 @@ final class ProjectFile {
         // ranged slice).  Looping is off until the user enables it on the bundle header.
         sm.importBundleLoops[bundleID] = SceneManager.BundleLoop(
             enabled: false, cycleStart: options.insertTime, cycleLength: clipLength)
+        // Provenance for "Extend Spin/Orbit to End": source path + the time offset (T)
+        // and placement (M) applied here, so its rate markers can be re-read later.
+        sm.importBundleSources[bundleID] = SceneManager.BundleSource(
+            path: url.path, insertOffset: T, transform: M)
 
         print("[DEBUG] ProjectFile: imported \(imported.count) object(s) from "
             + url.lastPathComponent + " at t=\(T)")
@@ -458,6 +462,7 @@ final class ProjectFile {
     private static func appendImportedEffects(_ data: ProjectData,
                                               by M: matrix_float4x4,
                                               timeOffset T: Double,
+                                              bundleID: Int,
                                               vp: ViewportView) {
         func point(_ v: SIMD3<Float>) -> SIMD3<Float> {
             let p = M * SIMD4<Float>(v.x, v.y, v.z, 1); return SIMD3<Float>(p.x, p.y, p.z)
@@ -493,6 +498,7 @@ final class ProjectFile {
             let kfs = i < emitterKfs.count ? emitterKfs[i] : []
             let em  = i < data.particleEmitterEasingModes.count ? data.particleEmitterEasingModes[i] : 0
             applyParticleEmitter(pd, keyframes: kfs, easingMode: em, into: fx)
+            fx.importBundleID = bundleID   // group under this import's bundle (override source tag)
             fx.position = point(fx.position)
             fx.size     = sized(fx.size)
             placeTrack(fx.keyframeTrack)
@@ -894,10 +900,14 @@ final class ProjectFile {
             orbitRateSchedules:  orbitSchedData,
             importBundles:       vp.sceneManager.importBundles.map { e in
                 let lp = vp.sceneManager.importBundleLoops[e.key]
+                let sp = vp.sceneManager.importBundleSources[e.key]
                 return BundleData(id: e.key, name: e.value,
                                   loopEnabled: lp?.enabled     ?? false,
                                   cycleStart:  lp?.cycleStart  ?? 0,
-                                  cycleLength: lp?.cycleLength ?? 0)
+                                  cycleLength: lp?.cycleLength ?? 0,
+                                  sourcePath:   sp?.path         ?? "",
+                                  insertOffset: sp?.insertOffset ?? 0,
+                                  transform:    sp.map { encodeMatrix($0.transform) } ?? [])
             }
         )
     }
@@ -911,7 +921,8 @@ final class ProjectFile {
             density: fx.density, variance: fx.variance,
             r: fx.color.x, g: fx.color.y, b: fx.color.z,
             particleSize: fx.particleSize, fallSpeed: fx.fallSpeed, streak: fx.streak,
-            lifetime: fx.lifetime, growth: fx.growth, baseAlpha: fx.baseAlpha)
+            lifetime: fx.lifetime, growth: fx.growth, baseAlpha: fx.baseAlpha,
+            importBundleID: fx.importBundleID)
     }
 
     /// Serialises an atmosphere keyframe track (fog or particles) to Codable data.
@@ -966,6 +977,7 @@ final class ProjectFile {
         if let v = pd.lifetime     { fx.lifetime = v }
         if let v = pd.growth       { fx.growth = v }
         if let v = pd.baseAlpha    { fx.baseAlpha = v }
+        fx.importBundleID = pd.importBundleID
         fx.keyframeTrack = applyAtmosphereKeyframes(keyframes, easingMode: easingMode)
     }
 
@@ -1083,6 +1095,11 @@ final class ProjectFile {
             vp.sceneManager.importBundles[b.id] = b.name
             vp.sceneManager.importBundleLoops[b.id] = SceneManager.BundleLoop(
                 enabled: b.loopEnabled, cycleStart: b.cycleStart, cycleLength: b.cycleLength)
+            if !b.sourcePath.isEmpty {
+                vp.sceneManager.importBundleSources[b.id] = SceneManager.BundleSource(
+                    path: b.sourcePath, insertOffset: b.insertOffset,
+                    transform: decodeMatrix(b.transform) ?? matrix_identity_float4x4)
+            }
         }
         vp.sceneManager.syncImportBundleCounter()
 
