@@ -4522,16 +4522,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         } else {
             for idx in parents {
                 let obj  = scene.objects[idx]
-                // Display the group name (e.g. filename) for grouped models,
-                // or the object name for standalone objects.
-                let displayName: String
-                if let gid = obj.groupID {
-                    displayName = scene.groupName(for: gid)
-                } else {
-                    displayName = obj.name
-                }
+                // Use the canonical display name (group name for models, numbered
+                // "cube 2" for duplicate single-mesh objects) so duplicates are
+                // distinguishable — matching the Timeline grid and dropdowns.
                 let item = NSMenuItem(
-                    title: displayName,
+                    title: scene.displayName(for: obj),
                     action: #selector(confirmRemoveObject(_:)),
                     keyEquivalent: ""
                 )
@@ -4742,35 +4737,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let index = sender.tag
         guard index >= 0, index < scene.objects.count else { return }
 
+        // Route through the same robust deletion the Timeline grid uses (parentIndex +
+        // spin/orbit schedule cleanup), classifying the root the same way.
         let obj = scene.objects[index]
-        let displayName: String
-        if let gid = obj.groupID {
-            displayName = scene.groupName(for: gid)
-        } else {
-            displayName = obj.name
-        }
-
-        let alert = NSAlert()
-        alert.messageText     = "Remove \"\(displayName)\"?"
-        alert.informativeText = "Are you sure you want to remove \(displayName) from the project?"
-        alert.alertStyle      = .warning
-        alert.addButton(withTitle: "Remove")
-        alert.addButton(withTitle: "Cancel")
-
-        let response = alert.runModal()
-        if response == .alertFirstButtonReturn {
-            if obj.isEnvelope {
-                // Envelopes have no groupID — unglue (re-roots members) instead.
-                scene.removeEnvelope(at: index)
-                scene.selectedIndex = 0
-            } else {
-                // Removes the root and all sub-objects that share its groupID.
-                scene.removeGroup(containing: index)
-            }
-            markDirty()
-            timelineEditorWC?.updateWindowHeight()
-            refreshCameraFollowTargets()
-        }
+        let ref: TrackRef
+        if obj.isEnvelope          { ref = .object(index) }   // glued unit (+ members)
+        else if let gid = obj.groupID { ref = .group(gid) }   // whole multi-part model
+        else                          { ref = .object(index) }
+        deleteTimelineRow(ref)
     }
 
     // MARK: - Glue (envelopes)

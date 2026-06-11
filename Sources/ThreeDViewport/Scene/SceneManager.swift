@@ -269,36 +269,6 @@ final class SceneManager {
             + objects[index].name + "' isVisible=" + String(objects[index].isVisible))
     }
 
-    // Remove the object at `index` from the scene.
-    func remove(at index: Int) {
-        guard index >= 0, index < objects.count else {
-            print("[DEBUG] SceneManager: remove — index " + String(index) + " out of range")
-            return
-        }
-        let name = objects[index].name
-        objects.remove(at: index)
-        print("[DEBUG] SceneManager: removed object '" + name + "', remaining count = " + String(objects.count))
-    }
-
-    /// Removes the object at `objectIndex` and all other objects that share its
-    /// groupID.  If the object has no groupID it is removed individually.
-    /// Also cleans up groupKeyframeTracks and groupTransforms for the affected group.
-    func removeGroup(containing objectIndex: Int) {
-        guard objectIndex >= 0, objectIndex < objects.count else {
-            print("[DEBUG] SceneManager: removeGroup — index " + String(objectIndex) + " out of range")
-            return
-        }
-        if let gid = objects[objectIndex].groupID {
-            let name = groupName(for: gid)
-            objects.removeAll { $0.groupID == gid }
-            groupKeyframeTracks.removeValue(forKey: gid)
-            groupTransforms.removeValue(forKey: gid)
-            print("[DEBUG] SceneManager: removed group gid=\(gid) '\(name)', remaining count = \(objects.count)")
-        } else {
-            remove(at: objectIndex)
-        }
-    }
-
     /// Removes a set of objects by index and repairs the index-based references this
     /// class owns: every survivor's `parentIndex` is remapped (a survivor whose parent
     /// was deleted becomes a root), and `groupKeyframeTracks` / `groupTransforms` for
