@@ -394,6 +394,7 @@ final class TimelineEditorView: NSView {
     private var bundleDragMouseStartX: CGFloat   = 0
     private var bundleDragMinT:        Double    = 0    // span min at drag start (start clamp)
     private var bundleDragAppliedDt:   Double    = 0    // dt already applied to the tracks
+    private var bundleDragBid:         Int?      = nil  // bundle being dragged (for loop update)
 
     // ── Multi-clipboard (Cmd+C / Cmd+V with multi-select) ─────────────────────
     // Each entry stores a pose snapshot, a time offset relative to the earliest
@@ -730,13 +731,73 @@ final class TimelineEditorView: NSView {
     }
 
     /// Earliest / latest keyframe time across a bundle's member tracks, or nil when
-    /// it has no keyframes.
+    /// it has no keyframes.  For a looped bundle this reports the SOURCE cycle window
+    /// (so the move-as-unit grab bar represents one cycle, not the tiled repeats).
     private func bundleSpan(_ bid: Int) -> (min: Double, max: Double)? {
+        if let info = sceneManager?.importBundleLoops[bid], info.enabled, info.cycleLength > 0 {
+            return (info.cycleStart, info.cycleStart + info.cycleLength)
+        }
+        return bundleSpanRaw(bid)
+    }
+
+    /// Raw earliest / latest keyframe time across a bundle's member tracks (ignores
+    /// looping), or nil when it has no keyframes.
+    private func bundleSpanRaw(_ bid: Int) -> (min: Double, max: Double)? {
         var lo = Double.infinity, hi = -Double.infinity
         for ref in bundleMemberRefs(bid) {
             for t in keyframeTimes(for: ref) { lo = min(lo, t); hi = max(hi, t) }
         }
         return lo.isFinite ? (lo, hi) : nil
+    }
+
+    // MARK: - Import-bundle looping helpers
+
+    /// The ViewportView (set as the key-forward target), used to drive loop re-tiling.
+    private var viewport: ViewportView? { keyForwardTarget as? ViewportView }
+
+    /// The import-bundle ID a track belongs to, or nil.
+    private func bundleID(for ref: TrackRef) -> Int? {
+        switch ref {
+        case .object(let i): return sceneManager?.objects[safe: i]?.importBundleID
+        case .group(let gid): return sceneManager?.objects.first { $0.groupID == gid }?.importBundleID
+        case .light(let i):  return lightManager?.lights[safe: i]?.importBundleID
+        default:             return nil
+        }
+    }
+
+    /// The (start, length) loop window for `ref`'s bundle when looping is on, else nil.
+    private func loopCycle(for ref: TrackRef) -> (start: Double, length: Double)? {
+        guard let bid = bundleID(for: ref),
+              let info = sceneManager?.importBundleLoops[bid], info.enabled, info.cycleLength > 0
+        else { return nil }
+        return (info.cycleStart, info.cycleLength)
+    }
+
+    /// True when this keyframe is a generated loop repeat (past the source cycle) —
+    /// drawn dark green and non-interactive.
+    private func isLoopTile(_ ref: TrackRef, time: Double) -> Bool {
+        guard let c = loopCycle(for: ref) else { return false }
+        return time > c.start + c.length + 1e-3
+    }
+
+    /// Removes a bundle's generated loop repeats (keyframes past the source cycle),
+    /// leaving the bare editable first cycle.  Used at the start of a move-as-unit drag.
+    private func stripBundleTiles(_ bid: Int) {
+        guard let info = sceneManager?.importBundleLoops[bid], info.cycleLength > 0 else { return }
+        let cutoff = info.cycleStart + info.cycleLength + 1e-3
+        for ref in bundleMemberRefs(bid) {
+            switch ref {
+            case .object(let i):
+                sceneManager?.objects[safe: i]?.keyframeTrack?.keyframes.removeAll { $0.time > cutoff }
+            case .group(let gid):
+                sceneManager?.groupKeyframeTracks[gid]?.keyframes.removeAll { $0.time > cutoff }
+            case .light(let i):
+                if let lm = lightManager, i < lm.keyframeTracks.count, let tr = lm.keyframeTracks[i] {
+                    tr.keyframes.removeAll { $0.time > cutoff }
+                }
+            default: break
+            }
+        }
     }
 
     /// Shifts every keyframe on a track by `delta` seconds (uniform → order preserved).
@@ -784,6 +845,7 @@ final class TimelineEditorView: NSView {
         for (ti, row) in tracks.enumerated() {
             let cy = laneCenter(ti)
             for (ki, t) in keyframeTimes(for: row.ref).enumerated() {
+                if isLoopTile(row.ref, time: t) { continue }   // generated repeats are locked
                 let cx = timeToX(t)
                 if abs(point.x - cx) <= hitRadius && abs(point.y - cy) <= hitRadius {
                     return (ti, ki)
@@ -943,10 +1005,17 @@ final class TimelineEditorView: NSView {
                     return camera?.keyframeTrack?.keyframes[safe: ki]?.followTargetName != nil
                 }()
 
-                // Colour: amber while editing, teal when multi-selected,
-                // accent when single-selected, orange for follow keyframes, grey otherwise.
+                // Generated loop repeats (past the source cycle) are dark green and
+                // non-interactive — they regenerate from the editable first cycle.
+                let isLoopRepeat = isLoopTile(row.ref, time: kfTime)
+
+                // Colour: dark green for loop repeats, amber while editing, teal when
+                // multi-selected, accent when single-selected, orange for follow
+                // keyframes, grey otherwise.
                 let fillColor: NSColor
-                if isSelected && isEditingKeyframe {
+                if isLoopRepeat {
+                    fillColor = NSColor(red: 0.13, green: 0.42, blue: 0.20, alpha: 1)
+                } else if isSelected && isEditingKeyframe {
                     // Pulsing amber to signal live-edit mode.
                     fillColor = NSColor(red: 1.0, green: 0.65, blue: 0.15, alpha: 1)
                 } else if isMultiSelected {
@@ -1326,6 +1395,12 @@ final class TimelineEditorView: NSView {
                         bundleDragMinT        = span.min
                         bundleDragMouseStartX = pt.x
                         bundleDragAppliedDt   = 0
+                        bundleDragBid         = bid
+                        // For a looped bundle, strip the generated repeats first so the
+                        // drag moves only the source cycle (repeats re-tile on release).
+                        if sceneManager?.importBundleLoops[bid]?.enabled == true {
+                            stripBundleTiles(bid)
+                        }
                         select(trackIndex: lane, kfIndex: nil)
                         onLaneSelected?(row.ref)
                         return
@@ -1456,10 +1531,19 @@ final class TimelineEditorView: NSView {
         // Finalise a bundle move-as-unit drag.
         if isBundleDragging {
             isBundleDragging = false
+            // For a looped bundle, advance its cycle window by the applied shift and
+            // re-tile (also restores the repeats stripped at drag start, even on a
+            // zero-distance click).
+            if let bid = bundleDragBid, var info = sceneManager?.importBundleLoops[bid], info.enabled {
+                info.cycleStart += bundleDragAppliedDt
+                sceneManager?.importBundleLoops[bid] = info
+                viewport?.regenerateBundleLoop(bid: bid)
+            }
             if bundleDragAppliedDt != 0 {
                 onKeyframePasted?()   // markDirty + invalidate animation cache + panel refresh
             }
             bundleDragRefs.removeAll()
+            bundleDragBid = nil
             needsDisplay = true
             return
         }
@@ -1496,6 +1580,21 @@ final class TimelineEditorView: NSView {
             multiSelectedDiamonds = updated
         }
 
+        // A diamond drag edits the source cycle — re-tile any looped bundle it touched.
+        if isDragging {
+            let tracks = buildTracks()
+            var refs: [TrackRef] = []
+            if let ti = selectedTrackIndex, ti < tracks.count { refs.append(tracks[ti].ref) }
+            refs.append(contentsOf: multiDragSecondary.map { $0.ref })
+            var seen = Set<Int>()
+            for ref in refs {
+                if let bid = bundleID(for: ref), seen.insert(bid).inserted,
+                   sceneManager?.importBundleLoops[bid]?.enabled == true {
+                    viewport?.regenerateBundleLoop(bid: bid)
+                }
+            }
+        }
+
         multiDragSecondary.removeAll()
         isDragging         = false
         mouseDownOnDiamond = false
@@ -1521,6 +1620,14 @@ final class TimelineEditorView: NSView {
             item.target            = self
             item.representedObject = bid
             menu.addItem(item)
+
+            let loopItem = NSMenuItem(title: "Repeat to Fill Timeline",
+                                      action: #selector(toggleBundleLoopMenuAction(_:)),
+                                      keyEquivalent: "")
+            loopItem.target            = self
+            loopItem.representedObject = bid
+            loopItem.state             = (sceneManager?.importBundleLoops[bid]?.enabled == true) ? .on : .off
+            menu.addItem(loopItem)
             return menu
         }
 
@@ -1574,6 +1681,23 @@ final class TimelineEditorView: NSView {
         sm.importBundles[bid] = newName
         NSApp.sendAction(#selector(AppDelegate.markDirtyFromUI), to: nil, from: self)
         rebuildEasingPopups()
+        needsDisplay = true
+    }
+
+    /// Toggles "Repeat to Fill Timeline" for an import bundle and re-tiles it.
+    @objc private func toggleBundleLoopMenuAction(_ sender: NSMenuItem) {
+        guard let bid = sender.representedObject as? Int, let sm = sceneManager else { return }
+        var info = sm.importBundleLoops[bid] ?? SceneManager.BundleLoop()
+        info.enabled.toggle()
+        // Backfill the cycle window for bundles imported before this feature (or with
+        // no captured length): use the current keyframe span.
+        if info.enabled, info.cycleLength <= 0, let span = bundleSpanRaw(bid) {
+            info.cycleStart  = span.min
+            info.cycleLength = max(0, span.max - span.min)
+        }
+        sm.importBundleLoops[bid] = info
+        viewport?.regenerateBundleLoop(bid: bid)
+        NSApp.sendAction(#selector(AppDelegate.markDirtyFromUI), to: nil, from: self)
         needsDisplay = true
     }
 
@@ -1865,6 +1989,7 @@ final class TimelineEditorView: NSView {
         for (ti, row) in tracks.enumerated() {
             let cy = laneCenter(ti)
             for (ki, t) in keyframeTimes(for: row.ref).enumerated() {
+                if isLoopTile(row.ref, time: t) { continue }   // generated repeats are locked
                 let cx = timeToX(t)
                 if bandRect.contains(NSPoint(x: cx, y: cy)) {
                     found.insert(SelectedDiamond(trackIndex: ti, kfIndex: ki))

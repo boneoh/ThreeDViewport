@@ -1144,11 +1144,22 @@ final class ViewportView: MTKView {
     /// `timeline.duration` directly and never rescale.
     func setTimelineDuration(_ newDuration: Double, rescaleKeyframes: Bool) {
         let old = timeline.duration
-        if rescaleKeyframes, old > 0.0001, abs(newDuration - old) > 1e-9 {
-            rescaleAllKeyframeTimes(by: newDuration / old, newDuration: newDuration)
+        let rescaling = rescaleKeyframes && old > 0.0001 && abs(newDuration - old) > 1e-9
+        if rescaling {
+            let factor = newDuration / old
+            rescaleAllKeyframeTimes(by: factor, newDuration: newDuration)
+            // Scale each looped bundle's cycle window so it tracks the rescaled keyframes.
+            for (bid, var info) in sceneManager.importBundleLoops {
+                info.cycleStart  *= factor
+                info.cycleLength *= factor
+                sceneManager.importBundleLoops[bid] = info
+            }
         }
         timeline.duration = newDuration
         if timeline.currentTime > newDuration { timeline.seek(to: newDuration) }
+        // Re-tile looped imports so a longer timeline fills with more repeats (and a
+        // shorter one trims them) without re-importing.
+        regenerateAllBundleLoops()
         // Force re-evaluation so the viewport reflects the moved keyframes immediately.
         renderer?.invalidateAnimationCache()
     }
@@ -1174,6 +1185,95 @@ final class ViewportView: MTKView {
             for i in tr.keyframes.indices { tr.keyframes[i].time = remap(tr.keyframes[i].time) }
             tr.keyframes.sort { $0.time < $1.time }
         }
+    }
+
+    // MARK: - Import-bundle looping ("Repeat to Fill Timeline")
+
+    /// Re-tiles every looped import bundle.  Called after load and on any timeline-
+    /// duration change.
+    func regenerateAllBundleLoops() {
+        for (bid, info) in sceneManager.importBundleLoops where info.enabled {
+            regenerateBundleLoop(bid: bid)
+        }
+    }
+
+    /// If `ref`'s bundle is loop-enabled, re-tile it.  Hook for keyframe edits to a
+    /// looped bundle's source cycle so the repeats follow the edit.
+    func regenerateLoopForRef(_ ref: TrackRef) {
+        guard let bid = importBundleID(for: ref),
+              sceneManager.importBundleLoops[bid]?.enabled == true else { return }
+        regenerateBundleLoop(bid: bid)
+    }
+
+    /// The import-bundle ID a track belongs to, or nil.
+    func importBundleID(for ref: TrackRef) -> Int? {
+        switch ref {
+        case .object(let i):
+            guard i >= 0, i < sceneManager.objects.count else { return nil }
+            return sceneManager.objects[i].importBundleID
+        case .group(let gid):
+            return sceneManager.objects.first { $0.groupID == gid }?.importBundleID
+        case .light(let i):
+            guard i >= 0, i < lightManager.lights.count else { return nil }
+            return lightManager.lights[i].importBundleID
+        default:
+            return nil
+        }
+    }
+
+    /// Rebuilds the repeats for one import bundle.  The source cycle is the keyframes
+    /// in `[cycleStart, cycleStart+cycleLength]`; copies are tiled by k·cycleLength
+    /// out to the timeline end.  Idempotent — first strips any prior tiles (keyframes
+    /// past the source cycle), then re-tiles.  When the bundle's loop is disabled it
+    /// only strips, leaving the bare source cycle.
+    func regenerateBundleLoop(bid: Int) {
+        guard let info = sceneManager.importBundleLoops[bid] else { return }
+        let cycleStart = info.cycleStart
+        let L          = info.cycleLength
+        let cycleEnd   = cycleStart + L
+        let end        = timeline.duration
+        let seamTol    = 1e-3
+
+        // Strip tiles, then re-tile the source cycle.  Generic over the two keyframe
+        // structs (object/group TransformKeyframe, light LightKeyframe): callers pass
+        // the array plus a time getter/setter.
+        func retile<T>(_ kfs: inout [T], time: (T) -> Double, setTime: (inout T, Double) -> Void) {
+            kfs.removeAll { time($0) > cycleEnd + seamTol }
+            guard info.enabled, L > seamTol else { kfs.sort { time($0) < time($1) }; return }
+            let source = kfs.filter { time($0) >= cycleStart - seamTol && time($0) <= cycleEnd + seamTol }
+            guard !source.isEmpty else { return }
+            var k = 1
+            while cycleStart + Double(k) * L <= end + seamTol {
+                let shift = Double(k) * L
+                for kf in source {
+                    let t = time(kf) + shift
+                    if t > end + seamTol { continue }
+                    // Drop the seam duplicate (a tile landing on an existing keyframe).
+                    if kfs.contains(where: { abs(time($0) - t) <= seamTol }) { continue }
+                    var copy = kf; setTime(&copy, t)
+                    kfs.append(copy)
+                }
+                k += 1
+            }
+            kfs.sort { time($0) < time($1) }
+        }
+
+        var seenGroups = Set<Int>()
+        for obj in sceneManager.objects where obj.importBundleID == bid {
+            if let track = obj.keyframeTrack {
+                retile(&track.keyframes, time: { $0.time }, setTime: { $0.time = $1 })
+            }
+            if let gid = obj.groupID, seenGroups.insert(gid).inserted,
+               let gtrack = sceneManager.groupKeyframeTracks[gid] {
+                retile(&gtrack.keyframes, time: { $0.time }, setTime: { $0.time = $1 })
+            }
+        }
+        for i in 0..<lightManager.lights.count where lightManager.lights[i].importBundleID == bid {
+            if i < lightManager.keyframeTracks.count, let ltrack = lightManager.keyframeTracks[i] {
+                retile(&ltrack.keyframes, time: { $0.time }, setTime: { $0.time = $1 })
+            }
+        }
+        renderer?.invalidateAnimationCache()
     }
 
     // MARK: - Add Object Keyframe
@@ -1247,6 +1347,7 @@ final class ViewportView: MTKView {
         print("[DEBUG] ViewportView: keyframe added at t=" + String(format: "%.3f", timeline.currentTime)
             + " for '" + obj.name + "'")
         onKeyframeStamped?(.object(index))
+        regenerateLoopForRef(.object(index))   // refresh repeats if this is a looped import
     }
 
     // MARK: - Add Group Keyframe (Phase 2)
@@ -1295,6 +1396,7 @@ final class ViewportView: MTKView {
             + String(format: "%.3f", timeline.currentTime)
             + " for groupID=\(gid)")
         onKeyframeStamped?(.group(gid))
+        regenerateLoopForRef(.group(gid))      // refresh repeats if this is a looped import
     }
 
     // MARK: - Add Light Keyframe
@@ -1332,6 +1434,7 @@ final class ViewportView: MTKView {
             + String(format: "%.3f", timeline.currentTime)
             + " light=\(index)")
         onKeyframeStamped?(.light(index))
+        regenerateLoopForRef(.light(index))    // refresh repeats if this is a looped import
     }
 
     // MARK: - Add Camera Keyframe

@@ -213,7 +213,85 @@ envelope and a member to compare their separate contributions.
 
 ---
 
-## Part 4 — A full pass through the pipeline
+## Part 4 — Reuse: exported models and looping clips
+
+Once a sub-assembly or a piece of motion is right, you rarely want to rebuild it. Two
+features turn finished work into reusable building blocks: **Export Model** bakes
+geometry you can re-import anywhere, and **Repeat to Fill Timeline** loops a short
+imported clip across a whole shot. Together they let you assemble big scenes from small,
+polished pieces instead of authoring everything in one giant project.
+
+### Bake a sub-assembly into a reusable model
+
+[Glue](Glue.md) the parts of a thing — a robot, a lamp, a planet-and-rings — into one
+unit, then select the envelope and **File ▸ Export Model…** to write the whole unit as a
+single **.glb**, with material overrides, [Brightness](Model-Inspector.md#brightness-self-emission),
+and textures **baked in**. Re-import it as one object and build larger scenes from these
+sub-assemblies.
+
+Export Model isn't envelope-only — it exports whatever is selected: a single tinted
+shape, a whole multi-part model, or an envelope's subtree. So you can finish one prop in
+the [Model Inspector](Model-Inspector.md) and bake it directly, no gluing required.
+
+> **The export is baked.** A re-imported glued unit comes back as an ordinary multi-part
+> model — its former members are now **parts**. You can still
+> [Spin](Spin-Path-Animator.md) or keyframe an individual part, but a part can no longer
+> be **orbited** independently (Orbit writes a world pose that only applies to
+> roots/envelopes). If you need full per-member freedom later, keep the original project
+> with the live envelope and treat the .glb as a delivery format. See
+> [Glue ▸ Export the glued unit as a model](Glue.md#export-the-glued-unit-as-a-model).
+
+### Build a short, loopable clip project
+
+The companion move to baking geometry is baking **motion** — a small, self-contained
+`.3dvp` that does one thing and loops:
+
+1. **Start small.** A few models (your exported `.glb` sub-assemblies or plain models)
+   and one simple motion — a turntable, a machine cycle, a planet circling a star, a
+   light pulsing.
+2. **Design it to loop.** The repeat is a **hard cut** back to the import's frame zero;
+   ThreeDViewport does **not** smooth the seam — that's your job. Make the last frame
+   land on the first frame's pose: key a full **360°** with a [Spin](Spin-Path-Animator.md)
+   or [Orbit](Orbit-Path-Animator.md) rate marker (exact by construction), or return any
+   animated value to its starting number.
+3. **Mind the clip's duration.** The loop length is the clip's **whole timeline
+   duration** (frame zero → last frame), not just the keyframed span. Any quiet lead-in
+   or lead-out you leave in the timeline repeats too — so you can build deliberate pauses
+   *between* cycles by padding the ends. The first keyframe need not sit at frame zero,
+   nor the last at the final frame.
+4. **Optionally mark the loop window.** Set In / Out
+   [timeline marks](Timeline-Editor.md#in--out-marks) on the clip so the importer can
+   bring in exactly that slice.
+
+### Import it and repeat to fill
+
+In the host scene, **File ▸ Import Project…** brings the clip in as a
+[bundle](Timeline-Editor.md#import-bundles). Right-click the bundle header ▸ **Repeat to
+Fill Timeline** and it tiles forward to the end of the host timeline.
+
+- Repeats draw **dark green and are locked** — they regenerate from the editable first
+  cycle. Tweak the first cycle (drag or stamp a keyframe) and every repeat follows.
+- Slide the whole loop in time by dragging the bundle's span bar; the repeats re-tile.
+- **Lengthen the host timeline later and it refills by itself** — no re-import, so your
+  edits to the imported group are safe. Shorten it and the extra repeats trim away.
+- Each import loops on its **own** period. Bring in several short clips at different
+  start times — ticking machinery, a spinning planet, a flickering sign — and repeat
+  each; they cycle independently and layer into a living scene.
+
+> **Recipe — a planet orbiting a star, forever:**
+> 1. New project: a star (give it [Brightness](Model-Inspector.md#brightness-self-emission))
+>    and a planet.
+> 2. [Orbit](Orbit-Path-Animator.md) the planet around the star with a rate marker, and
+>    set the clip's timeline duration to **exactly one revolution** so the planet returns
+>    to its start pose.
+> 3. Save the clip.
+> 4. In the main shot, **Import Project…** → right-click the bundle ▸ **Repeat to Fill
+>    Timeline**. The planet now circles for the whole shot — extend the timeline and it
+>    keeps going.
+
+---
+
+## Part 5 — A full pass through the pipeline
 
 Tying it all together, a typical shot:
 
@@ -240,5 +318,6 @@ Tying it all together, a typical shot:
 See also: [Probe Inspector](Probe-Inspector.md) ·
 [Copy / Paste / Zero](Coordinate-Clipboard.md) · [Export](Export.md) ·
 [Model Inspector](Model-Inspector.md) · [Glue](Glue.md) ·
+[Import Project](Import-Project.md) ·
 [Orbit](Orbit-Path-Animator.md) / [Linear](Linear-Path-Animator.md) /
 [Spin](Spin-Path-Animator.md) Path Animators · [Timeline Editor](Timeline-Editor.md).

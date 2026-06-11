@@ -39,6 +39,18 @@ Imported lanes are grouped under a collapsible **bundle header** in the
 [Timeline Editor](Timeline-Editor.md#import-bundles) (named after the source file), so
 a large import can be folded away to a single row.
 
+## Repeating an import (looping)
+
+A short import can be **looped to fill the host timeline** instead of hand-duplicating
+it: right-click the bundle header ▸ **Repeat to Fill Timeline**. The cycle length is
+the source's full timeline duration, and the repeats regenerate from the editable first
+cycle, so editing it (or sliding the bundle in time, or lengthening the host timeline)
+updates every repeat. This pairs naturally with building **small, self-contained clip
+projects** designed to loop — see
+[Timeline Editor ▸ Repeat to Fill Timeline](Timeline-Editor.md#import-bundles) and the
+[Advanced ▸ Reuse](Advanced.md#part-4--reuse-exported-models-and-looping-clips)
+workflow.
+
 ## Importing a slice (source In/Out)
 
 Mark an **In** and **Out** range on the source project's timeline (the Timeline Editor

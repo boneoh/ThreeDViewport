@@ -199,6 +199,12 @@ final class ProjectFile {
         let clipLength = options.sliceRange.map { $0.out - $0.in } ?? data.timeline.duration
         vp.timeline.duration = max(vp.timeline.duration, options.insertTime + clipLength)
 
+        // Capture the loop window for this bundle: the imported frame-zero lands at
+        // insertTime, and the cycle spans the source's full timeline duration (or the
+        // ranged slice).  Looping is off until the user enables it on the bundle header.
+        sm.importBundleLoops[bundleID] = SceneManager.BundleLoop(
+            enabled: false, cycleStart: options.insertTime, cycleLength: clipLength)
+
         print("[DEBUG] ProjectFile: imported \(imported.count) object(s) from "
             + url.lastPathComponent + " at t=\(T)")
         return true
@@ -749,7 +755,13 @@ final class ProjectFile {
             envelopes:           envelopeData,
             spinRateSchedules:   spinSchedData,
             orbitRateSchedules:  orbitSchedData,
-            importBundles:       vp.sceneManager.importBundles.map { BundleData(id: $0.key, name: $0.value) }
+            importBundles:       vp.sceneManager.importBundles.map { e in
+                let lp = vp.sceneManager.importBundleLoops[e.key]
+                return BundleData(id: e.key, name: e.value,
+                                  loopEnabled: lp?.enabled     ?? false,
+                                  cycleStart:  lp?.cycleStart  ?? 0,
+                                  cycleLength: lp?.cycleLength ?? 0)
+            }
         )
     }
 
@@ -930,7 +942,11 @@ final class ProjectFile {
         // ── Import bundles (Part B) ───────────────────────────────────────────
         // Restore the id→name table (clear() emptied it); per-object / per-light
         // importBundleID tags are reattached by applyKeyframes / the light restore.
-        for b in data.importBundles { vp.sceneManager.importBundles[b.id] = b.name }
+        for b in data.importBundles {
+            vp.sceneManager.importBundles[b.id] = b.name
+            vp.sceneManager.importBundleLoops[b.id] = SceneManager.BundleLoop(
+                enabled: b.loopEnabled, cycleStart: b.cycleStart, cycleLength: b.cycleLength)
+        }
         vp.sceneManager.syncImportBundleCounter()
 
         // ── Color mode ────────────────────────────────────────────────────────
@@ -1117,6 +1133,11 @@ final class ProjectFile {
         mgr.selectedIndex = 0
         print("[DEBUG] ProjectFile: particle emitters=\(mgr.emitters.count)"
             + " fogKeyframes=\(data.fogKeyframes.count)")
+
+        // ── Import-bundle loops ("Repeat to Fill Timeline") ───────────────────
+        // Re-tile any looped bundle out to the (now restored) timeline duration.
+        // Idempotent: clears any persisted tiles and rebuilds from the source cycle.
+        vp.regenerateAllBundleLoops()
 
         // Force the Renderer to re-evaluate keyframes on the next draw.
         // Without this, lastAnimatedTime == currentTime (both 0) so applyAnimation()

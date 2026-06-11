@@ -40,6 +40,29 @@ same (frame-snapped) amount, so the import keeps its internal timing. It won't m
 earlier than t=0; dragging past the end grows the timeline duration to fit. (A bundle
 with no keyframes has no bar — there's nothing to move in time.)
 
+**Repeat to Fill Timeline** — right-click the bundle header ▸ *Repeat to Fill
+Timeline* loops the import to the end of the host timeline. The cycle length is the
+**imported project's full timeline duration** (frame zero → last frame), so any quiet
+lead-in or lead-out you built into the source repeats too — not just the keyframed
+span. Each repeat is a **hard restart** at the import's frame zero; design the source
+so its last frame lands back on its first (e.g. a full 360° [Spin](Spin-Path-Animator.md)
+/ [Orbit](Orbit-Path-Animator.md), or a value that returns to its start) — the editor
+does not blend the seam.
+
+The generated repeats render **dark green and are locked** — they can't be clicked,
+dragged, or rubber-banded. They regenerate automatically from the editable **first
+cycle**, so:
+
+- Edit the first cycle (drag or stamp a keyframe) and every repeat follows.
+- Drag the bundle's span bar to slide the loop in time — the repeats re-tile.
+- Change the timeline duration and the loop refills (longer) or trims (shorter) — no
+  re-import needed.
+
+The loop state persists with the project. Toggle the menu item again to turn it off,
+which removes the repeats and leaves the bare first cycle. See
+[Advanced ▸ Reuse](Advanced.md#part-4--reuse-exported-models-and-looping-clips) for the
+build-a-short-loop-and-fill workflow.
+
 ## Keyboard
 
 | Command | Operation |

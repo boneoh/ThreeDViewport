@@ -218,6 +218,30 @@ struct ProjectData: Codable {
 struct BundleData: Codable {
     var id:   Int
     var name: String
+    // "Repeat to Fill Timeline" loop state.  Decode-default so projects saved
+    // before this feature load unchanged (loop off).
+    var loopEnabled: Bool   = false
+    var cycleStart:  Double = 0
+    var cycleLength: Double = 0
+
+    init(id: Int, name: String,
+         loopEnabled: Bool = false, cycleStart: Double = 0, cycleLength: Double = 0) {
+        self.id = id; self.name = name
+        self.loopEnabled = loopEnabled
+        self.cycleStart  = cycleStart
+        self.cycleLength = cycleLength
+    }
+
+    enum CodingKeys: String, CodingKey { case id, name, loopEnabled, cycleStart, cycleLength }
+
+    init(from decoder: Decoder) throws {
+        let c       = try decoder.container(keyedBy: CodingKeys.self)
+        id          = try c.decode(Int.self,    forKey: .id)
+        name        = try c.decode(String.self, forKey: .name)
+        loopEnabled = (try? c.decode(Bool.self,   forKey: .loopEnabled)) ?? false
+        cycleStart  = (try? c.decode(Double.self, forKey: .cycleStart))  ?? 0
+        cycleLength = (try? c.decode(Double.self, forKey: .cycleLength)) ?? 0
+    }
 }
 
 // v35: rate-marker schedules for the Spin / Orbit animators.  Tracks are matched

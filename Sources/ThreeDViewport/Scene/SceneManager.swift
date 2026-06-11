@@ -60,6 +60,20 @@ final class SceneManager {
     var importBundles: [Int: String] = [:]
     private var nextImportBundleID: Int = 0
 
+    // ── Import-bundle looping ("Repeat to Fill Timeline") ────────────────────
+    // Per-bundle loop state.  An imported (or loaded) bundle gets an entry whose
+    // `enabled` defaults false.  `cycleStart` = host time where the imported
+    // frame-zero lands; `cycleLength` = the imported project's full timeline
+    // duration (frame zero → last frame, NOT the keyframe span).  When enabled,
+    // ViewportView.regenerateBundleLoop tiles copies of the source cycle by
+    // k·cycleLength out to the timeline end.
+    struct BundleLoop {
+        var enabled:     Bool   = false
+        var cycleStart:  Double = 0
+        var cycleLength: Double = 0
+    }
+    var importBundleLoops: [Int: BundleLoop] = [:]
+
     init() {
         print("[DEBUG] SceneManager: initialized, objects count = 0")
     }
@@ -188,6 +202,7 @@ final class SceneManager {
         groupKeyframeTracks.removeAll()
         groupTransforms.removeAll()
         importBundles.removeAll()
+        importBundleLoops.removeAll()
         selectedIndex = 0
     }
 
