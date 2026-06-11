@@ -1190,6 +1190,52 @@ final class ViewportView: MTKView {
         }
     }
 
+    // MARK: - Delete scene entities (from the Timeline grid)
+
+    /// Deletes a set of scene objects, repairing all index-based state: the index-keyed
+    /// Spin / Orbit schedules here, plus parentIndex / group tracks in SceneManager.
+    func deleteObjects(_ indices: Set<Int>) {
+        let del = indices.filter { $0 >= 0 && $0 < sceneManager.objects.count }
+        guard !del.isEmpty else { return }
+        let delSorted = del.sorted()
+        func shift(_ old: Int) -> Int { old - delSorted.filter { $0 < old }.count }
+        func remapObjectKeys<T>(_ dict: [TrackRef: T]) -> [TrackRef: T] {
+            var out: [TrackRef: T] = [:]
+            for (ref, v) in dict {
+                guard case .object(let i) = ref else { out[ref] = v; continue }
+                if del.contains(i) { continue }        // schedule for a deleted object → drop
+                out[.object(shift(i))] = v
+            }
+            return out
+        }
+        spinRateSchedules  = remapObjectKeys(spinRateSchedules)
+        orbitRateSchedules = remapObjectKeys(orbitRateSchedules)
+        sceneManager.removeObjects(at: del)
+        renderer?.invalidateAnimationCache()
+    }
+
+    /// Deletes a light, remapping orbit schedules keyed by light index (lights can be
+    /// orbit targets; spin doesn't apply to lights).  No-op on the last light.
+    func deleteLight(_ index: Int) {
+        guard index >= 0, index < lightManager.lights.count, lightManager.lights.count > 1 else { return }
+        var out: [TrackRef: OrbitRateSchedule] = [:]
+        for (ref, v) in orbitRateSchedules {
+            guard case .light(let i) = ref else { out[ref] = v; continue }
+            if i == index { continue }
+            out[.light(i > index ? i - 1 : i)] = v
+        }
+        orbitRateSchedules = out
+        lightManager.removeLight(at: index)
+        renderer?.invalidateAnimationCache()
+    }
+
+    /// Deletes a particle emitter.  No-op on the last emitter.
+    func deleteParticleEmitter(_ index: Int) {
+        guard index >= 0, index < particleManager.emitters.count, particleManager.emitters.count > 1 else { return }
+        particleManager.removeEmitter(at: index)
+        renderer?.invalidateAnimationCache()
+    }
+
     // MARK: - Import-bundle looping ("Repeat to Fill Timeline")
 
     /// Re-tiles every looped import bundle.  Called after load and on any timeline-

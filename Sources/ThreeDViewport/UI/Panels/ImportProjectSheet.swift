@@ -14,6 +14,9 @@ final class ImportProjectOptions: ObservableObject {
     @Published var rotZ: String = "0"
     @Published var scale: String = "1"
     @Published var includeLights: Bool = false
+    /// Also bring in the source's particle emitters (appended) and its fog (adopted
+    /// only when the host has none — fog is a single global volume).
+    @Published var includeEffects: Bool = false
     /// When the source has both In/Out marks, import only that slice (remapped so
     /// the source In lands at `insertTime`).  Defaults on when a range is available.
     @Published var useSourceInOut: Bool
@@ -99,6 +102,7 @@ struct ImportProjectSheet: View {
             }
 
             Toggle("Include lights", isOn: $options.includeLights)
+            Toggle("Include fog & particles", isOn: $options.includeEffects)
 
             if let r = options.sourceInOut {
                 Toggle("Use source In/Out range", isOn: $options.useSourceInOut)
@@ -116,8 +120,9 @@ struct ImportProjectSheet: View {
             }
 
             Text("Models, animation, materials, and glued units are appended to the "
-               + "current scene at the chosen time + placement. Camera and scene-wide "
-               + "effects (fog, particles, grade, background) are not imported.")
+               + "current scene at the chosen time + placement. Camera, colour grade, "
+               + "and background are not imported (the host keeps its own). Fog is "
+               + "adopted only when the host has none.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }

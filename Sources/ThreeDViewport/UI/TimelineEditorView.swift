@@ -167,6 +167,10 @@ final class TimelineEditorView: NSView {
     /// viewport to the matching control mode / selection.
     var onLaneSelected: ((TrackRef) -> Void)?
 
+    /// Called when the user picks Delete from a row's right-click menu.  AppDelegate
+    /// confirms + performs the deletion and refreshes.
+    var onDeleteRow: ((TrackRef) -> Void)?
+
     /// Called whenever group expansion state changes (rows added/removed).
     /// TimelineEditorWindowController wires this to updateWindowHeight() so the
     /// document view frame and panel height stay in sync with the visible row count.
@@ -1610,58 +1614,87 @@ final class TimelineEditorView: NSView {
         let tracks = buildTracks()
         let pt     = convert(event.locationInWindow, from: nil)
 
-        // Right-click on an import-bundle header → rename the bundle.
-        if let lane = hitTestLane(at: pt, tracks: tracks),
-           case .importBundle(let bid) = tracks[lane].ref {
-            let menu = NSMenu()
-            let item = NSMenuItem(title: "Rename Import Bundle…",
-                                  action: #selector(renameBundleMenuAction(_:)),
-                                  keyEquivalent: "")
-            item.target            = self
-            item.representedObject = bid
-            menu.addItem(item)
-
-            let loopItem = NSMenuItem(title: "Repeat to Fill Timeline",
-                                      action: #selector(toggleBundleLoopMenuAction(_:)),
-                                      keyEquivalent: "")
-            loopItem.target            = self
-            loopItem.representedObject = bid
-            loopItem.state             = (sceneManager?.importBundleLoops[bid]?.enabled == true) ? .on : .off
-            menu.addItem(loopItem)
-            return menu
-        }
-
-        guard let hit = hitTestDiamond(at: pt, tracks: tracks) else { return nil }
-        let ref = tracks[hit.trackIndex].ref
-
-        let channels: [CoordChannel]
-        switch ref {
-        case .light(let i):
-            // Match the Lights panel: Position for point/spot/laser, Target for
-            // directional/spot/laser, nothing for ambient.
-            guard let type = lightManager?.lights[safe: i]?.type else { return nil }
-            var chs: [CoordChannel] = []
-            if type == .point || type == .spot || type == .laser       { chs.append(.position) }
-            if type == .directional || type == .spot || type == .laser { chs.append(.target) }
-            guard !chs.isEmpty else { return nil }
-            channels = chs
-        case .fog, .particles:  channels = [.position, .size]
-        default:                return nil   // no channel paste for object/group/camera
-        }
-        guard let clip = coordinateClipboard else { return nil }
+        guard let lane = hitTestLane(at: pt, tracks: tracks) else { return nil }
+        let ref = tracks[lane].ref
 
         let menu = NSMenu()
         menu.autoenablesItems = false   // honor our per-channel isEnabled below
-        for ch in channels {
-            let item = NSMenuItem(title: ch.menuTitle,
-                                  action: #selector(pasteChannelMenuAction(_:)),
-                                  keyEquivalent: "")
-            item.target           = self
-            item.representedObject = ChannelPasteRequest(ref: ref, kfIndex: hit.kfIndex, channel: ch)
-            item.isEnabled         = clipboardHasValue(clip, ch)   // grey when nothing copied
+
+        // Import-bundle header: rename + repeat-to-fill.
+        if case .importBundle(let bid) = ref {
+            let item = NSMenuItem(title: "Rename Import Bundle…",
+                                  action: #selector(renameBundleMenuAction(_:)), keyEquivalent: "")
+            item.target = self; item.representedObject = bid
             menu.addItem(item)
+
+            let loopItem = NSMenuItem(title: "Repeat to Fill Timeline",
+                                      action: #selector(toggleBundleLoopMenuAction(_:)), keyEquivalent: "")
+            loopItem.target = self; loopItem.representedObject = bid
+            loopItem.state  = (sceneManager?.importBundleLoops[bid]?.enabled == true) ? .on : .off
+            menu.addItem(loopItem)
         }
-        return menu
+
+        // Keyframe diamond under the cursor → coordinate-channel paste (light/fog/particles).
+        if let hit = hitTestDiamond(at: pt, tracks: tracks), let clip = coordinateClipboard {
+            let dref = tracks[hit.trackIndex].ref
+            var channels: [CoordChannel] = []
+            switch dref {
+            case .light(let i):
+                // Match the Lights panel: Position for point/spot/laser, Target for
+                // directional/spot/laser, nothing for ambient.
+                if let type = lightManager?.lights[safe: i]?.type {
+                    if type == .point || type == .spot || type == .laser       { channels.append(.position) }
+                    if type == .directional || type == .spot || type == .laser { channels.append(.target) }
+                }
+            case .fog, .particles:  channels = [.position, .size]
+            default:                channels = []   // no channel paste for object/group/camera
+            }
+            for ch in channels {
+                let item = NSMenuItem(title: ch.menuTitle,
+                                      action: #selector(pasteChannelMenuAction(_:)), keyEquivalent: "")
+                item.target           = self
+                item.representedObject = ChannelPasteRequest(ref: dref, kfIndex: hit.kfIndex, channel: ch)
+                item.isEnabled         = clipboardHasValue(clip, ch)   // grey when nothing copied
+                menu.addItem(item)
+            }
+        }
+
+        // Delete (per row type).
+        if let title = deleteMenuTitle(for: ref) {
+            if menu.numberOfItems > 0 { menu.addItem(.separator()) }
+            let del = NSMenuItem(title: title, action: #selector(deleteRowMenuAction(_:)), keyEquivalent: "")
+            del.target = self; del.representedObject = ref
+            menu.addItem(del)
+        }
+
+        return menu.numberOfItems > 0 ? menu : nil
+    }
+
+    /// Label for the Delete item on a row, or nil when the row isn't deletable
+    /// (fog/camera, or the last light/emitter which can't be removed).
+    private func deleteMenuTitle(for ref: TrackRef) -> String? {
+        switch ref {
+        case .importBundle:  return "Delete Import"
+        case .group:         return "Delete Model"
+        case .object(let i):
+            guard let obj = sceneManager?.objects[safe: i] else { return nil }
+            if obj.isEnvelope         { return "Delete Glued Model" }
+            if obj.parentIndex != nil { return "Delete Member" }
+            if obj.groupID    != nil  { return "Delete Model" }
+            return "Delete Object"
+        case .light(let i):
+            guard let lm = lightManager, i < lm.lights.count, lm.lights.count > 1 else { return nil }
+            return "Delete Light"
+        case .particles(let i):
+            guard let pm = particleManager, i < pm.emitters.count, pm.emitters.count > 1 else { return nil }
+            return "Delete Emitter"
+        case .fog, .camera:  return nil
+        }
+    }
+
+    @objc private func deleteRowMenuAction(_ sender: NSMenuItem) {
+        guard let ref = sender.representedObject as? TrackRef else { return }
+        onDeleteRow?(ref)
     }
 
     @objc private func renameBundleMenuAction(_ sender: NSMenuItem) {

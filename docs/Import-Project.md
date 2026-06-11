@@ -17,6 +17,9 @@ like any other object in the host scene.
      the [Probe](Probe-Inspector.md); the **Probe** button re-reads it. Rotation is in
      degrees; Scale is uniform.
    - **Include lights** — also append the import's lights (off by default).
+   - **Include fog & particles** — also bring in the import's effects (off by default):
+     its particle emitters are **appended**, and its fog is **adopted only if the host
+     has none** (see below).
    - **Use source In/Out range** — appears only when the source has **both** an In and
      an Out [timeline mark](Timeline-Editor.md#in--out-marks); imports just that slice
      (see below). Defaults on when available.
@@ -30,10 +33,25 @@ like any other object in the host scene.
 | Imported | Not imported |
 |----------|--------------|
 | Models + their animation + materials | Camera + camera moves |
-| Group-level animation, glued envelopes | Fog, particles/weather |
-| Lights (opt-in) | Color grade, background/HDRI, feedback |
+| Group-level animation, glued envelopes | Color grade, background/HDRI, feedback |
+| Lights (opt-in) | |
+| Fog + particles/weather (opt-in) | |
 
-The host scene keeps its own camera and scene-wide effects.
+The host scene keeps its own camera, colour grade, and background.
+
+### Effects (fog & particles)
+
+With **Include fog & particles** on:
+
+- **Particle emitters are appended** — each enabled source emitter becomes a new
+  emitter in the host (placed by Position/Rotation/Scale, times shifted by the insert
+  time), up to the 8-emitter limit; any beyond that are skipped.
+- **Fog is adopted only when the host has none.** Fog is a single global volume, so it
+  can't be merged — if the host already has fog enabled, the imported fog is skipped
+  (the host's is kept). Clear the host fog first if you want the import's.
+
+The emitter box / fog volume is placed by the import's Position and scaled by its
+Scale; box rotation is not applied (spawn regions are axis-aligned).
 
 Imported lanes are grouped under a collapsible **bundle header** in the
 [Timeline Editor](Timeline-Editor.md#import-bundles) (named after the source file), so

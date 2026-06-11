@@ -89,6 +89,9 @@ final class ProjectFile {
         var insertTime:    Double          = 0                          // host time the clip begins at
         var transform:     matrix_float4x4 = matrix_identity_float4x4    // TRS world placement (baked in)
         var includeLights: Bool            = false
+        /// Append the source's particle emitters and adopt its fog (fog only when the
+        /// host has none — it's a single global volume).
+        var includeEffects: Bool           = false
         /// When set, import only the source's `[in, out]` slice — keyframes outside
         /// the range are dropped, the boundaries are resampled, and the slice is
         /// remapped so source `in` lands at `insertTime`.  nil = import the full clip.
@@ -205,6 +208,7 @@ final class ProjectFile {
 
         // 6. Lights (opt-in).
         if options.includeLights { appendImportedLights(data, by: M, timeOffset: T, bundleID: bundleID, vp: vp) }
+        if options.includeEffects { appendImportedEffects(data, by: M, timeOffset: T, vp: vp) }
 
         // 7. Extend the timeline to fit the imported clip.  In HOST time the clip
         //    spans [insertTime, insertTime + length], where length is the slice span
@@ -275,6 +279,50 @@ final class ProjectFile {
         for i in data.lightKeyframeTracks.indices {
             data.lightKeyframeTracks[i] = sliceLightKeyframes(data.lightKeyframeTracks[i], in: lo, out: hi)
         }
+        // Effects (fog + particle emitters; legacy single emitter) — opt-in import,
+        // but slicing them here keeps a ranged/clamped import's effect timing correct.
+        data.fogKeyframes      = sliceAtmosphereKeyframes(data.fogKeyframes,      in: lo, out: hi)
+        data.particleKeyframes = sliceAtmosphereKeyframes(data.particleKeyframes, in: lo, out: hi)
+        for i in data.particleEmitterKeyframes.indices {
+            data.particleEmitterKeyframes[i] =
+                sliceAtmosphereKeyframes(data.particleEmitterKeyframes[i], in: lo, out: hi)
+        }
+    }
+
+    /// Atmosphere-track counterpart of `sliceTransformKeyframes` (fog / particles).
+    private static func sliceAtmosphereKeyframes(_ kfs: [AtmosphereKeyframeData],
+                                                 in lo: Double, out hi: Double) -> [AtmosphereKeyframeData] {
+        guard !kfs.isEmpty else { return [] }
+        let track = AtmosphereKeyframeTrack()
+        for kf in kfs {
+            track.addKeyframe(AtmosphereKeyframe(
+                time:     kf.time,
+                position: SIMD3<Float>(kf.px, kf.py, kf.pz),
+                size:     SIMD3<Float>(kf.sx, kf.sy, kf.sz),
+                density:  kf.density,
+                variance: kf.variance,
+                color:    SIMD3<Float>(kf.r, kf.g, kf.b)))
+        }
+        let tol = 1e-4
+        var result: [AtmosphereKeyframeData] = []
+        if !kfs.contains(where: { abs($0.time - lo) <= tol }), let s = sampleAtmosphere(track, at: lo) {
+            result.append(s)
+        }
+        for kf in kfs where kf.time >= lo - tol && kf.time <= hi + tol { result.append(kf) }
+        if !kfs.contains(where: { abs($0.time - hi) <= tol }), let s = sampleAtmosphere(track, at: hi) {
+            result.append(s)
+        }
+        result.sort { $0.time < $1.time }
+        return result
+    }
+
+    private static func sampleAtmosphere(_ track: AtmosphereKeyframeTrack, at t: Double) -> AtmosphereKeyframeData? {
+        guard let k = track.evaluate(at: t) else { return nil }
+        return AtmosphereKeyframeData(time: t,
+                                      px: k.position.x, py: k.position.y, pz: k.position.z,
+                                      sx: k.size.x, sy: k.size.y, sz: k.size.z,
+                                      density: k.density, variance: k.variance,
+                                      r: k.color.x, g: k.color.y, b: k.color.z)
     }
 
     /// Keeps the `[lo, hi]` slice of a transform track, resampling the endpoints so
@@ -401,6 +449,77 @@ final class ProjectFile {
             let slot = lightStart + i
             while lm.keyframeTracks.count <= slot { lm.keyframeTracks.append(nil) }
             lm.keyframeTracks[slot] = track
+        }
+    }
+
+    /// Appends the import's particle emitters (placed by M, times shifted by T) and,
+    /// when the host has no fog, adopts the source's fog the same way.  Fog is a single
+    /// global volume, so it's only adopted into an empty slot — never merged.
+    private static func appendImportedEffects(_ data: ProjectData,
+                                              by M: matrix_float4x4,
+                                              timeOffset T: Double,
+                                              vp: ViewportView) {
+        func point(_ v: SIMD3<Float>) -> SIMD3<Float> {
+            let p = M * SIMD4<Float>(v.x, v.y, v.z, 1); return SIMD3<Float>(p.x, p.y, p.z)
+        }
+        // Box spawn regions are axis-aligned: scale the size by M's (uniform) scale
+        // magnitude and ignore rotation.
+        let sclMag = simd_length(SIMD3<Float>(M.columns.0.x, M.columns.0.y, M.columns.0.z))
+        func sized(_ v: SIMD3<Float>) -> SIMD3<Float> { v * sclMag }
+        func placeTrack(_ track: AtmosphereKeyframeTrack?) {
+            guard let track = track else { return }
+            for j in track.keyframes.indices {
+                track.keyframes[j].time    += T
+                track.keyframes[j].position = point(track.keyframes[j].position)
+                track.keyframes[j].size     = sized(track.keyframes[j].size)
+            }
+        }
+
+        // ── Particle emitters — append (migrate a legacy single emitter like load) ──
+        let mgr = vp.particleManager
+        let emitterData: [ParticleEffectData]
+        let emitterKfs:  [[AtmosphereKeyframeData]]
+        if !data.particleEmitters.isEmpty {
+            emitterData = data.particleEmitters
+            emitterKfs  = data.particleEmitterKeyframes
+        } else {
+            emitterData = [data.particles]
+            emitterKfs  = [data.particleKeyframes]
+        }
+        var dropped = 0
+        for (i, pd) in emitterData.enumerated() where pd.isEnabled {
+            guard mgr.emitters.count < ParticleManager.maxEmitters else { dropped += 1; continue }
+            let fx  = ParticleEffect()
+            let kfs = i < emitterKfs.count ? emitterKfs[i] : []
+            let em  = i < data.particleEmitterEasingModes.count ? data.particleEmitterEasingModes[i] : 0
+            applyParticleEmitter(pd, keyframes: kfs, easingMode: em, into: fx)
+            fx.position = point(fx.position)
+            fx.size     = sized(fx.size)
+            placeTrack(fx.keyframeTrack)
+            mgr.emitters.append(fx)
+        }
+        if dropped > 0 {
+            print("[DEBUG] ProjectFile: import dropped \(dropped) particle emitter(s) — "
+                + "max \(ParticleManager.maxEmitters) reached")
+        }
+
+        // ── Fog — single global volume: adopt only when the host has none ───────────
+        if data.fog.isEnabled {
+            if vp.fogSettings.isEnabled {
+                print("[DEBUG] ProjectFile: host already has fog — imported fog skipped")
+            } else {
+                let f = data.fog
+                vp.fogSettings.isEnabled     = true
+                vp.fogSettings.color         = SIMD3<Float>(f.r, f.g, f.b)
+                vp.fogSettings.density       = f.density
+                vp.fogSettings.position      = point(SIMD3<Float>(f.px, f.py, f.pz))
+                vp.fogSettings.size          = sized(SIMD3<Float>(f.sx, f.sy, f.sz))
+                vp.fogSettings.variance      = f.variance
+                vp.fogSettings.raymarchSteps = f.steps
+                let track = applyAtmosphereKeyframes(data.fogKeyframes, easingMode: data.fogEasingMode)
+                placeTrack(track)
+                vp.fogSettings.keyframeTrack = track
+            }
         }
     }
 

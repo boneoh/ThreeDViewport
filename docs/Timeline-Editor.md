@@ -84,6 +84,25 @@ build-a-short-loop-and-fill workflow.
 | **Control + drag** | Rubber-band select keyframes in a region |
 | **Option-click diamond** | Toggle it in/out of the multi-selection |
 | **Click ruler** | Scrub the playhead |
+| **Right-click a row** | Context menu — **Delete** (see below); plus paste-channel on a light/fog/particle diamond, and rename / repeat on a bundle header |
+
+## Delete a row
+
+Right-click any lane and choose **Delete** (a confirmation follows). The label and what
+it removes depend on the row:
+
+- **Model** — a standalone object, or a whole multi-part model (deleting any one part
+  removes the model — the parts of one `.glb` aren't independent).
+- **Glued Model** — the [envelope](Glue.md) **and** all its members (use *Unglue* to
+  keep the members).
+- **Member** — one member of a glued unit (it leaves the unit; the rest stay).
+- **Light** / **Emitter** — that light or weather emitter (not offered for the last one).
+- **Import** — on a [bundle header](#import-bundles), the whole import and everything it
+  brought in (its objects and any imported lights).
+
+Deletes are clean: parent links, group tracks, and Spin/Orbit schedules are all
+repaired so nothing is left mis-targeted. (Fog and the camera have no Delete — disable
+fog from the [Atmosphere](Atmosphere.md) panel.)
 
 ## Easing
 

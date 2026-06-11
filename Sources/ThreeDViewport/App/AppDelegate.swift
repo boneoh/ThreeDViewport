@@ -1547,10 +1547,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             guard alert.runModal() == .alertFirstButtonReturn else { return }
 
             let opts = ProjectFile.ImportOptions(
-                insertTime:    options.insertTimeValue,
-                transform:     options.transformMatrix(),
-                includeLights: options.includeLights,
-                sliceRange:    options.effectiveSlice)
+                insertTime:     options.insertTimeValue,
+                transform:      options.transformMatrix(),
+                includeLights:  options.includeLights,
+                includeEffects: options.includeEffects,
+                sliceRange:     options.effectiveSlice)
             guard ProjectFile.importProject(from: url, into: viewport, options: opts) else {
                 self.showErrorAlert(message: "Import failed",
                                     detail: "Could not read the project file.")
@@ -4117,6 +4118,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             }
         }
 
+        // Right-click ▸ Delete on a grid row.
+        wc.editorView.onDeleteRow = { [weak self] ref in self?.deleteTimelineRow(ref) }
+
         // (Viewport mode / selection-change handling — including timeline lane
         // highlight + Path Animator Target sync — is wired centrally in setup, so
         // it works whether or not the timeline editor has been opened.)
@@ -4533,6 +4537,98 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 menu.addItem(item)
             }
         }
+    }
+
+    /// Right-click ▸ Delete from the Timeline grid.  Confirms, then removes whatever
+    /// the row represents and refreshes (mirrors confirmRemoveObject's app-level steps).
+    private func deleteTimelineRow(_ ref: TrackRef) {
+        guard let vp = viewportView else { return }
+        let sm = vp.sceneManager
+
+        let title: String
+        let perform: () -> Void
+
+        switch ref {
+        case .group(let gid):
+            title   = "Delete \"\(sm.groupName(for: gid))\"?"
+            let set = Set(sm.objects.indices.filter { sm.objects[$0].groupID == gid })
+            perform = { vp.deleteObjects(set) }
+
+        case .object(let i):
+            guard i >= 0, i < sm.objects.count else { return }
+            let obj = sm.objects[i]
+            if obj.isEnvelope {
+                title   = "Delete glued model \"\(sm.displayName(for: obj))\" and its members?"
+                perform = { vp.deleteObjects(self.envelopeDeleteSet(i, sm)) }
+            } else if obj.parentIndex != nil {
+                title = "Delete member \"\(sm.displayName(for: obj))\"?"
+                var set: Set<Int> = [i]
+                if let gid = obj.groupID {
+                    set.formUnion(sm.objects.indices.filter { sm.objects[$0].groupID == gid })
+                }
+                perform = { vp.deleteObjects(set) }
+            } else if let gid = obj.groupID {
+                title   = "Delete \"\(sm.groupName(for: gid))\"?"
+                let set = Set(sm.objects.indices.filter { sm.objects[$0].groupID == gid })
+                perform = { vp.deleteObjects(set) }
+            } else {
+                title   = "Delete \"\(sm.displayName(for: obj))\"?"
+                perform = { vp.deleteObjects([i]) }
+            }
+
+        case .light(let i):
+            guard i >= 0, i < vp.lightManager.lights.count, vp.lightManager.lights.count > 1 else { return }
+            title   = "Delete Light \(i + 1) - \(vp.lightManager.lights[i].type.displayName)?"
+            perform = { vp.deleteLight(i) }
+
+        case .particles(let i):
+            guard i >= 0, i < vp.particleManager.emitters.count, vp.particleManager.emitters.count > 1 else { return }
+            title   = "Delete this weather emitter?"
+            perform = { vp.deleteParticleEmitter(i) }
+
+        case .importBundle(let bid):
+            title   = "Delete import \"\(sm.bundleName(for: bid))\" and all its content?"
+            perform = {
+                // Imported lights first (descending so indices stay valid), then objects.
+                for li in vp.lightManager.lights.indices
+                    .filter({ vp.lightManager.lights[$0].importBundleID == bid }).sorted(by: >) {
+                    vp.deleteLight(li)
+                }
+                let set = Set(sm.objects.indices.filter { sm.objects[$0].importBundleID == bid })
+                vp.deleteObjects(set)
+            }
+
+        case .fog, .camera:
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText     = title
+        alert.informativeText = "This removes it from the project."
+        alert.alertStyle      = .warning
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        perform()
+        markDirty()
+        timelineEditorWC?.updateWindowHeight()
+        refreshCameraFollowTargets()
+        timelineEditorWC?.editorView.needsDisplay = true
+        vp.syncOverlayState()
+    }
+
+    /// Object indices for a glued unit: the envelope, its direct members, and any
+    /// member's group parts (one level — nested envelopes aren't exposed).
+    private func envelopeDeleteSet(_ envIdx: Int, _ sm: SceneManager) -> Set<Int> {
+        var set: Set<Int> = [envIdx]
+        for (j, o) in sm.objects.enumerated() where o.parentIndex == envIdx {
+            set.insert(j)
+            if let gid = o.groupID {
+                for (k, g) in sm.objects.enumerated() where g.groupID == gid { set.insert(k) }
+            }
+        }
+        return set
     }
 
     @objc private func confirmRemoveObject(_ sender: NSMenuItem) {

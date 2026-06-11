@@ -287,6 +287,32 @@ final class SceneManager {
         }
     }
 
+    /// Removes a set of objects by index and repairs the index-based references this
+    /// class owns: every survivor's `parentIndex` is remapped (a survivor whose parent
+    /// was deleted becomes a root), and `groupKeyframeTracks` / `groupTransforms` for
+    /// any now-empty group are dropped.  Spin / Orbit schedules are keyed by object
+    /// index on ViewportView and remapped there (see `ViewportView.deleteObjects`).
+    func removeObjects(at indices: Set<Int>) {
+        let del = indices.filter { $0 >= 0 && $0 < objects.count }
+        guard !del.isEmpty else { return }
+        let delSorted = del.sorted()
+        let affectedGroups = Set(delSorted.compactMap { objects[$0].groupID })
+        func shift(_ old: Int) -> Int { old - delSorted.filter { $0 < old }.count }
+
+        for i in delSorted.reversed() { objects.remove(at: i) }
+
+        for o in objects {
+            guard let p = o.parentIndex else { continue }
+            o.parentIndex = del.contains(p) ? nil : shift(p)
+        }
+        for gid in affectedGroups where !objects.contains(where: { $0.groupID == gid }) {
+            groupKeyframeTracks.removeValue(forKey: gid)
+            groupTransforms.removeValue(forKey: gid)
+        }
+        if selectedIndex >= objects.count { selectedIndex = max(0, objects.count - 1) }
+        print("[DEBUG] SceneManager: removed \(del.count) object(s), remaining = \(objects.count)")
+    }
+
     // MARK: - Glue (envelope) helpers
 
     /// Creates a geometryless "envelope" null node and parents the given member
