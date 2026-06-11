@@ -148,6 +148,12 @@ final class ViewportView: MTKView {
     private var lastMouseLocation: NSPoint = .zero
     private var isSpaceDown: Bool = false
 
+    // Click-to-select: a left mouse-down that doesn't drag past a small threshold is
+    // treated as a click and picks the object under the cursor on mouse-up.
+    private var leftMouseDownLocation: NSPoint = .zero
+    private var leftMouseDragged:      Bool    = false
+    private let clickMoveThreshold:    CGFloat = 3   // points of motion before it's a drag
+
     // Right-drag axis lock (object mode).
     // We accumulate displacement until one axis clearly dominates, then lock
     // for the rest of the gesture so the user can't accidentally rotate diagonally.
@@ -2302,6 +2308,10 @@ final class ViewportView: MTKView {
 
     override func mouseDown(with event: NSEvent) {
         lastMouseLocation = convert(event.locationInWindow, from: nil)
+        // Click-to-select: remember where the press started; a release with little
+        // motion is a click (pick), more motion is a drag (orbit / translate).
+        leftMouseDownLocation = lastMouseLocation
+        leftMouseDragged      = false
         // Reset axis lock for the new left-drag gesture.
         dragLockAxis = .none
         dragAccumX   = 0
@@ -2310,6 +2320,11 @@ final class ViewportView: MTKView {
 
     override func mouseDragged(with event: NSEvent) {
         let loc = convert(event.locationInWindow, from: nil)
+        if !leftMouseDragged,
+           abs(loc.x - leftMouseDownLocation.x) > clickMoveThreshold ||
+           abs(loc.y - leftMouseDownLocation.y) > clickMoveThreshold {
+            leftMouseDragged = true
+        }
         let dx  = Float(loc.x - lastMouseLocation.x)
         let dy  = Float(loc.y - lastMouseLocation.y)
         lastMouseLocation = loc
@@ -2441,6 +2456,139 @@ final class ViewportView: MTKView {
                 else               { camera.orbit(deltaX: 0, deltaY: dy) }
             case .none:       return
             }
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        // A clean click (no real drag) picks the object under the cursor and selects
+        // it — same selection path as cycling with O/M or clicking a Timeline row.
+        // Skip while space-orbiting or in Scene/Director mode (a POV-navigation view).
+        guard !leftMouseDragged, !isSpaceDown, !sceneModeActive else { return }
+        let pt = convert(event.locationInWindow, from: nil)
+        if let hit = pickObject(at: pt) { selectByPick(objectIndex: hit) }
+    }
+
+    // MARK: - Click-to-select picking
+
+    /// Returns the index of the nearest visible object whose mesh the click ray hits,
+    /// or nil for empty space.  Ray-vs-mesh (precise) with a bounding-sphere broad phase.
+    private func pickObject(at point: NSPoint) -> Int? {
+        guard bounds.width > 0, bounds.height > 0 else { return nil }
+        // Screen point → NDC (AppKit origin is bottom-left, y up — matches Metal NDC y).
+        let ndcX = Float(2 * point.x / bounds.width  - 1)
+        let ndcY = Float(2 * point.y / bounds.height - 1)
+        let invVP = simd_inverse(viewCamera.viewProjectionMatrix)
+        func unproject(_ z: Float) -> SIMD3<Float> {
+            let p = invVP * SIMD4<Float>(ndcX, ndcY, z, 1)
+            return SIMD3<Float>(p.x, p.y, p.z) / p.w
+        }
+        let rayOrigin = viewCamera.eyePosition
+        let near = unproject(0), far = unproject(1)
+        let rayDir = simd_normalize(far - near)
+
+        var bestIndex: Int? = nil
+        var bestDist = Float.greatestFiniteMagnitude
+
+        for (i, obj) in sceneManager.objects.enumerated() {
+            guard obj.isVisible, !obj.isEnvelope, !obj.cpuPositions.isEmpty else { continue }
+            let world = worldMatrix(for: obj)
+            // Broad phase — skip objects whose world bounding sphere the ray misses.
+            let centerW = world * SIMD4<Float>(obj.boundingCenter, 1)
+            let center  = SIMD3<Float>(centerW.x, centerW.y, centerW.z)
+            let scale   = max(simd_length(SIMD3<Float>(world.columns.0.x, world.columns.0.y, world.columns.0.z)),
+                              max(simd_length(SIMD3<Float>(world.columns.1.x, world.columns.1.y, world.columns.1.z)),
+                                  simd_length(SIMD3<Float>(world.columns.2.x, world.columns.2.y, world.columns.2.z))))
+            guard rayHitsSphere(origin: rayOrigin, dir: rayDir, center: center,
+                                radius: obj.boundingRadius * scale + 1e-4) else { continue }
+            // Narrow phase — exact ray-vs-mesh in the object's local space.
+            if let t = rayMeshDistance(obj, world: world, rayOrigin: rayOrigin, rayDir: rayDir),
+               t < bestDist {
+                bestDist  = t
+                bestIndex = i
+            }
+        }
+        return bestIndex
+    }
+
+    /// The rendered world transform of an object (group multiplier composed in when
+    /// grouped) — mirrors SceneManager.worldOrbitAnchor's posMat.
+    private func worldMatrix(for obj: SceneObject) -> matrix_float4x4 {
+        if let gid = obj.groupID, let groupMat = sceneManager.groupTransforms[gid] {
+            return groupMat * obj.transform
+        }
+        return obj.transform
+    }
+
+    private func rayHitsSphere(origin: SIMD3<Float>, dir: SIMD3<Float>,
+                               center: SIMD3<Float>, radius: Float) -> Bool {
+        let oc = origin - center
+        let b  = simd_dot(oc, dir)
+        let c  = simd_dot(oc, oc) - radius * radius
+        // Hit if the discriminant is non-negative and the sphere isn't fully behind.
+        return (b * b - c) >= 0 && (c <= 0 || b <= 0)
+    }
+
+    /// Nearest ray-vs-triangle distance (world units) for the object's mesh, or nil.
+    /// The ray is transformed into the object's local space; the hit point is mapped
+    /// back to world for a comparable distance.
+    private func rayMeshDistance(_ obj: SceneObject, world: matrix_float4x4,
+                                 rayOrigin: SIMD3<Float>, rayDir: SIMD3<Float>) -> Float? {
+        let inv = simd_inverse(world)
+        let o4  = inv * SIMD4<Float>(rayOrigin, 1)
+        let d4  = inv * SIMD4<Float>(rayDir, 0)
+        let lo  = SIMD3<Float>(o4.x, o4.y, o4.z)
+        let ld  = SIMD3<Float>(d4.x, d4.y, d4.z)   // not normalised (local scale baked in)
+
+        let pos = obj.cpuPositions
+        let idx = obj.cpuIndices
+        var best: Float? = nil
+        let eps: Float = 1e-7
+        func vert(_ k: UInt32) -> SIMD3<Float> {
+            let b = Int(k) * 3
+            return SIMD3<Float>(pos[b], pos[b + 1], pos[b + 2])
+        }
+        var t = 0
+        while t + 2 < idx.count {
+            let v0 = vert(idx[t]), v1 = vert(idx[t + 1]), v2 = vert(idx[t + 2])
+            t += 3
+            // Möller–Trumbore (local space).
+            let e1 = v1 - v0, e2 = v2 - v0
+            let p  = simd_cross(ld, e2)
+            let det = simd_dot(e1, p)
+            if abs(det) < eps { continue }
+            let invDet = 1 / det
+            let tvec = lo - v0
+            let u = simd_dot(tvec, p) * invDet
+            if u < 0 || u > 1 { continue }
+            let q = simd_cross(tvec, e1)
+            let v = simd_dot(ld, q) * invDet
+            if v < 0 || u + v > 1 { continue }
+            let tHit = simd_dot(e2, q) * invDet
+            if tHit <= eps { continue }
+            // World distance of this local hit.
+            let localHit = lo + ld * tHit
+            let worldHit = world * SIMD4<Float>(localHit, 1)
+            let dist = simd_length(SIMD3<Float>(worldHit.x, worldHit.y, worldHit.z) - rayOrigin)
+            if best == nil || dist < best! { best = dist }
+        }
+        return best
+    }
+
+    /// Applies a picked object to the selection, driving the same path the keystroke
+    /// cycle and Timeline-row click use (so the dropdowns / HUD / grid all follow).
+    private func selectByPick(objectIndex i: Int) {
+        guard i >= 0, i < sceneManager.objects.count else { return }
+        let obj = sceneManager.objects[i]
+        if let gid = obj.groupID {
+            // A multi-part model → select it as a unit in Model mode.
+            if let rootIdx = sceneManager.objects.firstIndex(where: { $0.groupID == gid }) {
+                sceneManager.selectedIndex = rootIdx
+            }
+            setControlMode(.model)
+        } else {
+            // Standalone object or a glued single-mesh member → Object mode.
+            sceneManager.selectedIndex = i
+            setControlMode(.object)
         }
     }
 

@@ -16,13 +16,15 @@ HUD (top-left) shows the active mode and selection.
 | **L** | **Light** — move/aim the selected light. Press again to cycle lights. |
 | **M** | **Model** — move/rotate a whole multi-part model group as one unit. |
 
-You can also select by clicking in the viewport or clicking a lane in the
-[Timeline Editor](Timeline-Editor.md).
+You can also select by **clicking the object in the viewport** or clicking a lane in
+the [Timeline Editor](Timeline-Editor.md) — both drive the same selection (HUD,
+inspector dropdowns, and Timeline highlight all follow).
 
 ## Mouse
 
 | Input | Effect (mode-dependent) |
 |-------|-------------------------|
+| **Left click** | Select the object under the cursor (a multi-part model selects as a unit → Model mode; a single object → Object mode). Clicking empty space keeps the current selection. |
 | **Left drag** | Axis-locked translate (truck + pedestal for camera). |
 | **Right drag** | Free rotate / free-look. |
 | **Space + Left drag** | Free orbit. |
