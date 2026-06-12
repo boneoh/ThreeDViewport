@@ -23,6 +23,11 @@ final class AppSettings: ObservableObject {
     @Published var exportHeight:        Int
     @Published var exportCodecID:       String     // ExportCodec.id
 
+    // Auto-keyframe on edit: when editing an already-animated entity, capture the
+    // change as a keyframe so a scrub/play doesn't discard it.  Two independent modes.
+    @Published var autoKeyframeUpdateNearby:  Bool  // update the keyframe under the playhead
+    @Published var autoKeyframeInsertBetween: Bool  // add a keyframe when between keyframes
+
     enum Defaults {
         static let projects  = "~/Documents/ThreeDViewport/Projects"
         static let movies    = "~/Documents/ThreeDViewport/Movies"
@@ -32,6 +37,8 @@ final class AppSettings: ObservableObject {
         static let width     = 1920
         static let height    = 1080
         static let codecID   = "proRes4444"
+        static let autoKeyUpdate = false
+        static let autoKeyInsert = false
     }
 
     init(projectsPath:        String = Defaults.projects,
@@ -41,7 +48,9 @@ final class AppSettings: ObservableObject {
          hdrFolderPath:       String = Defaults.hdrs,
          exportWidth:         Int    = Defaults.width,
          exportHeight:        Int    = Defaults.height,
-         exportCodecID:       String = Defaults.codecID) {
+         exportCodecID:       String = Defaults.codecID,
+         autoKeyframeUpdateNearby:  Bool = Defaults.autoKeyUpdate,
+         autoKeyframeInsertBetween: Bool = Defaults.autoKeyInsert) {
         self.projectsPath        = projectsPath
         self.moviesPath          = moviesPath
         self.modelsPathPrimary   = modelsPathPrimary
@@ -50,6 +59,8 @@ final class AppSettings: ObservableObject {
         self.exportWidth         = exportWidth
         self.exportHeight        = exportHeight
         self.exportCodecID       = exportCodecID
+        self.autoKeyframeUpdateNearby  = autoKeyframeUpdateNearby
+        self.autoKeyframeInsertBetween = autoKeyframeInsertBetween
     }
 
     // MARK: - Persistence
@@ -64,6 +75,8 @@ final class AppSettings: ObservableObject {
         var exportWidth:         Int
         var exportHeight:        Int
         var exportCodecID:       String
+        var autoKeyframeUpdateNearby:  Bool?   // optional: older files predate them
+        var autoKeyframeInsertBetween: Bool?
     }
 
     static func settingsURL() -> URL {
@@ -89,7 +102,9 @@ final class AppSettings: ObservableObject {
                            hdrFolderPath:       s.hdrFolderPath ?? Defaults.hdrs,
                            exportWidth:         s.exportWidth,
                            exportHeight:        s.exportHeight,
-                           exportCodecID:       s.exportCodecID)
+                           exportCodecID:       s.exportCodecID,
+                           autoKeyframeUpdateNearby:  s.autoKeyframeUpdateNearby  ?? Defaults.autoKeyUpdate,
+                           autoKeyframeInsertBetween: s.autoKeyframeInsertBetween ?? Defaults.autoKeyInsert)
     }
 
     func save() {
@@ -100,7 +115,9 @@ final class AppSettings: ObservableObject {
                        hdrFolderPath:       hdrFolderPath,
                        exportWidth:         exportWidth,
                        exportHeight:        exportHeight,
-                       exportCodecID:       exportCodecID)
+                       exportCodecID:       exportCodecID,
+                       autoKeyframeUpdateNearby:  autoKeyframeUpdateNearby,
+                       autoKeyframeInsertBetween: autoKeyframeInsertBetween)
         do {
             let enc = JSONEncoder()
             enc.outputFormatting = [.prettyPrinted, .sortedKeys]

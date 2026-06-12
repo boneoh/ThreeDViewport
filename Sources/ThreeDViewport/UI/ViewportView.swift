@@ -152,6 +152,7 @@ final class ViewportView: MTKView {
     // treated as a click and picks the object under the cursor on mouse-up.
     private var leftMouseDownLocation: NSPoint = .zero
     private var leftMouseDragged:      Bool    = false
+    private var rightDragMoved:        Bool    = false   // a right-drag rotation happened
     private let clickMoveThreshold:    CGFloat = 3   // points of motion before it's a drag
 
     // Right-drag axis lock (object mode).
@@ -304,6 +305,8 @@ final class ViewportView: MTKView {
                   !track.keyframes.isEmpty else { return }
             self.addCameraKeyframeFromPanel()
         }
+        // Camera slider edit → auto-keyframe-on-edit (gated by its settings).
+        cameraPanelState.onSliderEdited = { [weak self] in self?.autoKeyframeOnEdit(.camera) }
         // POV sliders → reposition camera on the sphere around the followed target.
         cameraPanelState.onPOVLivePreview = { [weak self] name, dist, azDeg, elDeg in
             guard let self else { return }
@@ -1380,6 +1383,64 @@ final class ViewportView: MTKView {
         }
         let index = sceneManager.objects.firstIndex { $0 === obj } ?? sceneManager.selectedIndex
         addKeyframeAtCurrentTime(forObjectAt: index)
+    }
+
+    // MARK: - Auto-keyframe on edit
+
+    /// Called at the end of an edit gesture (viewport drag / arrow nudge / slider
+    /// commit) for the edited entity.  When the entity is ALREADY animated and the
+    /// matching Setting is on, captures the change as a keyframe so a scrub/play won't
+    /// discard it — updating the keyframe under the playhead, or inserting a new one
+    /// between keyframes.  No-op otherwise.
+    func autoKeyframeOnEdit(_ ref: TrackRef) {
+        let s = AppSettings.shared
+        guard s.autoKeyframeUpdateNearby || s.autoKeyframeInsertBetween else { return }
+        // Skip rate-driven tracks: their keyframes are regenerated from spin/orbit
+        // markers, so an auto-stamp would just be wiped on the next regenerate.
+        if spinRateSchedules[ref] != nil || orbitRateSchedules[ref] != nil { return }
+        let times = autoKeyframeTrackTimes(ref)
+        guard !times.isEmpty else { return }   // animated-only
+        let playhead = timeline.currentTime
+        let near = times.contains { abs($0 - playhead) <= stampMergeTolerance }
+        guard (near && s.autoKeyframeUpdateNearby) || (!near && s.autoKeyframeInsertBetween) else { return }
+        autoKeyframeStamp(ref)
+    }
+
+    /// Keyframe times on the entity's track (empty when it has none).
+    private func autoKeyframeTrackTimes(_ ref: TrackRef) -> [Double] {
+        switch ref {
+        case .object(let i):
+            guard i >= 0, i < sceneManager.objects.count else { return [] }
+            return sceneManager.objects[i].keyframeTrack?.keyframes.map { $0.time } ?? []
+        case .group(let gid):
+            return sceneManager.groupKeyframeTracks[gid]?.keyframes.map { $0.time } ?? []
+        case .light(let i):
+            guard i >= 0, i < lightManager.keyframeTracks.count else { return [] }
+            return lightManager.keyframeTracks[i]?.keyframes.map { $0.time } ?? []
+        case .camera:
+            return camera.keyframeTrack?.keyframes.map { $0.time } ?? []
+        case .fog:
+            return fogSettings.keyframeTrack?.keyframes.map { $0.time } ?? []
+        case .particles(let i):
+            guard i >= 0, i < particleManager.emitters.count else { return [] }
+            return particleManager.emitters[i].keyframeTrack?.keyframes.map { $0.time } ?? []
+        case .importBundle:
+            return []
+        }
+    }
+
+    /// Stamps a keyframe for the entity using its existing per-type stamp (which merges
+    /// into the nearby keyframe or adds a new one via the shared merge tolerance).
+    private func autoKeyframeStamp(_ ref: TrackRef) {
+        switch ref {
+        case .object(let i):    addKeyframeAtCurrentTime(forObjectAt: i)
+        case .group(let gid):   addGroupKeyframeAtCurrentTime(for: gid)
+        case .light(let i):     addLightKeyframeAtCurrentTime(forLightAt: i)
+        case .camera:           addCameraKeyframeFromPanel()
+        case .fog:              addFogKeyframeAtCurrentTime()
+        case .particles(let i): addParticleKeyframeAtCurrentTime(forEmitterAt: i)
+        case .importBundle:     break
+        }
     }
 
     /// Stamps a keyframe for the object at `index` using its current live transform.
@@ -2488,10 +2549,17 @@ final class ViewportView: MTKView {
     }
 
     override func mouseUp(with event: NSEvent) {
-        // A clean click (no real drag) picks the object under the cursor and selects
-        // it — same selection path as cycling with O/M or clicking a Timeline row.
+        // A left drag that translated the selected object/model auto-keyframes it (if
+        // enabled); a clean click instead picks the object under the cursor.
+        if leftMouseDragged {
+            if !isSpaceDown, !timeline.isPlaying,
+               (controlMode == .object || controlMode == .model), let ref = currentTrackRef {
+                autoKeyframeOnEdit(ref)
+            }
+            return
+        }
         // Skip while space-orbiting or in Scene/Director mode (a POV-navigation view).
-        guard !leftMouseDragged, !isSpaceDown, !sceneModeActive else { return }
+        guard !isSpaceDown, !sceneModeActive else { return }
         let pt = convert(event.locationInWindow, from: nil)
         if let hit = pickObject(at: pt) {
             // Option-click isolates the individual part under the cursor; a plain click
@@ -2629,11 +2697,19 @@ final class ViewportView: MTKView {
 
     override func rightMouseDown(with event: NSEvent) {
         lastMouseLocation = convert(event.locationInWindow, from: nil)
+        rightDragMoved    = false
         // Right drag is always free (no axis lock) — nothing to reset.
+    }
+
+    override func rightMouseUp(with event: NSEvent) {
+        // A right-drag rotated the active entity — auto-keyframe it (if enabled).
+        guard rightDragMoved, !sceneModeActive, !timeline.isPlaying, let ref = currentTrackRef else { return }
+        autoKeyframeOnEdit(ref)
     }
 
     override func rightMouseDragged(with event: NSEvent) {
         let loc = convert(event.locationInWindow, from: nil)
+        rightDragMoved = true
         let dx  = Float(loc.x - lastMouseLocation.x)
         let dy  = Float(loc.y - lastMouseLocation.y)
         lastMouseLocation = loc
@@ -3017,6 +3093,7 @@ final class ViewportView: MTKView {
                 translateGroup(parts, by: (right * dxF + up * dyF) * translateStep)
             }
         }
+        if !sceneModeActive, let ref = currentTrackRef { autoKeyframeOnEdit(ref) }
     }
 
     /// `+` / `−` keys: depth movement along camera-forward, or scale (with Option).
@@ -3064,6 +3141,7 @@ final class ViewportView: MTKView {
                 translateGroup(parts, by: fwd * (sign * translateStep))
             }
         }
+        if !sceneModeActive, let ref = currentTrackRef { autoKeyframeOnEdit(ref) }
     }
 
     // MARK: - Keyboard Input

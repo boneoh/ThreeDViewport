@@ -24,6 +24,24 @@ Default locations used by file pickers and Export:
 | **Export width / height** | Output resolution; the camera aspect is matched to it at export. |
 | **Codec** | Default export codec (ProRes 4444 or 422 HQ). See [Export](Export.md). |
 
+## Auto-keyframe on edit
+
+When you move or change an entity that is **already animated** (has keyframes) — via
+the viewport (mouse drag, rotate, arrow keys, ± depth/scale) or a panel slider — these
+two settings capture the change as a keyframe so a scrub or play doesn't discard it.
+Objects with **no** keyframes are unaffected (their edit is the static base pose and
+already persists).
+
+| Setting | Effect |
+|---------|--------|
+| **Update the keyframe under the playhead** | If the playhead is on (within ~1.5 frames of) a keyframe, that keyframe is updated to the new pose. |
+| **Insert a new keyframe when between keyframes** | If the playhead is between keyframes, a new one is added at the playhead. |
+
+Both default off; enable either or both independently. Objects driven by a
+[Spin / Orbit](Spin-Path-Animator.md) rate marker are skipped (their keyframes are
+regenerated from the markers). The Paste/Zero coordinate auto-stamp is independent of
+these settings.
+
 > The **HDR folder / lighting HDR** path is read at startup (IBL is precomputed
 > once on launch), so changing it takes effect on the **next launch**. Other
 > settings apply immediately on Save.

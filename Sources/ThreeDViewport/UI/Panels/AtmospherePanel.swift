@@ -32,6 +32,9 @@ struct AtmospherePanel: View {
     /// AppDelegate wires these to stamp only when the relevant track is non-empty.
     var onAutoStampFog:       () -> Void = {}
     var onAutoStampParticles: () -> Void = {}
+    /// Fires when a keyframeable fog/particle slider edit ends → auto-keyframe-on-edit.
+    var onAutoKeyframeFog:       () -> Void = {}
+    var onAutoKeyframeParticles: () -> Void = {}
 
     private var fogKeyCount: Int { fog.keyframeTrack?.keyframes.count ?? 0 }
 
@@ -64,7 +67,8 @@ struct AtmospherePanel: View {
                                     supportsOpacity: false)
                             .font(.caption).padding(.bottom, 8)
 
-                        FogSliderRow(label: "Density", value: $fog.density, range: 0.0...1.0, format: "%.2f")
+                        FogSliderRow(label: "Density", value: $fog.density, range: 0.0...1.0, format: "%.2f",
+                                     onEditEnded: onAutoKeyframeFog)
                         KeyframeRow(count: fogKeyCount, onAdd: onStampFog, onClear: onClearFog)
                             .padding(.top, 6)
 
@@ -72,7 +76,8 @@ struct AtmospherePanel: View {
                         Text("Volume").font(.caption2).foregroundColor(.secondary)
                         AtmoDetailControls(source: fog, varianceKP: \.variance,
                                            positionKP: \.position, sizeKP: \.size, clipboard: clipboard,
-                                           onAutoStampPosition: onAutoStampFog)
+                                           onAutoStampPosition: onAutoStampFog,
+                                           onEditEnded: onAutoKeyframeFog)
                         FogSliderRow(label: "Quality", value: $fog.raymarchSteps, range: 8...96, format: "%.0f")
                     }
                     .padding(.top, 6)
@@ -109,13 +114,15 @@ struct AtmospherePanel: View {
 
                         // Selected emitter's main + spatial/advanced controls
                         if let fx = particleManager.selected {
-                            EmitterMainControls(emitter: fx, onStamp: onStampParticles, onClear: onClearParticles)
+                            EmitterMainControls(emitter: fx, onStamp: onStampParticles, onClear: onClearParticles,
+                                                onAutoKeyframe: onAutoKeyframeParticles)
 
                             Divider().padding(.vertical, 8)
                             Text("Shape").font(.caption2).foregroundColor(.secondary)
                             AtmoDetailControls(source: fx, varianceKP: \.variance,
                                                positionKP: \.position, sizeKP: \.size, clipboard: clipboard,
-                                               onAutoStampPosition: onAutoStampParticles)
+                                               onAutoStampPosition: onAutoStampParticles,
+                                               onEditEnded: onAutoKeyframeParticles)
                             EmitterAdvancedControls(emitter: fx)
                         }
                     }
@@ -160,6 +167,7 @@ private struct EmitterMainControls: View {
     @ObservedObject var emitter: ParticleEffect
     let onStamp: () -> Void
     let onClear: () -> Void
+    var onAutoKeyframe: () -> Void = {}
 
     private var keyCount: Int { emitter.keyframeTrack?.keyframes.count ?? 0 }
 
@@ -182,7 +190,8 @@ private struct EmitterMainControls: View {
                         supportsOpacity: false)
                 .font(.caption).padding(.bottom, 8)
 
-            FogSliderRow(label: "Density", value: $emitter.density, range: 0.0...1.0, format: "%.2f")
+            FogSliderRow(label: "Density", value: $emitter.density, range: 0.0...1.0, format: "%.2f",
+                         onEditEnded: onAutoKeyframe)
             KeyframeRow(count: keyCount, onAdd: onStamp, onClear: onClear).padding(.top, 6)
         }
     }
@@ -201,6 +210,8 @@ private struct AtmoDetailControls<Source: ObservableObject>: View {
     /// Fires after a Paste or Z on this section's Position group.  Wired by
     /// AtmospherePanel to the source-appropriate conditional stamp callback.
     var onAutoStampPosition: () -> Void = {}
+    /// Fires when any of these (keyframeable) variance/position/size sliders settle.
+    var onEditEnded: (() -> Void)? = nil
 
     private func fbind<V>(_ kp: ReferenceWritableKeyPath<Source, V>) -> Binding<V> {
         Binding(get: { source[keyPath: kp] }, set: { source[keyPath: kp] = $0 })
@@ -208,7 +219,8 @@ private struct AtmoDetailControls<Source: ObservableObject>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            FogSliderRow(label: "Variance", value: fbind(varianceKP), range: 0.0...1.0, format: "%.2f")
+            FogSliderRow(label: "Variance", value: fbind(varianceKP), range: 0.0...1.0, format: "%.2f",
+                         onEditEnded: onEditEnded)
 
             Divider().padding(.vertical, 8)
             HStack {
@@ -222,9 +234,12 @@ private struct AtmoDetailControls<Source: ObservableObject>: View {
                     canZero:  true,
                     onAutoStamp: { onAutoStampPosition() })
             }
-            FogSliderRow(label: "X", value: fbind(positionKP).x, range: -100...100, format: "%.1f")
-            FogSliderRow(label: "Y", value: fbind(positionKP).y, range: -100...100, format: "%.1f")
-            FogSliderRow(label: "Z", value: fbind(positionKP).z, range: -100...100, format: "%.1f")
+            FogSliderRow(label: "X", value: fbind(positionKP).x, range: -100...100, format: "%.1f",
+                         onEditEnded: onEditEnded)
+            FogSliderRow(label: "Y", value: fbind(positionKP).y, range: -100...100, format: "%.1f",
+                         onEditEnded: onEditEnded)
+            FogSliderRow(label: "Z", value: fbind(positionKP).z, range: -100...100, format: "%.1f",
+                         onEditEnded: onEditEnded)
 
             Divider().padding(.vertical, 8)
             HStack {
@@ -235,9 +250,12 @@ private struct AtmoDetailControls<Source: ObservableObject>: View {
                     onPaste:  { if let s = clipboard.size { source[keyPath: sizeKP] = s } },
                     canPaste: clipboard.size != nil)
             }
-            FogSliderRow(label: "W", value: fbind(sizeKP).x, range: 0.5...40, format: "%.1f")
-            FogSliderRow(label: "H", value: fbind(sizeKP).y, range: 0.5...40, format: "%.1f")
-            FogSliderRow(label: "D", value: fbind(sizeKP).z, range: 0.5...40, format: "%.1f")
+            FogSliderRow(label: "W", value: fbind(sizeKP).x, range: 0.5...40, format: "%.1f",
+                         onEditEnded: onEditEnded)
+            FogSliderRow(label: "H", value: fbind(sizeKP).y, range: 0.5...40, format: "%.1f",
+                         onEditEnded: onEditEnded)
+            FogSliderRow(label: "D", value: fbind(sizeKP).z, range: 0.5...40, format: "%.1f",
+                         onEditEnded: onEditEnded)
         }
     }
 }
@@ -284,6 +302,8 @@ private struct FogSliderRow: View {
     @Binding var value: Float
     let range:  ClosedRange<Float>
     let format: String
+    /// Optional: fires when an edit gesture ends — wire only on KEYFRAMEABLE sliders.
+    var onEditEnded: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -298,7 +318,8 @@ private struct FogSliderRow: View {
             TunableSlider(
                 value: Binding<Double>(get: { Double(value) }, set: { value = Float($0) }),
                 range: Double(range.lowerBound)...Double(range.upperBound),
-                step: arrowStep(forFormat: format)
+                step: arrowStep(forFormat: format),
+                onEditEnded: onEditEnded
             )
         }
     }

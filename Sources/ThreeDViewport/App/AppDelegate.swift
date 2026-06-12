@@ -2338,7 +2338,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                       let track = vp.lightManager.keyframeTracks[i],
                       !track.keyframes.isEmpty else { return }
                 vp.addLightKeyframeAtCurrentTime(forLightAt: i)
-            }
+            },
+            onAutoKeyframeLight: { [weak viewport] i in viewport?.autoKeyframeOnEdit(.light(i)) }
         )
 
         let hostingView = FirstClickHostingView(rootView: inspectorView)
@@ -2511,6 +2512,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                       let track = vp.particleManager.emitters[i].keyframeTrack,
                       !track.keyframes.isEmpty else { return }
                 vp.addParticleKeyframeAtCurrentTime(forEmitterAt: i)
+            },
+            onAutoKeyframeFog: { [weak viewport] in viewport?.autoKeyframeOnEdit(.fog) },
+            onAutoKeyframeParticles: { [weak viewport] in
+                guard let vp = viewport else { return }
+                vp.autoKeyframeOnEdit(.particles(vp.particleManager.selectedIndex))
             })
         panel.contentView = FirstClickHostingView(rootView: atmoView)
 
@@ -2732,6 +2738,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                       !track.keyframes.isEmpty else { return }
                 viewport.addKeyframeAtCurrentTime(forObjectAt: viewport.sceneManager.selectedIndex)
             }
+        }
+        // Transform/opacity slider edit → auto-keyframe-on-edit (gated by its settings).
+        state.onSliderEdited = { [weak viewport] in
+            guard let viewport, let selected = viewport.sceneManager.selectedObject else { return }
+            let ref: TrackRef = selected.groupID.map { .group($0) }
+                              ?? .object(viewport.sceneManager.selectedIndex)
+            viewport.autoKeyframeOnEdit(ref)
         }
 
         // Group rotate — pivot the GROUP transform about the anchor's current

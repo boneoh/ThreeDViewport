@@ -84,6 +84,9 @@ final class ModelInspectorState: ObservableObject {
     /// to conditionally stamp an object/group keyframe at the current playhead
     /// (only if the relevant track already has keyframes).
     var onAutoStamp:           (() -> Void)?
+    /// Fires when a transform/opacity slider edit ends.  AppDelegate wires it to the
+    /// auto-keyframe-on-edit feature (gated by its two settings).
+    var onSliderEdited:        (() -> Void)?
 
     // ── Private ───────────────────────────────────────────────────────────────
     private var targets:    [SceneObject] = []

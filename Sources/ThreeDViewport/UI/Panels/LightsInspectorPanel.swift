@@ -40,6 +40,8 @@ struct LightsInspectorPanel: View {
     /// wires it to conditionally stamp a light keyframe at the current playhead
     /// for the given light index (only if its track already has keyframes).
     var onAutoStampLight: (Int) -> Void = { _ in }
+    /// Fires when a keyframeable light slider edit ends → auto-keyframe-on-edit.
+    var onAutoKeyframeLight: (Int) -> Void = { _ in }
 
     var body: some View {
         ScrollView {
@@ -273,7 +275,8 @@ struct LightsInspectorPanel: View {
                           get: { lightManager.lights[i].intensity },
                           set: { lightManager.lights[i].intensity = $0 }),
                       range: 0...10,
-                      format: "%.2f")
+                      format: "%.2f",
+                      onEditEnded: { onAutoKeyframeLight(i) })
 
             // Position — every light except ambient (directional uses it as the
             // aim anchor: direction is derived from Position → Target).
@@ -284,17 +287,20 @@ struct LightsInspectorPanel: View {
                                   value: Binding<Float>(
                                       get: { lightManager.lights[i].position.x },
                                       set: { lightManager.lights[i].position.x = $0 }),
-                                  range: -100...100, format: "%.2f")
+                                  range: -100...100, format: "%.2f",
+                                  onEditEnded: { onAutoKeyframeLight(i) })
                         SliderRow(label: "Y",
                                   value: Binding<Float>(
                                       get: { lightManager.lights[i].position.y },
                                       set: { lightManager.lights[i].position.y = $0 }),
-                                  range: -100...100, format: "%.2f")
+                                  range: -100...100, format: "%.2f",
+                                  onEditEnded: { onAutoKeyframeLight(i) })
                         SliderRow(label: "Z",
                                   value: Binding<Float>(
                                       get: { lightManager.lights[i].position.z },
                                       set: { lightManager.lights[i].position.z = $0 }),
-                                  range: -100...100, format: "%.2f")
+                                  range: -100...100, format: "%.2f",
+                                  onEditEnded: { onAutoKeyframeLight(i) })
                     }
                 } label: {
                     HStack {
@@ -320,17 +326,20 @@ struct LightsInspectorPanel: View {
                                   value: Binding<Float>(
                                       get: { lightManager.lights[i].target.x },
                                       set: { lightManager.lights[i].target.x = $0 }),
-                                  range: -100...100, format: "%.2f")
+                                  range: -100...100, format: "%.2f",
+                                  onEditEnded: { onAutoKeyframeLight(i) })
                         SliderRow(label: "Y",
                                   value: Binding<Float>(
                                       get: { lightManager.lights[i].target.y },
                                       set: { lightManager.lights[i].target.y = $0 }),
-                                  range: -100...100, format: "%.2f")
+                                  range: -100...100, format: "%.2f",
+                                  onEditEnded: { onAutoKeyframeLight(i) })
                         SliderRow(label: "Z",
                                   value: Binding<Float>(
                                       get: { lightManager.lights[i].target.z },
                                       set: { lightManager.lights[i].target.z = $0 }),
-                                  range: -100...100, format: "%.2f")
+                                  range: -100...100, format: "%.2f",
+                                  onEditEnded: { onAutoKeyframeLight(i) })
                     }
                 } label: {
                     HStack {
@@ -371,7 +380,8 @@ struct LightsInspectorPanel: View {
                           value: Binding<Float>(
                               get: { lightManager.lights[i].range },
                               set: { lightManager.lights[i].range = $0 }),
-                          range: 0...50, format: "%.1f")
+                          range: 0...50, format: "%.1f",
+                          onEditEnded: { onAutoKeyframeLight(i) })
             }
 
             // Laser beam visuals
@@ -383,7 +393,8 @@ struct LightsInspectorPanel: View {
                                   value: Binding<Float>(
                                       get: { lightManager.lights[i].beamThickness },
                                       set: { lightManager.lights[i].beamThickness = $0 }),
-                                  range: 1...30, format: "%.0f")
+                                  range: 1...30, format: "%.0f",
+                                  onEditEnded: { onAutoKeyframeLight(i) })
                         Toggle("Exclude from feedback",
                                isOn: Binding<Bool>(
                                    get: { lightManager.lights[i].excludeBeamFromFeedback },
@@ -464,6 +475,9 @@ struct SliderRow: View {
     let value: Binding<Float>
     let range: ClosedRange<Float>
     let format: String
+    /// Optional: fires when an edit gesture ends (used to auto-keyframe).  Wire it only
+    /// on KEYFRAMEABLE properties (transform/opacity/intensity/colour/etc.).
+    var onEditEnded: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 6) {
@@ -476,7 +490,8 @@ struct SliderRow: View {
                     get: { Double(value.wrappedValue) },
                     set: { value.wrappedValue = Float($0) }),
                 range: Double(range.lowerBound)...Double(range.upperBound),
-                step: arrowStep(forFormat: format))
+                step: arrowStep(forFormat: format),
+                onEditEnded: onEditEnded)
             Text(String(format: format, value.wrappedValue))
                 .frame(width: 46, alignment: .trailing)
                 .font(.caption.monospacedDigit())

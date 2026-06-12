@@ -58,12 +58,12 @@ struct ModelInspectorPanel: View {
                     canZero:  state.canEditPosition,
                     onAutoStamp: { state.onAutoStamp?() })
             }
-            SliderRow(label: "X", value: $state.position.x, range: -100...100, format: "%.2f")
-                .disabled(!state.canEditPosition)
-            SliderRow(label: "Y", value: $state.position.y, range: -100...100, format: "%.2f")
-                .disabled(!state.canEditPosition)
-            SliderRow(label: "Z", value: $state.position.z, range: -100...100, format: "%.2f")
-                .disabled(!state.canEditPosition)
+            SliderRow(label: "X", value: $state.position.x, range: -100...100, format: "%.2f",
+                      onEditEnded: { state.onSliderEdited?() }).disabled(!state.canEditPosition)
+            SliderRow(label: "Y", value: $state.position.y, range: -100...100, format: "%.2f",
+                      onEditEnded: { state.onSliderEdited?() }).disabled(!state.canEditPosition)
+            SliderRow(label: "Z", value: $state.position.z, range: -100...100, format: "%.2f",
+                      onEditEnded: { state.onSliderEdited?() }).disabled(!state.canEditPosition)
         }
     }
 
@@ -82,12 +82,12 @@ struct ModelInspectorPanel: View {
                     canZero:  state.canEditRotation,
                     onAutoStamp: { state.onAutoStamp?() })
             }
-            SliderRow(label: "X", value: $state.rotation.x, range: -180...180, format: "%.1f")
-                .disabled(!state.canEditRotation)
-            SliderRow(label: "Y", value: $state.rotation.y, range: -180...180, format: "%.1f")
-                .disabled(!state.canEditRotation)
-            SliderRow(label: "Z", value: $state.rotation.z, range: -180...180, format: "%.1f")
-                .disabled(!state.canEditRotation)
+            SliderRow(label: "X", value: $state.rotation.x, range: -180...180, format: "%.1f",
+                      onEditEnded: { state.onSliderEdited?() }).disabled(!state.canEditRotation)
+            SliderRow(label: "Y", value: $state.rotation.y, range: -180...180, format: "%.1f",
+                      onEditEnded: { state.onSliderEdited?() }).disabled(!state.canEditRotation)
+            SliderRow(label: "Z", value: $state.rotation.z, range: -180...180, format: "%.1f",
+                      onEditEnded: { state.onSliderEdited?() }).disabled(!state.canEditRotation)
         }
     }
 
@@ -100,12 +100,12 @@ struct ModelInspectorPanel: View {
     private var scaleSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Scale").font(.headline)
-            SliderRow(label: "X", value: $state.scale.x, range: 0.01...10, format: "%.2f")
-                .disabled(!state.canEditScale)
-            SliderRow(label: "Y", value: $state.scale.y, range: 0.01...10, format: "%.2f")
-                .disabled(!state.canEditScale)
-            SliderRow(label: "Z", value: $state.scale.z, range: 0.01...10, format: "%.2f")
-                .disabled(!state.canEditScale)
+            SliderRow(label: "X", value: $state.scale.x, range: 0.01...10, format: "%.2f",
+                      onEditEnded: { state.onSliderEdited?() }).disabled(!state.canEditScale)
+            SliderRow(label: "Y", value: $state.scale.y, range: 0.01...10, format: "%.2f",
+                      onEditEnded: { state.onSliderEdited?() }).disabled(!state.canEditScale)
+            SliderRow(label: "Z", value: $state.scale.z, range: 0.01...10, format: "%.2f",
+                      onEditEnded: { state.onSliderEdited?() }).disabled(!state.canEditScale)
         }
     }
 
@@ -216,7 +216,8 @@ struct ModelInspectorPanel: View {
             SliderRow(label: "Opacity",
                       value: $state.opacity,
                       range: 0...1,
-                      format: "%.2f")
+                      format: "%.2f",
+                      onEditEnded: { state.onSliderEdited?() })
 
             SliderRow(label: "Brightness",
                       value: $state.emissiveStrength,

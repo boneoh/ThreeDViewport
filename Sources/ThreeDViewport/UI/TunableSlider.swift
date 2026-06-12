@@ -20,6 +20,9 @@ struct TunableSlider: View {
     @Binding var value: Double
     let range: ClosedRange<Double>
     let step:  Double
+    /// Fires when an edit gesture ends (drag released or arrow key lifted) — used to
+    /// auto-keyframe the change.  Not called for the continuous mid-drag updates.
+    var onEditEnded: (() -> Void)? = nil
 
     @Environment(\.isEnabled) private var isEnabled
     @FocusState private var focused: Bool
@@ -61,6 +64,7 @@ struct TunableSlider: View {
                         let f = min(1, max(0, (g.location.x - thumbSize / 2) / usable))
                         value = range.lowerBound + Double(f) * span
                     }
+                    .onEnded { _ in if isEnabled { onEditEnded?() } }
             )
         }
         .frame(height: thumbSize)
@@ -82,7 +86,7 @@ struct TunableSlider: View {
             let delta = press.key == .leftArrow ? -step : step
             switch press.phase {
             case .down: nudge(delta); startRepeating(delta); return .handled
-            case .up:   stopRepeating();                     return .handled
+            case .up:   stopRepeating(); onEditEnded?();     return .handled
             default:    return .ignored
             }
         }

@@ -19,6 +19,8 @@ struct SettingsPanel: View {
     @State private var exportWidth         = ""
     @State private var exportHeight        = ""
     @State private var codecIndex          = 0
+    @State private var autoKeyUpdate       = false
+    @State private var autoKeyInsert       = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -52,6 +54,17 @@ struct SettingsPanel: View {
                 .labelsHidden()
                 .frame(width: 180)
             }
+
+            Divider()
+
+            Text("Auto-keyframe on edit").font(.subheadline).foregroundColor(.secondary)
+            Text("When you move or change an object/light/camera/effect that is "
+               + "already animated, capture the change as a keyframe so a scrub or play "
+               + "doesn't discard it. (Objects with no keyframes are unaffected.)")
+                .font(.caption).foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Toggle("Update the keyframe under the playhead", isOn: $autoKeyUpdate)
+            Toggle("Insert a new keyframe when between keyframes", isOn: $autoKeyInsert)
 
             Divider()
 
@@ -92,6 +105,8 @@ struct SettingsPanel: View {
         exportWidth         = String(settings.exportWidth)
         exportHeight        = String(settings.exportHeight)
         codecIndex          = settings.exportCodecID == "proRes422HQ" ? 1 : 0
+        autoKeyUpdate       = settings.autoKeyframeUpdateNearby
+        autoKeyInsert       = settings.autoKeyframeInsertBetween
     }
 
     private func saveAndClose() {
@@ -103,6 +118,8 @@ struct SettingsPanel: View {
         settings.exportWidth         = Int(exportWidth)  ?? settings.exportWidth
         settings.exportHeight        = Int(exportHeight) ?? settings.exportHeight
         settings.exportCodecID       = codecIndex == 1 ? "proRes422HQ" : "proRes4444"
+        settings.autoKeyframeUpdateNearby  = autoKeyUpdate
+        settings.autoKeyframeInsertBetween = autoKeyInsert
         settings.save()
         onClose()
     }

@@ -54,6 +54,8 @@ final class CameraPanelState: ObservableObject {
     /// to conditionally stamp a camera keyframe at the current playhead (only
     /// when the camera track already has keyframes).
     var onAutoStamp:         (() -> Void)?
+    /// Fires when a keyframeable camera slider edit ends → auto-keyframe-on-edit.
+    var onSliderEdited:      (() -> Void)?
 
     private var isUpdating   = false
     private var cancellables = Set<AnyCancellable>()
@@ -221,9 +223,12 @@ struct CameraPanel: View {
                         onAutoStamp: { state.onAutoStamp?() })
                 }
                 .padding(.bottom, 4)
-                SliderRow(label: "X", value: $state.position.x, range: -100...100, format: "%.2f")
-                SliderRow(label: "Y", value: $state.position.y, range: -100...100, format: "%.2f")
-                SliderRow(label: "Z", value: $state.position.z, range: -100...100, format: "%.2f")
+                SliderRow(label: "X", value: $state.position.x, range: -100...100, format: "%.2f",
+                          onEditEnded: { state.onSliderEdited?() })
+                SliderRow(label: "Y", value: $state.position.y, range: -100...100, format: "%.2f",
+                          onEditEnded: { state.onSliderEdited?() })
+                SliderRow(label: "Z", value: $state.position.z, range: -100...100, format: "%.2f",
+                          onEditEnded: { state.onSliderEdited?() })
 
                 Divider().padding(.vertical, 14)
 
@@ -240,9 +245,12 @@ struct CameraPanel: View {
                         onAutoStamp: { state.onAutoStamp?() })
                 }
                 .padding(.bottom, 4)
-                SliderRow(label: "X", value: $state.target.x, range: -100...100, format: "%.2f")
-                SliderRow(label: "Y", value: $state.target.y, range: -100...100, format: "%.2f")
-                SliderRow(label: "Z", value: $state.target.z, range: -100...100, format: "%.2f")
+                SliderRow(label: "X", value: $state.target.x, range: -100...100, format: "%.2f",
+                          onEditEnded: { state.onSliderEdited?() })
+                SliderRow(label: "Y", value: $state.target.y, range: -100...100, format: "%.2f",
+                          onEditEnded: { state.onSliderEdited?() })
+                SliderRow(label: "Z", value: $state.target.z, range: -100...100, format: "%.2f",
+                          onEditEnded: { state.onSliderEdited?() })
 
                 Divider().padding(.vertical, 14)
 
@@ -250,7 +258,8 @@ struct CameraPanel: View {
                 Text("Focal Length").font(.headline)
                     .padding(.bottom, 4)
                 SliderRow(label: "mm", value: $state.focalLength,
-                          range: 12...140, format: "%.1f")
+                          range: 12...140, format: "%.1f",
+                          onEditEnded: { state.onSliderEdited?() })
             }
             .padding(14)
         }
