@@ -24,5 +24,41 @@
     <true/>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.graphics-design</string>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>ThreeDViewport Project</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>com.example.ThreeDViewport.project</string>
+            </array>
+        </dict>
+    </array>
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.example.ThreeDViewport.project</string>
+            <key>UTTypeDescription</key>
+            <string>ThreeDViewport Project</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.json</string>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>3dvp</string>
+                </array>
+            </dict>
+        </dict>
+    </array>
 </dict>
 </plist>

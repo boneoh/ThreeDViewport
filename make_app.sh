@@ -105,6 +105,42 @@ cat > "$CONTENTS/Info.plist" << EOF
     <true/>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.graphics-design</string>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>ThreeDViewport Project</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>${BUNDLE_ID}.project</string>
+            </array>
+        </dict>
+    </array>
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>${BUNDLE_ID}.project</string>
+            <key>UTTypeDescription</key>
+            <string>ThreeDViewport Project</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.json</string>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>3dvp</string>
+                </array>
+            </dict>
+        </dict>
+    </array>
 </dict>
 </plist>
 EOF
@@ -135,6 +171,15 @@ done
 # This is fine for ad-hoc / local use; replace '-' with a Developer ID for
 # App Store or Notarization builds (which require a standard bundle layout).
 codesign --force --sign - --no-strict "$APP"
+
+# ── Register document types with LaunchServices ───────────────────────────────
+# So Finder immediately associates .3dvp files with this rebuilt bundle (otherwise
+# a stale "can't open" association can linger until next login).
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+if [ -x "$LSREGISTER" ]; then
+    "$LSREGISTER" -f "$PWD/$APP" 2>/dev/null || true
+    echo "   Registered document types with LaunchServices"
+fi
 
 echo ""
 echo "✅  $APP is ready."

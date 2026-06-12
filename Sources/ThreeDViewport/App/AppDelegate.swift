@@ -104,6 +104,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // the project is actually saved or a different project is opened.
     private var suggestedProjectName: String?
 
+    // Finder "open document" handling.  `hasFinishedLaunching` distinguishes a
+    // file that launched the app (defer until the window exists) from one opened
+    // while the app is already running.  `pendingOpenURL` holds a .3dvp delivered
+    // during launch, to be loaded instead of the template.
+    private var hasFinishedLaunching = false
+    private var pendingOpenURL: URL?
+
     // True whenever the project has unsaved changes.
     private var isDirty: Bool = false
 
@@ -274,7 +281,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         subscribeToSettingsChanges(viewport)
 
-        applyTemplateIfPresent()
+        hasFinishedLaunching = true
+        // If a .3dvp launched the app (Finder double-click / Open With), load it
+        // instead of the template.  Deferred a tick so the open event — usually
+        // delivered right after this method returns — has set pendingOpenURL first.
+        // Either ordering is safe: if the event arrives later, application(open:)
+        // loads it over the template.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if let url = self.pendingOpenURL {
+                self.pendingOpenURL = nil
+                self.loadProject(from: url)
+            } else {
+                self.applyTemplateIfPresent()
+            }
+        }
+    }
+
+    /// Finder double-click / "Open With" / `open file.3dvp` → load the project.
+    /// Only the first .3dvp is used (single-document app); extras are ignored.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard let url = urls.first(where: { $0.pathExtension.lowercased() == "3dvp" }) else { return }
+        if hasFinishedLaunching {
+            handleDroppedProject(url)   // running: prompt on unsaved changes, then load
+        } else {
+            pendingOpenURL = url        // launching: the deferred launch step loads it
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
