@@ -1636,6 +1636,13 @@ final class TimelineEditorView: NSView {
     /// channel(s) from the clipboard, replacing just that component of the keyframe.
     /// (Object/group/camera keyframes are excluded — deltas / no xyz.)
     override func menu(for event: NSEvent) -> NSMenu? {
+        // Control is this view's rubber-band multi-select modifier (handled in
+        // mouseDown).  macOS routes Control+left-click to the contextual menu first,
+        // which would pop the Delete menu instead of starting a selection — so
+        // suppress the menu when Control is down.  A plain right-click (no Control)
+        // still shows the Delete / rename / paste menu.
+        if event.modifierFlags.contains(.control) { return nil }
+
         let tracks = buildTracks()
         let pt     = convert(event.locationInWindow, from: nil)
 
