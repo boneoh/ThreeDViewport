@@ -1819,19 +1819,26 @@ final class ViewportView: MTKView {
                 let t0 = m.time
                 let t1 = (idx + 1 < sorted.count) ? sorted[idx + 1].time : end
                 guard t1 > t0 + 1e-6 else { continue }
-                let dur  = t1 - t0
-                let revs = m.rate * dur
-                let axis = axisVec(m.axisIndex)
-                let count = segCount(rate: m.rate, revs: revs)
+                let dur   = t1 - t0
+                let revs  = m.rate  * dur
+                let revs2 = m.rate2 * dur
+                let axis  = axisVec(m.axisIndex)
+                let axis2 = axisVec(m.axisIndex2)
+                // Density covers the faster of the two axes; both 0 → just hold.
+                let count = segCount(rate: (m.rate == 0 && m.rate2 == 0) ? 0 : 1,
+                                     revs: max(abs(revs), abs(revs2)))
                 for k in (idx == 0 ? 0 : 1)..<count {
                     let s   = Float(k) / Float(count - 1)
-                    let ang = Float(revs) * 360.0 * deg2rad * s
-                    let q   = simd_normalize(accum * simd_quatf(angle: ang, axis: axis))
+                    var q   = accum * simd_quatf(angle: Float(revs) * 360.0 * deg2rad * s, axis: axis)
+                    if m.rate2 != 0 { q = q * simd_quatf(angle: Float(revs2) * 360.0 * deg2rad * s, axis: axis2) }
+                    q = simd_normalize(q)
                     obj.keyframeTrack?.addKeyframe(TransformKeyframe(
                         time: t0 + Double(s) * dur, translation: baseT,
                         rotation: simd_normalize(baseR * q), scale: baseS, opacity: opacity))
                 }
-                accum = simd_normalize(accum * simd_quatf(angle: Float(revs) * 360.0 * deg2rad, axis: axis))
+                var segRot = simd_quatf(angle: Float(revs) * 360.0 * deg2rad, axis: axis)
+                if m.rate2 != 0 { segRot = segRot * simd_quatf(angle: Float(revs2) * 360.0 * deg2rad, axis: axis2) }
+                accum = simd_normalize(accum * segRot)
             }
             onKeyframeStamped?(.object(i))
 
@@ -1857,19 +1864,28 @@ final class ViewportView: MTKView {
                 let t0 = m.time
                 let t1 = (idx + 1 < sorted.count) ? sorted[idx + 1].time : end
                 guard t1 > t0 + 1e-6 else { continue }
-                let dur  = t1 - t0
-                let revs = m.rate * dur
-                let axisWorld = simd_act(r0, axisVec(m.axisIndex))
-                let count = segCount(rate: m.rate, revs: revs)
+                let dur   = t1 - t0
+                let revs  = m.rate  * dur
+                let revs2 = m.rate2 * dur
+                let axisWorld  = simd_act(r0, axisVec(m.axisIndex))
+                let axisWorld2 = simd_act(r0, axisVec(m.axisIndex2))
+                let count = segCount(rate: (m.rate == 0 && m.rate2 == 0) ? 0 : 1,
+                                     revs: max(abs(revs), abs(revs2)))
                 for k in (idx == 0 ? 0 : 1)..<count {
                     let s   = Float(k) / Float(count - 1)
-                    let ang = Float(revs) * 360.0 * deg2rad * s
-                    let rot = accum * rotationMatrix4x4(simd_quatf(angle: ang, axis: axisWorld))
+                    var rot = accum * rotationMatrix4x4(simd_quatf(angle: Float(revs) * 360.0 * deg2rad * s, axis: axisWorld))
+                    if m.rate2 != 0 {
+                        rot = rot * rotationMatrix4x4(simd_quatf(angle: Float(revs2) * 360.0 * deg2rad * s, axis: axisWorld2))
+                    }
                     let (t, r, sc) = PathGenerator.decompose(tFwd * rot * tInv * g0)
                     track?.addKeyframe(TransformKeyframe(
                         time: t0 + Double(s) * dur, translation: t, rotation: r, scale: sc))
                 }
-                accum = accum * rotationMatrix4x4(simd_quatf(angle: Float(revs) * 360.0 * deg2rad, axis: axisWorld))
+                var segRot = rotationMatrix4x4(simd_quatf(angle: Float(revs) * 360.0 * deg2rad, axis: axisWorld))
+                if m.rate2 != 0 {
+                    segRot = segRot * rotationMatrix4x4(simd_quatf(angle: Float(revs2) * 360.0 * deg2rad, axis: axisWorld2))
+                }
+                accum = accum * segRot
             }
             onKeyframeStamped?(.group(gid))
 

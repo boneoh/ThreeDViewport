@@ -799,7 +799,8 @@ final class ProjectFile {
         // v35: rate-marker schedules (Spin / Orbit animators).
         var spinSchedData: [SpinRateScheduleData] = []
         for (ref, markers) in vp.spinRateSchedules where !markers.isEmpty {
-            let md = markers.map { SpinRateMarkerData(time: $0.time, rate: $0.rate, axisIndex: $0.axisIndex) }
+            let md = markers.map { SpinRateMarkerData(time: $0.time, rate: $0.rate, axisIndex: $0.axisIndex,
+                                                      rate2: $0.rate2, axisIndex2: $0.axisIndex2) }
             switch ref {
             case .object(let i):
                 guard i >= 0, i < vp.sceneManager.objects.count else { continue }
@@ -1566,7 +1567,8 @@ final class ProjectFile {
         let gidMap = groupGidMap(vp.sceneManager, substitutedFilenames: [:])
 
         for sd in data.spinRateSchedules {
-            let markers = sd.markers.map { SpinRateMarker(time: $0.time, rate: $0.rate, axisIndex: $0.axisIndex) }
+            let markers = sd.markers.map { SpinRateMarker(time: $0.time, rate: $0.rate, axisIndex: $0.axisIndex,
+                                                          rate2: $0.rate2 ?? 0, axisIndex2: $0.axisIndex2 ?? 0) }
             guard !markers.isEmpty else { continue }
             switch sd.targetKind {
             case 2:

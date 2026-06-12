@@ -3613,12 +3613,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let perRev = Float(state.perRev), perRev >= 3 else {
             state.validationAlert = "Keyframes / rev must be ≥ 3."; return
         }
+        // Advanced tumble: optional second simultaneous spin axis.  Blank/0 → single-axis.
+        guard let rate2 = Double(state.rate2.isEmpty ? "0" : state.rate2) else {
+            state.validationAlert = "Rate 2 must be a number (rev/s)."; return
+        }
         // Every rate keyframe lands at the playhead — scrub to frame 0 first for a
         // whole-timeline spin.  (Forcing the first one to frame 0 ignored a playhead
         // the user had deliberately positioned.)
         let t = viewport.timeline.currentTime
         var markers = (viewport.spinRateSchedules[ref] ?? []).filter { abs($0.time - t) >= 1e-3 }
-        markers.append(SpinRateMarker(time: t, rate: rate, axisIndex: state.axisIndex))
+        markers.append(SpinRateMarker(time: t, rate: rate, axisIndex: state.axisIndex,
+                                      rate2: rate2, axisIndex2: state.axisIndex2))
         markers.sort { $0.time < $1.time }
         viewport.setSpinSchedule(ref: ref, markers: markers, keyframesPerRevolution: perRev)
         state.markers = markers
@@ -4666,7 +4671,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // Spin — kind 2 (object), kind 3 (group).  Axis is local, so only the time
         // markers need the import's offset.
         for sd in data.spinRateSchedules where !sd.markers.isEmpty {
-            let markers = sd.markers.map { SpinRateMarker(time: $0.time + T, rate: $0.rate, axisIndex: $0.axisIndex) }
+            let markers = sd.markers.map { SpinRateMarker(time: $0.time + T, rate: $0.rate, axisIndex: $0.axisIndex, rate2: $0.rate2 ?? 0, axisIndex2: $0.axisIndex2 ?? 0) }
             switch sd.targetKind {
             case 2:
                 if let idx = bundleObjectIndex(bid, name: sd.targetName, occurrence: max(0, sd.targetIndex), sm: sm) {

@@ -19,6 +19,9 @@ final class SpinAnimatorState: ObservableObject {
     @Published var axisIndex:   Int    = 1        // 0 = X, 1 = Y, 2 = Z
     @Published var rate:        String = "0.5"    // revolutions / second, signed
     @Published var perRev:      String = "12"     // keyframe density
+    // Advanced: optional second simultaneous spin (tumble).  rate2 = 0 → single-axis.
+    @Published var axisIndex2:  Int    = 0        // 0 = X, 1 = Y, 2 = Z
+    @Published var rate2:       String = "0"      // revolutions / second, signed
 
     @Published var status:          String = ""
     /// Blocking validation error → raised as an alert (see .validationAlert).
@@ -73,6 +76,29 @@ struct SpinAnimatorPanel: View {
                        + "Keyframes/rev ≥ 3.")
                         .font(.caption).foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+
+                    DisclosureGroup("Advanced — Tumble (second axis)") {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text("Second axis").frame(width: 120, alignment: .leading)
+                                Picker("", selection: $state.axisIndex2) {
+                                    Text("X").tag(0)
+                                    Text("Y").tag(1)
+                                    Text("Z").tag(2)
+                                }
+                                .labelsHidden()
+                                .pickerStyle(.segmented)
+                                .frame(width: 120)
+                            }
+                            field("Rate 2 (rev/s)", $state.rate2)
+                            Text("A non-zero Rate 2 spins about a second local axis at the "
+                               + "same time, for a tumble. 0 = off (single-axis spin).")
+                                .font(.caption).foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(.top, 4)
+                    }
+                    .font(.caption)
 
                     Button(action: addMarker) {
                         Text("Create Keyframes").frame(maxWidth: .infinity)

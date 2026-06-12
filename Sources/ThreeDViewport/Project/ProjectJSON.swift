@@ -267,6 +267,9 @@ struct SpinRateMarkerData: Codable {
     var time:      Double
     var rate:      Double
     var axisIndex: Int
+    // Optional second simultaneous spin ("tumble").  Absent in older files → nil → 0.
+    var rate2:      Double? = nil
+    var axisIndex2: Int?    = nil
 }
 
 struct SpinRateScheduleData: Codable {

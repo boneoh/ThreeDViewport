@@ -29,6 +29,8 @@ which moves an object *around* an external axis.
    selection when that selection is something spinnable.
 2. **Spin Rate:** choose the **Local axis** (X / Y / Z — Y is a top-like spin), set
    the **Rate (rev/s)** (negative reverses direction), and **Keyframes / rev**.
+   Optionally open **Advanced — Tumble (second axis)** to add a simultaneous spin
+   about a second local axis (see [Tumble](#tumble-two-axes-at-once) below).
 3. Click **Create Keyframes** to drop a rate marker **at the playhead** — scrub to
    where the spin should begin first (frame 0 for a whole-timeline spin). The spin
    then holds that rate from the marker to the next one (or the timeline end).
@@ -79,6 +81,24 @@ reopen it later and tweak a rate.
 - An **object** spins about its **local origin (pivot)**; if a single mesh's pivot
   is off-centre the spin looks like a small orbit around that pivot. A **model**
   (group) spins about its **bounding centre**, so multi-part models turn in place.
+
+## Tumble (two axes at once)
+
+The **Advanced — Tumble (second axis)** section adds an optional **second
+simultaneous spin** so an object turns about two of its local axes at the same time,
+like a tumbling die. Pick the **Second axis** (X / Y / Z) and a **Rate 2 (rev/s)**;
+leave **Rate 2** at **0** for an ordinary single-axis spin.
+
+- The two spins compose into one orientation per generated keyframe — primary spin
+  first, then the secondary — so a single marker drives the whole tumble. The marker
+  list still shows the primary time · rate · axis.
+- For a tumble that **loops seamlessly** over a repeated cycle, make both rates land
+  on whole revolutions per cycle (e.g. Rate 1 and Rate 2 both integer rev/s over a
+  1-second loop). Mismatched rates still tumble correctly but won't return to the
+  exact start orientation each cycle.
+- This is a clean, deterministic, *loopable* composition — not a free-body physics
+  tumble (which doesn't loop). It reads as a tumble and stays reproducible on reload
+  and export.
 
 ## Example: B orbits A *and* spins on its own axis
 

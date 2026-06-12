@@ -20,6 +20,9 @@ struct SpinRateMarker: Identifiable, Equatable {
     var time:      Double
     var rate:      Double   // revolutions / second, signed
     var axisIndex: Int      // 0 = X, 1 = Y, 2 = Z
+    // Optional second simultaneous spin (advanced "tumble").  rate2 = 0 → single-axis.
+    var rate2:      Double = 0
+    var axisIndex2: Int    = 0
 }
 
 /// One orbit rate change: orbit at `rate` rev/s starting at `time`.  The orbit
