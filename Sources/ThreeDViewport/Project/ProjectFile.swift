@@ -891,7 +891,8 @@ final class ProjectFile {
                                                         px: $0.position.x, py: $0.position.y, pz: $0.position.z,
                                                         r: $0.color.x, g: $0.color.y, b: $0.color.z)
                                            },
-                                           marksVisible: vp.probeConfig.marksVisible),
+                                           marksVisible: vp.probeConfig.marksVisible,
+                                           visible:      vp.probeConfig.isVisible),
             groupBaseTransforms: captureGroupBaseTransforms(from: vp),
             cameraEasingMode:    (cam.keyframeTrack?.easingMode ?? .linear).rawValue,
             lightEasingModes:    lm.keyframeTracks.map { ($0?.easingMode ?? .linear).rawValue },
@@ -1235,7 +1236,8 @@ final class ProjectFile {
         // ── IBL intensity (v16) ───────────────────────────────────────────────
         vp.renderSettings.iblIntensity = data.iblIntensity
         print("[DEBUG] ProjectFile: iblIntensity=\(data.iblIntensity)")
-        // v29: bake probe position (gizmo visibility is editor-only, not restored).
+        // v29: bake probe position.  Gizmo visibility is now persisted too
+        // (pre-existing projects with no `visible` key default to hidden).
         vp.probeConfig.position = SIMD3<Float>(data.probe.px, data.probe.py, data.probe.pz)
         vp.probeConfig.marks = (data.probe.marks ?? []).map {
             ProbeMark(name: $0.name,
@@ -1243,6 +1245,7 @@ final class ProjectFile {
                       color:    SIMD3<Float>($0.r, $0.g, $0.b))
         }
         vp.probeConfig.marksVisible = data.probe.marksVisible ?? false
+        vp.probeConfig.isVisible    = data.probe.visible ?? false
         vp.probeConfig.selectedMarkIndex = nil
         // v28: hot-reload the Lighting HDR from the saved path (bundled if missing).
         vp.renderSettings.lightingHDRPath = data.lightingHDRPath

@@ -9,6 +9,9 @@ struct ProbeInspectorPanel: View {
     @ObservedObject var clipboard: CoordinateClipboard
     /// Prompts for a name + colour and saves the current probe position as a mark.
     var onMarkPosition: () -> Void = {}
+    /// Called when the gizmo's visibility toggle changes, so the project can be
+    /// marked dirty and the state persisted.
+    var onVisibilityChanged: () -> Void = {}
 
     var body: some View {
         ScrollView {
@@ -28,6 +31,7 @@ struct ProbeInspectorPanel: View {
                 .toggleStyle(.switch)
                 .tint(.green)
                 .environment(\.controlActiveState, .active)
+                .onChange(of: probe.isVisible) { _, _ in onVisibilityChanged() }
 
                 Divider()
 

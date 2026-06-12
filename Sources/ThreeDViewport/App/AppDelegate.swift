@@ -2914,14 +2914,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             if panel.isVisible {
                 panel.orderOut(nil)
             } else {
-                viewportView?.probeConfig.isVisible = true   // re-show the gizmo
+                // Gizmo visibility is the saved, user-controlled state (panel toggle);
+                // opening the panel no longer forces it on.
                 panel.makeKeyAndOrderFront(nil)
             }
             return
         }
 
         guard let viewport = viewportView else { return }
-        viewport.probeConfig.isVisible = true   // show the gizmo when the panel first opens
 
         let panel = KeyForwardingPanel(
             contentRect: NSRect(x: 0, y: 0, width: 296, height: 300),
@@ -2938,7 +2938,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         panel.contentView = FirstClickHostingView(rootView: ProbeInspectorPanel(
             probe: viewport.probeConfig, clipboard: viewport.coordinateClipboard,
-            onMarkPosition: { [weak self] in self?.promptForMark() }))
+            onMarkPosition: { [weak self] in self?.promptForMark() },
+            onVisibilityChanged: { [weak self] in self?.markDirty() }))
 
         if let win = window {
             let winFrame  = win.frame

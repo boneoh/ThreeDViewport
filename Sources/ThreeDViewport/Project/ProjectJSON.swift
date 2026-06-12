@@ -339,6 +339,9 @@ struct ProbeData: Codable {
     /// missing key becomes nil rather than throwing and resetting the probe.
     var marks:        [MarkData]? = nil
     var marksVisible: Bool?       = nil
+    /// Whether the probe gizmo is drawn. Optional so pre-existing projects (no key)
+    /// decode to nil → treated as hidden.
+    var visible:      Bool?       = nil
 }
 
 // v33: one saved position mark (name + world position + RGB colour).
