@@ -233,12 +233,21 @@ Export Model isn't envelope-only — it exports whatever is selected: a single t
 shape, a whole multi-part model, or an envelope's subtree. So you can finish one prop in
 the [Model Inspector](Model-Inspector.md) and bake it directly, no gluing required.
 
-> **The export is baked.** A re-imported glued unit comes back as an ordinary multi-part
-> model — its former members are now **parts**. You can still
+> **The export is baked — and the glue cannot be undone.** Glue is a
+> ThreeDViewport-only relationship (which parts belong to the envelope, the anchor, each
+> member's base transform). It lives **only in the `.3dvp` project file** — glTF has no
+> concept of it, so **none of it is written to the `.glb`.** The exporter flattens every
+> member's glued-arrangement transform into the geometry. A re-imported unit comes back as
+> an ordinary multi-part model — its former members are now plain **parts**, frozen in
+> their glued positions, with **no Unglue**. You can still
 > [Spin](Spin-Path-Animator.md) or keyframe an individual part, but a part can no longer
 > be **orbited** independently (Orbit writes a world pose that only applies to
-> roots/envelopes). If you need full per-member freedom later, keep the original project
-> with the live envelope and treat the .glb as a delivery format. See
+> roots/envelopes), and you can never re-anchor it, swap a member, or re-glue it
+> differently.
+>
+> **So always keep the source project.** The `.3dvp` you built the envelope in is the
+> only thing that holds the live, editable glue. Treat the `.glb` as a one-way **delivery
+> format** and archive its source project alongside it. See
 > [Glue ▸ Export the glued unit as a model](Glue.md#export-the-glued-unit-as-a-model).
 
 ### Build a short, loopable clip project

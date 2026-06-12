@@ -82,15 +82,21 @@ single shape in the [Model Inspector](Model-Inspector.md) and export it directly
 without gluing first. Each export bakes relative to the selection's own frame and
 re-imports auto-normalised at the origin.
 
-> **The export is baked.** A reimported glued model comes in as an ordinary
-> multi-part model — one unit driven as a whole (Model mode, a single group track).
-> Its former members are now **parts** of that model. You can still
-> [Spin](Spin-Path-Animator.md) an individual part (it appears in the Spin Target
-> list as `model ▸ part`) and keyframe it from its lane, but a part can **no longer be
-> orbited** as an independent object (Orbit writes a world pose that only applies to
-> roots/envelopes). If you need the full per-member freedom — independent orbits,
-> follow targets, etc. — keep the original project with the live envelope and export
-> only when the assembly is final.
+> **The export is baked — and the glue cannot be undone.** The glue itself (which
+> members belong to the envelope, the anchor, each member's base transform) is a
+> ThreeDViewport concept stored **only in the `.3dvp` project file** — the `.glb` format
+> has no notion of it, so none of it is exported. A re-imported glued model comes in as an
+> ordinary multi-part model — one unit driven as a whole (Model mode, a single group
+> track). Its former members are now **parts**, frozen in their glued positions, and there
+> is **no Unglue** for them. You can still [Spin](Spin-Path-Animator.md) an individual part
+> (it appears in the Spin Target list as `model ▸ part`) and keyframe it from its lane, but
+> a part can **no longer be orbited** as an independent object (Orbit writes a world pose
+> that only applies to roots/envelopes), nor re-anchored, swapped, or re-glued.
+>
+> **So always keep the source project.** The `.3dvp` you built the envelope in is the only
+> live, editable copy of the glue — archive it alongside the `.glb` and treat the `.glb`
+> as a one-way delivery asset. See
+> [Advanced ▸ Bake a sub-assembly into a reusable model](Advanced.md#bake-a-sub-assembly-into-a-reusable-model).
 
 ## Example: B orbits A *and* spins
 
