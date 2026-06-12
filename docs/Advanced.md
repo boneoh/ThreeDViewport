@@ -250,6 +250,12 @@ the [Model Inspector](Model-Inspector.md) and bake it directly, no gluing requir
 > format** and archive its source project alongside it. See
 > [Glue ▸ Export the glued unit as a model](Glue.md#export-the-glued-unit-as-a-model).
 
+`.glb` is a standard interchange format, so the baked model is also a doorway into other
+tools. Open the exported `.glb` in **Blender** (or any glTF-capable app), refine the
+geometry, materials, or layout, and export it again as `.glb` to bring the improved model
+back into ThreeDViewport. The glue itself stays behind — but the model travels freely, so
+you can polish a sub-assembly in whatever pipeline suits it and re-import the result.
+
 ### Build a short, loopable clip project
 
 The companion move to baking geometry is baking **motion** — a small, self-contained

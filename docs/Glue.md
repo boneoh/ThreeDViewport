@@ -98,6 +98,12 @@ re-imports auto-normalised at the origin.
 > as a one-way delivery asset. See
 > [Advanced ▸ Bake a sub-assembly into a reusable model](Advanced.md#bake-a-sub-assembly-into-a-reusable-model).
 
+Because `.glb` is a standard format, the exported model isn't a dead end — you can open it
+in a third-party tool such as **Blender**, edit the geometry, materials, or layout, and
+export it again as `.glb` for use back in ThreeDViewport. The original glue relationship
+still doesn't come along (it never left ThreeDViewport), but the *model* is fully yours to
+refine in whatever pipeline you prefer.
+
 ## Example: B orbits A *and* spins
 
 1. Glue B to A with **A as the anchor**.
