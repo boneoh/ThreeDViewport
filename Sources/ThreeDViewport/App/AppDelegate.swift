@@ -1921,19 +1921,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let panel = NSSavePanel()
         panel.title                = "Save Project"
         panel.canCreateDirectories = true
-        let projectsDir = defaultDirectory(for: "Projects")
-        panel.directoryURL         = projectsDir
+        // Default to the folder the current project was opened from / last saved to,
+        // falling back to the Projects folder for a never-saved project.
+        let targetDir = currentProjectURL?.deletingLastPathComponent()
+                     ?? defaultDirectory(for: "Projects")
+        panel.directoryURL         = targetDir
 
         // Default filename:
         //   • Saved project → append the next "rev <letter>" suffix, e.g.
         //     `Project 1` → `Project 1 rev A`, `Project 1 rev A` → `Project 1 rev B`.
+        //     The suffix is computed by scanning the project's own folder.
         //   • Unsaved project with a template-derived name → use it as-is.
         //   • Unsaved project with a loaded model → name from the first model's filename.
         //   • Empty fallback → "project.3dvp".
         if let current = currentProjectURL {
             let base = current.deletingPathExtension().lastPathComponent
             panel.nameFieldStringValue = nextProjectRevisionName(baseName: base,
-                                                                  in: projectsDir) + ".3dvp"
+                                                                  in: targetDir) + ".3dvp"
         } else if let suggested = suggestedProjectName {
             panel.nameFieldStringValue = suggested + ".3dvp"
         } else if let firstURL = viewport.sceneManager.objects.first?.sourceURL {

@@ -38,9 +38,16 @@ the per-mode tables.
 
 ## Scene mode & the Director
 
-Press **S** to enter **Scene mode** — a free editing viewpoint (the "Director's
+Press **S** to toggle **Scene mode** — a free editing viewpoint (the "Director's
 POV") that lets you see and frame the scene from anywhere *without* disturbing the
-keyframed scene camera. **D** flies the Director; it is never keyframed or exported.
+keyframed scene camera. The Director is never keyframed or exported.
+
+- **S** enters Scene mode (auto-fitting the Director the first time) and exits back to
+  the scene Camera.
+- **D** jumps straight to the Director POV from any mode: it enters Scene mode if
+  needed, switches to the Director if you're on the scene Camera, and is ignored if
+  you're already in the Director. (Unlike S, D never exits Scene mode.)
+- **C** toggles between the scene **Camera** and the **Director** while in Scene mode.
 
 - **1–6** snap the Director to Front / Left / Rear / Right / Top / Bottom of the
   selected object's group (object-relative).

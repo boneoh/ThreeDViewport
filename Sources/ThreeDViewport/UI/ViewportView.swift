@@ -3422,9 +3422,22 @@ final class ViewportView: MTKView {
                 }
                 return
 
-            // D is intentionally not handled here — it's reserved for "delete
-            // selected keyframe" in the Timeline Editor.  Director POV entry
-            // moved to C (it toggles with Camera while Scene mode is active).
+            case KC.d:
+                // D — go to the Director POV.  One-way (never toggles out), since the
+                // Director only exists in Scene mode.  Not in Scene mode → enter it +
+                // Director (auto-fit on first use, matching S).  In Scene mode but not
+                // yet the Director → switch to it.  Already the Director → ignored.
+                // Director has no timeline lane, so onControlModeChanged isn't sent.
+                if !sceneModeActive {
+                    sceneModeActive = true
+                    if !directorEverFit { autoFitDirector() }
+                    controlMode = .director
+                    syncOverlayState()
+                } else if controlMode != .director {
+                    controlMode = .director
+                    syncOverlayState()
+                }
+                return
 
             // Number row 1–6: snap the Director to a standard view of the selection
             // (Scene mode only).  Outside Scene mode they fall through unconsumed.
