@@ -19,6 +19,8 @@ final class AppSettings: ObservableObject {
     @Published var modelsPathPrimary:   String     // tried first (e.g. Favorites)
     @Published var modelsPathSecondary: String     // fallback if primary missing
     @Published var hdrFolderPath:       String     // default folder for the HDR pickers
+    @Published var exportedModelsPath:  String     // where Export Model writes the .glb
+    @Published var exportedModelProjectsPath: String  // companion source .3dvp for envelopes
     @Published var exportWidth:         Int
     @Published var exportHeight:        Int
     @Published var exportCodecID:       String     // ExportCodec.id
@@ -34,6 +36,8 @@ final class AppSettings: ObservableObject {
         static let modelsFav = "~/Documents/ThreeDViewport/Models/Favorites"
         static let models    = "~/Documents/ThreeDViewport/Models"
         static let hdrs      = "~/Documents/ThreeDViewport/HDRs"
+        static let exportedModels    = "~/Documents/ThreeDViewport/Models/Exported"
+        static let exportedProjects  = "~/Documents/ThreeDViewport/Models/Exported/Projects"
         static let width     = 1920
         static let height    = 1080
         static let codecID   = "proRes4444"
@@ -46,6 +50,8 @@ final class AppSettings: ObservableObject {
          modelsPathPrimary:   String = Defaults.modelsFav,
          modelsPathSecondary: String = Defaults.models,
          hdrFolderPath:       String = Defaults.hdrs,
+         exportedModelsPath:        String = Defaults.exportedModels,
+         exportedModelProjectsPath: String = Defaults.exportedProjects,
          exportWidth:         Int    = Defaults.width,
          exportHeight:        Int    = Defaults.height,
          exportCodecID:       String = Defaults.codecID,
@@ -56,6 +62,8 @@ final class AppSettings: ObservableObject {
         self.modelsPathPrimary   = modelsPathPrimary
         self.modelsPathSecondary = modelsPathSecondary
         self.hdrFolderPath       = hdrFolderPath
+        self.exportedModelsPath        = exportedModelsPath
+        self.exportedModelProjectsPath = exportedModelProjectsPath
         self.exportWidth         = exportWidth
         self.exportHeight        = exportHeight
         self.exportCodecID       = exportCodecID
@@ -72,6 +80,8 @@ final class AppSettings: ObservableObject {
         var modelsPathPrimary:   String
         var modelsPathSecondary: String
         var hdrFolderPath:       String?   // optional: older settings.json predate it
+        var exportedModelsPath:        String?   // optional: older files predate them
+        var exportedModelProjectsPath: String?
         var exportWidth:         Int
         var exportHeight:        Int
         var exportCodecID:       String
@@ -100,6 +110,8 @@ final class AppSettings: ObservableObject {
                            modelsPathPrimary:   s.modelsPathPrimary,
                            modelsPathSecondary: s.modelsPathSecondary,
                            hdrFolderPath:       s.hdrFolderPath ?? Defaults.hdrs,
+                           exportedModelsPath:        s.exportedModelsPath        ?? Defaults.exportedModels,
+                           exportedModelProjectsPath: s.exportedModelProjectsPath ?? Defaults.exportedProjects,
                            exportWidth:         s.exportWidth,
                            exportHeight:        s.exportHeight,
                            exportCodecID:       s.exportCodecID,
@@ -113,6 +125,8 @@ final class AppSettings: ObservableObject {
                        modelsPathPrimary:   modelsPathPrimary,
                        modelsPathSecondary: modelsPathSecondary,
                        hdrFolderPath:       hdrFolderPath,
+                       exportedModelsPath:        exportedModelsPath,
+                       exportedModelProjectsPath: exportedModelProjectsPath,
                        exportWidth:         exportWidth,
                        exportHeight:        exportHeight,
                        exportCodecID:       exportCodecID,

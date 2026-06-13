@@ -93,9 +93,12 @@ re-imports auto-normalised at the origin.
 > a part can **no longer be orbited** as an independent object (Orbit writes a world pose
 > that only applies to roots/envelopes), nor re-anchored, swapped, or re-glued.
 >
-> **So always keep the source project.** The `.3dvp` you built the envelope in is the only
-> live, editable copy of the glue — archive it alongside the `.glb` and treat the `.glb`
-> as a one-way delivery asset. See
+> **So keep the source project.** The `.3dvp` you built the envelope in is the only
+> live, editable copy of the glue — treat the `.glb` as a one-way delivery asset. To
+> make this automatic, the Export panel shows **"Also save source project (.3dvp) for
+> re-gluing"** (checked by default) when you export an **envelope**: it writes a
+> `<name> source.3dvp` snapshot next to the `.glb`, so you always have a project you can
+> reopen and Unglue. See
 > [Advanced ▸ Bake a sub-assembly into a reusable model](Advanced.md#bake-a-sub-assembly-into-a-reusable-model).
 
 Because `.glb` is a standard format, the exported model isn't a dead end — you can open it

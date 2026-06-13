@@ -16,6 +16,8 @@ struct SettingsPanel: View {
     @State private var modelsPathPrimary   = ""
     @State private var modelsPathSecondary = ""
     @State private var hdrFolderPath       = ""
+    @State private var exportedModelsPath        = ""
+    @State private var exportedModelProjectsPath = ""
     @State private var exportWidth         = ""
     @State private var exportHeight        = ""
     @State private var codecIndex          = 0
@@ -35,6 +37,8 @@ struct SettingsPanel: View {
             pathRow("Favorite Models",   $modelsPathPrimary,   directory: true)
             pathRow("Model Library",     $modelsPathSecondary, directory: true)
             pathRow("HDRs",              $hdrFolderPath,       directory: true)
+            pathRow("Exported Models",   $exportedModelsPath,        directory: true)
+            pathRow("Exported Projects", $exportedModelProjectsPath, directory: true)
 
             Divider()
 
@@ -102,6 +106,8 @@ struct SettingsPanel: View {
         modelsPathPrimary   = settings.modelsPathPrimary
         modelsPathSecondary = settings.modelsPathSecondary
         hdrFolderPath       = settings.hdrFolderPath
+        exportedModelsPath        = settings.exportedModelsPath
+        exportedModelProjectsPath = settings.exportedModelProjectsPath
         exportWidth         = String(settings.exportWidth)
         exportHeight        = String(settings.exportHeight)
         codecIndex          = settings.exportCodecID == "proRes422HQ" ? 1 : 0
@@ -115,6 +121,8 @@ struct SettingsPanel: View {
         settings.modelsPathPrimary   = modelsPathPrimary
         settings.modelsPathSecondary = modelsPathSecondary
         settings.hdrFolderPath       = hdrFolderPath
+        settings.exportedModelsPath        = exportedModelsPath
+        settings.exportedModelProjectsPath = exportedModelProjectsPath
         settings.exportWidth         = Int(exportWidth)  ?? settings.exportWidth
         settings.exportHeight        = Int(exportHeight) ?? settings.exportHeight
         settings.exportCodecID       = codecIndex == 1 ? "proRes422HQ" : "proRes4444"

@@ -1193,6 +1193,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         case "Movies":   path = s.moviesPath
         case "Models":   path = s.modelsPathSecondary
         case "HDRs":     path = s.hdrFolderPath
+        case "ExportedModels":         path = s.exportedModelsPath
+        case "ExportedModelProjects":  path = s.exportedModelProjectsPath
         default:
             // Unknown category — preserve the original Documents-based behavior.
             let base = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -5087,9 +5089,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let panel = NSSavePanel()
         panel.title                = "Export Model"
         panel.canCreateDirectories = true
-        panel.directoryURL         = defaultModelDirectory()
+        panel.directoryURL         = defaultDirectory(for: "ExportedModels")
         panel.nameFieldStringValue = assetName + ".glb"
         if let glb = UTType(filenameExtension: "glb") { panel.allowedContentTypes = [glb] }
+
+        // For an ENVELOPE export, offer to also save the source project alongside the
+        // .glb.  The .glb bakes (and loses) the glue, so this companion .3dvp is the
+        // only way to re-open and Unglue later.  Default on; non-envelope exports
+        // (single object / plain multi-part model) re-import losslessly, so no checkbox.
+        let saveSourceCheckbox: NSButton? = sel.isEnvelope
+            ? NSButton(checkboxWithTitle: "Also save source project (.3dvp) for re-gluing",
+                       target: nil, action: nil)
+            : nil
+        if let cb = saveSourceCheckbox {
+            cb.state = .on
+            panel.accessoryView = cb
+        }
+
         panel.beginSheetModal(for: window) { [weak self] resp in
             guard resp == .OK, var url = panel.url else { return }
             if url.pathExtension.lowercased() != "glb" { url.appendPathExtension("glb") }
@@ -5100,6 +5116,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             } catch {
                 self?.showErrorAlert(message: "Could not write model",
                                      detail: error.localizedDescription)
+                return
+            }
+
+            // Companion source project (envelope exports only, when opted in) — written
+            // to the dedicated Exported Model Projects folder to keep the library tidy.
+            if saveSourceCheckbox?.state == .on,
+               let self, let viewport = self.viewportView {
+                let base      = url.deletingPathExtension().lastPathComponent
+                let companion = self.defaultDirectory(for: "ExportedModelProjects")
+                    .appendingPathComponent(base + ".3dvp")
+                do {
+                    try ProjectFile.save(to: companion, viewport: viewport,
+                                         windowLayout: self.currentWindowLayout())
+                    print("[DEBUG] AppDelegate: saved companion source project → "
+                        + companion.lastPathComponent)
+                } catch {
+                    self.showErrorAlert(
+                        message: "Model exported, but its source project couldn't be saved",
+                        detail: error.localizedDescription)
+                }
             }
         }
     }

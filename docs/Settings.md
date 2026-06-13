@@ -16,6 +16,8 @@ Default locations used by file pickers and Export:
 | **Favorite Models** | Your curated favourites — typically macOS aliases (created by the Model Inspector's **Add to Favorites** button) pointing at files in the Model Library, organised into the same shape subfolders. Tried first when resolving a model. |
 | **Model Library** | The full collection (generated, downloaded, etc.). Searched if a model isn't found in Favorite Models. |
 | **HDRs** | `.hdr` environment files (lighting / background / bake output). |
+| **Exported Models** | Where **File ▸ Export Model…** writes the baked `.glb` (the Export panel opens here). |
+| **Exported Projects** | Where the companion **source project** (`.3dvp`) is saved when you export an **envelope**, so the glue can be recovered later — see [Glue](Glue.md#export-the-glued-unit-as-a-model). |
 
 ## Export defaults
 
