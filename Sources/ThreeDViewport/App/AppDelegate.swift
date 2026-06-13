@@ -140,6 +140,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     func applicationDidFinishLaunching(_ notification: Notification) {
         print("[DEBUG] AppDelegate: applicationDidFinishLaunching")
 
+        // Opt-in performance logging: launch with `--perf-log` to print rolling
+        // CPU/GPU/FPS stats (default off, no rebuild needed to toggle).
+        if CommandLine.arguments.contains("--perf-log") {
+            Renderer.perfLoggingEnabled = true
+            print("[PERF] performance logging enabled via --perf-log")
+        }
+
         let windowWidth:    CGFloat = 1920
         let viewportHeight: CGFloat = 1080
         let windowHeight:   CGFloat = viewportHeight + timelinePanelHeight

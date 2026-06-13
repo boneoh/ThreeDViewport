@@ -1045,8 +1045,18 @@ final class TimelineEditorView: NSView {
 
         // ── Keyframe diamonds ─────────────────────────────────────────────────
         let hs = diamondHalfSize
+        // Level-of-detail: dense baked tracks (e.g. a Spin/Orbit over a long timeline
+        // at a high keyframes/rev) can hold thousands of keyframes per lane that
+        // collapse into a solid bar.  Painting an NSBezierPath per keyframe is the
+        // dominant draw cost, so on each lane we skip diamonds closer than
+        // `minDiamondSpacing` px to the previous drawn one — except the selected /
+        // multi-selected ones, which always draw so they stay findable.  The result is
+        // visually identical (still reads as a bar) but caps the painted diamond count
+        // to ~lane width / spacing regardless of how many keyframes the track holds.
+        let minDiamondSpacing: CGFloat = 3
         for (ti, row) in tracks.enumerated() {
             let cy = laneCenter(ti)
+            var lastDrawnX = -CGFloat.greatestFiniteMagnitude
             for (ki, kfTime) in keyframeTimes(for: row.ref).enumerated() {
                 let cx = timeToX(kfTime)
                 guard cx >= labelWidth - hs && cx <= w + hs else { continue }
@@ -1055,6 +1065,10 @@ final class TimelineEditorView: NSView {
                 let isMultiSelected = multiSelectedDiamonds.count >= 2 &&
                                       multiSelectedDiamonds.contains(
                                           SelectedDiamond(trackIndex: ti, kfIndex: ki))
+
+                // LOD skip — keep selected / multi-selected diamonds always visible.
+                if !(isSelected || isMultiSelected), cx - lastDrawnX < minDiamondSpacing { continue }
+                lastDrawnX = cx
 
                 // True when this camera-track keyframe is a follow keyframe.
                 let isFollowKeyframe: Bool = {

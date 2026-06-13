@@ -145,10 +145,11 @@ final class Renderer: NSObject, MTKViewDelegate {
     private var animatedLights:   [LightConfig]     = []
 
     // MARK: - Performance instrumentation
-    // Flip to `true` to log a rolling 1-second average of per-frame CPU encode
-    // time (top of draw → commit), GPU frame time (gpuEndTime − gpuStartTime),
-    // and achieved FPS to the console.  Leave `false` for normal use.
-    static let perfLoggingEnabled = false
+    // Logs a rolling 1-second average of per-frame CPU encode time (top of draw →
+    // commit), GPU frame time (gpuEndTime − gpuStartTime), and achieved FPS to the
+    // console.  Off by default; enable at launch with the `--perf-log` command-line
+    // flag (set in AppDelegate.applicationDidFinishLaunching) — no rebuild needed.
+    static var perfLoggingEnabled = false
     private let perfLock        = NSLock()
     private var perfWindowStart: CFAbsoluteTime = 0
     private var perfFrameCount  = 0
