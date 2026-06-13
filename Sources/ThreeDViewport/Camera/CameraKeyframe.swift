@@ -151,11 +151,15 @@ final class CameraKeyframeTrack {
     // MARK: - Evaluation
 
     /// Returns the interpolated camera state at `time`, or nil if empty.
-    func evaluate(at time: Double) -> CameraKeyframe? {
+    func evaluate(at time: Double, cutoff: Double? = nil) -> CameraKeyframe? {
         guard !keyframes.isEmpty else { return nil }
 
+        // Hold at the last keyframe within `cutoff` (the timeline end) so keyframes
+        // left beyond a shortened duration don't pull the in-range animation.
+        let endKF = cutoff.flatMap { c in keyframes.last(where: { $0.time <= c + 1e-9 }) }
+                    ?? keyframes.last!
         if time <= keyframes.first!.time { return keyframes.first! }
-        if time >= keyframes.last!.time  { return keyframes.last!  }
+        if time >= endKF.time            { return endKF }
 
         for i in 0..<(keyframes.count - 1) {
             let a = keyframes[i]

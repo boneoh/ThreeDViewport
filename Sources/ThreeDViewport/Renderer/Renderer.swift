@@ -1403,7 +1403,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         for object in sceneManager.objects {
             guard let track = object.keyframeTrack,
                   !track.keyframes.isEmpty else { continue }
-            if let delta = track.evaluate(at: timeline.renderTime) {
+            if let delta = track.evaluate(at: timeline.renderTime, cutoff: timeline.duration) {
                 if object.parentIndex != nil {
                     // Hierarchical part: baseTransform is a LOCAL transform, so
                     // the animated result goes into localTransform.
@@ -1418,7 +1418,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             // animated value reaches the renderer through material.opacity.
             // No track keyframes ⇒ no write, so the Inspector slider's static
             // value is preserved on un-animated objects.
-            if let op = track.evaluateOpacity(at: timeline.renderTime) {
+            if let op = track.evaluateOpacity(at: timeline.renderTime, cutoff: timeline.duration) {
                 object.material.opacity = op
             }
         }
@@ -1428,7 +1428,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         // sceneManager.groupTransforms so the render loop can apply it.
         for (gid, track) in sceneManager.groupKeyframeTracks {
             guard !track.keyframes.isEmpty else { continue }
-            if let delta = track.evaluate(at: timeline.renderTime) {
+            if let delta = track.evaluate(at: timeline.renderTime, cutoff: timeline.duration) {
                 sceneManager.groupTransforms[gid] = delta
             }
         }
@@ -1437,7 +1437,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         // The follow override is applied separately in applyCameraFollow(), called
         // after applyHierarchy() so sub-part world transforms are fully up-to-date.
         if let camTrack = camera.keyframeTrack, !camTrack.keyframes.isEmpty {
-            if let state = camTrack.evaluate(at: timeline.renderTime) {
+            if let state = camTrack.evaluate(at: timeline.renderTime, cutoff: timeline.duration) {
                 camera.yaw         = state.yaw
                 camera.pitch       = state.pitch
                 camera.distance    = state.distance
@@ -1462,7 +1462,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                 guard i < lightManager.keyframeTracks.count,
                       let track = lightManager.keyframeTracks[i],
                       !track.keyframes.isEmpty,
-                      let state = track.evaluate(at: timeline.renderTime) else { continue }
+                      let state = track.evaluate(at: timeline.renderTime, cutoff: timeline.duration) else { continue }
                 animatedLights[i].intensity     = state.intensity
                 animatedLights[i].color         = state.color
                 animatedLights[i].position      = state.position
@@ -1475,7 +1475,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                 guard i < lightManager.keyframeTracks.count,
                       let track = lightManager.keyframeTracks[i],
                       !track.keyframes.isEmpty,
-                      let state = track.evaluate(at: timeline.renderTime) else { continue }
+                      let state = track.evaluate(at: timeline.renderTime, cutoff: timeline.duration) else { continue }
                 lightManager.lights[i].intensity     = state.intensity
                 lightManager.lights[i].color         = state.color
                 lightManager.lights[i].position      = state.position

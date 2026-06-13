@@ -137,6 +137,7 @@ final class VideoExporter {
     private let transparentDepthState:    MTLDepthStencilState?
     private let animStart:         Double   // first animation time (seconds); 0 = full timeline
     private let animDuration:      Double   // length of the exported range (seconds)
+    private let timelineDuration:  Double   // full timeline length — cutoff for past-end keyframes
     private let frameRate:         Double
     private let frameTimescale:    Int32   // CMTime timescale (rational, exact for NTSC)
     private let frameTicks:        Int32   // CMTime value advanced per frame
@@ -252,6 +253,7 @@ final class VideoExporter {
         let len        = clampEnd - clampStart
         self.animStart         = len > 0 ? clampStart : 0
         self.animDuration      = len > 0 ? len : timeline.duration
+        self.timelineDuration  = timeline.duration
         self.frameRate         = fps.value
         self.frameTimescale    = fps.timescale
         self.frameTicks        = fps.frameDuration
@@ -1342,7 +1344,7 @@ final class VideoExporter {
         for object in sceneManager.objects {
             guard let track = object.keyframeTrack,
                   !track.keyframes.isEmpty else { continue }
-            if let delta = track.evaluate(at: time) {
+            if let delta = track.evaluate(at: time, cutoff: timelineDuration) {
                 if object.parentIndex != nil {
                     // Hierarchical part: baseTransform is a LOCAL transform; write
                     // localTransform and let applyHierarchy() below compute world transform.
@@ -1354,7 +1356,7 @@ final class VideoExporter {
             }
             // Opacity rides on the same keyframes — mirror the live Renderer's
             // applyAnimation so exported frames fade identically to the preview.
-            if let op = track.evaluateOpacity(at: time) {
+            if let op = track.evaluateOpacity(at: time, cutoff: timelineDuration) {
                 object.material.opacity = op
             }
         }
@@ -1374,7 +1376,7 @@ final class VideoExporter {
         // sceneManager.groupTransforms so renderFrame can apply it.
         for (gid, track) in sceneManager.groupKeyframeTracks {
             guard !track.keyframes.isEmpty else { continue }
-            if let delta = track.evaluate(at: time) {
+            if let delta = track.evaluate(at: time, cutoff: timelineDuration) {
                 sceneManager.groupTransforms[gid] = delta
             }
         }
@@ -1384,7 +1386,7 @@ final class VideoExporter {
         // animation correctly.  CameraController is NOT ObservableObject, so
         // writing its properties from the export background queue is safe.
         if let camTrack = camera.keyframeTrack, !camTrack.keyframes.isEmpty {
-            if let state = camTrack.evaluate(at: time) {
+            if let state = camTrack.evaluate(at: time, cutoff: timelineDuration) {
                 camera.yaw         = state.yaw
                 camera.pitch       = state.pitch
                 camera.distance    = state.distance
@@ -1419,7 +1421,7 @@ final class VideoExporter {
             guard i < lightManager.keyframeTracks.count,
                   let track = lightManager.keyframeTracks[i],
                   !track.keyframes.isEmpty else { continue }
-            if let state = track.evaluate(at: time) {
+            if let state = track.evaluate(at: time, cutoff: timelineDuration) {
                 exportLights[i].intensity     = state.intensity
                 exportLights[i].color         = state.color
                 exportLights[i].position      = state.position

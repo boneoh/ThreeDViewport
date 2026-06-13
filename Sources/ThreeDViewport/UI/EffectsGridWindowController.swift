@@ -12,7 +12,9 @@ final class EffectsGridWindowController: NSWindowController {
     init(state: EffectsGridState) {
         self.state = state
 
-        let panelRect = NSRect(x: 0, y: 0, width: 500, height: 420)
+        // Wider default so the flexible name column (~180→~270px) shows longer
+        // part names like "methane-ocean-ceramic" without truncating.
+        let panelRect = NSRect(x: 0, y: 0, width: 590, height: 420)
         let hosting = NSHostingView(rootView: EffectsGridPanel(state: state))
         hosting.autoresizingMask = [.width, .height]
 
@@ -27,7 +29,7 @@ final class EffectsGridWindowController: NSWindowController {
         panel.level                  = .normal
         panel.becomesKeyOnlyIfNeeded = false
         panel.hidesOnDeactivate      = false
-        panel.minSize                = NSSize(width: 380, height: 200)
+        panel.minSize                = NSSize(width: 470, height: 200)
         panel.contentView            = hosting
 
         super.init(window: panel)

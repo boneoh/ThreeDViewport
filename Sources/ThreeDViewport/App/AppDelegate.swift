@@ -4585,23 +4585,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // Sub-objects belong to groups and are managed through the Timeline Editor.
         let parents = scene.rootObjectIndicesSorted   // already filtered + sorted
 
-        if parents.isEmpty {
+        // One entry per model: collapse a multi-part model's roots (a flat group whose
+        // parts are all parentIndex == nil) to a single "Delete <model>" entry, since
+        // removing any part deletes the whole model.  Single objects stay individual.
+        var seenGroups = Set<Int>()
+        var entries: [(name: String, idx: Int)] = []
+        for idx in parents {
+            let obj = scene.objects[idx]
+            if let gid = obj.groupID, !seenGroups.insert(gid).inserted { continue }
+            entries.append((scene.displayName(for: obj), idx))
+        }
+        entries.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+
+        if entries.isEmpty {
             let empty = NSMenuItem(title: "No Objects", action: nil, keyEquivalent: "")
             empty.isEnabled = false
             menu.addItem(empty)
         } else {
-            for idx in parents {
-                let obj  = scene.objects[idx]
-                // Use the canonical display name (group name for models, numbered
-                // "cube 2" for duplicate single-mesh objects) so duplicates are
-                // distinguishable — matching the Timeline grid and dropdowns.
+            for e in entries {
                 let item = NSMenuItem(
-                    title: scene.displayName(for: obj),
+                    title: e.name,
                     action: #selector(confirmRemoveObject(_:)),
                     keyEquivalent: ""
                 )
                 item.target = self
-                item.tag    = idx   // index of the root object in sceneManager.objects
+                item.tag    = e.idx   // a root object of the model/object
                 menu.addItem(item)
             }
         }

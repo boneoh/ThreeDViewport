@@ -97,15 +97,21 @@ final class KeyframeTrack {
     // MARK: - Evaluation
 
     // Returns the interpolated matrix at the given time, or nil if no keyframes.
-    func evaluate(at time: Double) -> matrix_float4x4? {
+    func evaluate(at time: Double, cutoff: Double? = nil) -> matrix_float4x4? {
         if keyframes.isEmpty {
             print("[DEBUG] KeyframeTrack: evaluate called but keyframes array is empty")
             return nil
         }
 
-        // Clamp to first / last keyframe
+        // Keyframes beyond the timeline end (e.g. left behind by "Keep Times" when the
+        // duration was shortened) must not pull the in-range animation: treat the last
+        // keyframe within `cutoff` as the effective end and hold there.
+        let endKF = cutoff.flatMap { c in keyframes.last(where: { $0.time <= c + 1e-9 }) }
+                    ?? keyframes.last!
+
+        // Clamp to first / effective-last keyframe
         if time <= keyframes.first!.time { return makeMatrix(from: keyframes.first!) }
-        if time >= keyframes.last!.time  { return makeMatrix(from: keyframes.last!)  }
+        if time >= endKF.time            { return makeMatrix(from: endKF) }
 
         // Find surrounding pair
         for i in 0..<(keyframes.count - 1) {
@@ -210,10 +216,12 @@ final class KeyframeTrack {
     /// has no keyframes.  Uses the same easing mode as the matrix evaluator so
     /// fades follow the same curve shape as the bundled position/rotation/scale.
     /// Result is clamped to [0, 1] (the spline modes can briefly overshoot).
-    func evaluateOpacity(at time: Double) -> Float? {
+    func evaluateOpacity(at time: Double, cutoff: Double? = nil) -> Float? {
         if keyframes.isEmpty { return nil }
+        let endKF = cutoff.flatMap { c in keyframes.last(where: { $0.time <= c + 1e-9 }) }
+                    ?? keyframes.last!
         if time <= keyframes.first!.time { return keyframes.first!.opacity }
-        if time >= keyframes.last!.time  { return keyframes.last!.opacity  }
+        if time >= endKF.time            { return endKF.opacity }
 
         for i in 0..<(keyframes.count - 1) {
             let a = keyframes[i]
