@@ -101,11 +101,37 @@ final class TimelineEditorView: NSView {
             timeSubscription?.cancel()
             timeSubscription = timeline?.$currentTime
                 .receive(on: RunLoop.main)
-                .sink { [weak self] _ in self?.needsDisplay = true }
+                .sink { [weak self] _ in self?.playheadTick() }
         }
     }
     /// Cancellable for the currentTime subscription; lives as long as the view.
     private var timeSubscription: AnyCancellable?
+
+    // Redraw coalescing for the playhead.  Redrawing all lanes is the dominant
+    // main-thread cost with a complex scene, so during PLAYBACK we cap the
+    // timeline's redraw rate (the playhead still reads smooth at ~12 Hz).  While
+    // paused/scrubbing every tick redraws so dragging the playhead stays crisp.
+    private var lastPlaybackRedraw: CFTimeInterval = 0
+    private let playbackRedrawInterval: CFTimeInterval = 1.0 / 12.0
+
+    private func playheadTick() {
+        if timeline?.isPlaying == true {
+            let now = CFAbsoluteTimeGetCurrent()
+            if now - lastPlaybackRedraw < playbackRedrawInterval { return }
+            lastPlaybackRedraw = now
+        }
+        needsDisplay = true
+    }
+
+    // Cached lane model from buildTracks().  Rebuilt only when the scene STRUCTURE
+    // changes (objects/lights/emitters added·removed·renamed, group/bundle nesting,
+    // expand/collapse) — never when the playhead moves — so playback redraws skip
+    // the expensive rebuild (sorting + per-row displayName/groupName lookups).
+    private var cachedTrackList: TrackList?
+
+    /// Drop the cached lane model so the next buildTracks() rebuilds it.  Called at
+    /// every structural-change point (see updateWindowHeight, expand/collapse, rename).
+    func invalidateTrackCache() { cachedTrackList = nil }
 
     weak var sceneManager: SceneManager?
     weak var camera:       CameraController?
@@ -512,7 +538,16 @@ final class TimelineEditorView: NSView {
     /// lights are all folded into one A→Z list.  Multi-part models appear as a
     /// single collapsible header row (sorted by group name); expanding it shows
     /// per-part rows sorted A→Z directly beneath the header.
+    /// Returns the lane model, rebuilding it only when the cache was invalidated
+    /// by a structural change.  Cheap on the hot path (playback / scrub redraws).
     private func buildTracks() -> TrackList {
+        if let cached = cachedTrackList { return cached }
+        let list = rebuildTrackList()
+        cachedTrackList = list
+        return list
+    }
+
+    private func rebuildTrackList() -> TrackList {
         let objects    = sceneManager?.objects ?? []
         let lightCount = lightManager?.lights.count ?? 0
         let emitters   = particleManager?.emitters ?? []
@@ -1759,6 +1794,7 @@ final class TimelineEditorView: NSView {
         sm.importBundles[bid] = newName
         NSApp.sendAction(#selector(AppDelegate.markDirtyFromUI), to: nil, from: self)
         rebuildEasingPopups()
+        invalidateTrackCache()   // header name feeds the lane model + its sort order
         needsDisplay = true
     }
 

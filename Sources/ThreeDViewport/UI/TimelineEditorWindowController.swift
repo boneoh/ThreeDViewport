@@ -264,6 +264,10 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
     func updateWindowHeight() {
         guard let panel = window else { return }
 
+        // Called after every structural scene change (model/light/emitter add·remove,
+        // delete, import, glue…) — so the cached lane model must be rebuilt.
+        editorView.invalidateTrackCache()
+
         let numTracks     = editorView.visibleTrackCount
         let newContentH   = Self.contentHeight(for: numTracks)
 
