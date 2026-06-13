@@ -3368,19 +3368,12 @@ final class ViewportView: MTKView {
                 return
 
             case KC.c:
-                // C — Camera mode.  In Scene mode it toggles between the scene
-                // Camera and the Director POV (the second viewpoint that
-                // exists only in Scene mode).  Outside Scene mode it just
-                // sets Camera as before.  Director has no timeline lane, so
-                // onControlModeChanged is not broadcast for that branch.
-                if sceneModeActive && controlMode == .camera {
-                    controlMode = .director
-                    syncOverlayState()
-                } else {
-                    controlMode = .camera
-                    syncOverlayState()
-                    onControlModeChanged?(.camera)
-                }
+                // C — Camera mode.  (Director POV is now reached with D; C no longer
+                // toggles into it.)  In Scene mode this targets the scene camera for
+                // posing while the view stays through the Director.
+                controlMode = .camera
+                syncOverlayState()
+                onControlModeChanged?(.camera)
                 return
 
             case KC.l:

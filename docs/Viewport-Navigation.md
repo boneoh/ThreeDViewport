@@ -47,7 +47,8 @@ keyframed scene camera. The Director is never keyframed or exported.
 - **D** jumps straight to the Director POV from any mode: it enters Scene mode if
   needed, switches to the Director if you're on the scene Camera, and is ignored if
   you're already in the Director. (Unlike S, D never exits Scene mode.)
-- **C** toggles between the scene **Camera** and the **Director** while in Scene mode.
+- **C** selects the scene **Camera** (in Scene mode, targets it for posing while the
+  view stays through the Director); **D** selects the **Director**.
 
 - **1–6** snap the Director to Front / Left / Rear / Right / Top / Bottom of the
   selected object's group (object-relative).
