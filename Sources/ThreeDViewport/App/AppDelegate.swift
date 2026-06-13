@@ -207,6 +207,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         viewport.onCycleMark   = { [weak self] step in self?.cycleMark(by: step) }
         viewport.onDeleteMark  = { [weak self] in self?.deleteSelectedMark() }
         viewport.onCameraEdited = { [weak self] in self?.markDirty() }
+        viewport.onProbeEdited  = { [weak self] in self?.markDirty() }
         viewport.sceneManager.onSelectionChanged = { [weak self, weak viewport] in
             guard let self, let viewport else { return }
             let selected = viewport.sceneManager.selectedObject

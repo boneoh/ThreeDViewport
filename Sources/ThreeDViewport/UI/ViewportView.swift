@@ -12,6 +12,7 @@ enum ControlMode {
     case object   // individual part
     case model    // all parts of a group move as one rigid body
     case director // Scene-mode only: arrow keys / mouse navigate the Director POV
+    case probe    // move the bake Probe (mouse drag / arrow keys / wheel)
 
     var displayName: String {
         switch self {
@@ -20,6 +21,7 @@ enum ControlMode {
         case .object:   return "Object"
         case .model:    return "Model"
         case .director: return "Director"
+        case .probe:    return "Probe"
         }
     }
 }
@@ -126,9 +128,9 @@ final class ViewportView: MTKView {
     private func updateMotionVectorTarget() {
         guard showMotionVectors else { renderer?.motionVectorTarget = .none; return }
         switch controlMode {
-        case .camera, .director: renderer?.motionVectorTarget = .camera
-        case .light:             renderer?.motionVectorTarget = .light
-        case .object, .model:    renderer?.motionVectorTarget = .object
+        case .camera, .director, .probe: renderer?.motionVectorTarget = .camera
+        case .light:                     renderer?.motionVectorTarget = .light
+        case .object, .model:            renderer?.motionVectorTarget = .object
         }
     }
 
@@ -206,6 +208,10 @@ final class ViewportView: MTKView {
     /// Fires when the user edits the camera from the Camera panel (e.g. Target).
     /// AppDelegate wires this to mark the document dirty.
     var onCameraEdited: (() -> Void)?
+
+    /// Fires when the Probe is moved in Probe mode (drag / arrows / wheel).
+    /// AppDelegate wires this to mark the document dirty (probe position is saved).
+    var onProbeEdited: (() -> Void)?
 
     // Probe-mark key actions, wired by AppDelegate (which owns the prompt + dirty).
     var onToggleMarks: (() -> Void)?
@@ -642,7 +648,7 @@ final class ViewportView: MTKView {
     /// of truth for "which timeline lane is active", reused by setControlMode and
     /// emitCurrentControlMode.
     /// The TrackRef matching the current control mode + selection, or nil for
-    /// `.director` (the Director POV is not a timeline track).
+    /// `.director` / `.probe` (neither is a timeline track).
     var currentTrackRef: TrackRef? {
         switch controlMode {
         case .camera: return .camera
@@ -652,7 +658,7 @@ final class ViewportView: MTKView {
             // The group header lane when the selection belongs to a group.
             if let gid = sceneManager.selectedGroupID { return .group(gid) }
             return .object(sceneManager.selectedIndex)
-        case .director:
+        case .director, .probe:
             return nil
         }
     }
@@ -711,6 +717,8 @@ final class ViewportView: MTKView {
             }
         case .director:
             overlayState.selectedItemName = "POV"
+        case .probe:
+            overlayState.selectedItemName = "Probe"
         }
         // Solo aids (Scene mode) — show a marker so it's clear the others are
         // hidden by solo, not actually removed from the scene.
@@ -735,6 +743,18 @@ final class ViewportView: MTKView {
                            SIMD3<Float>(repeating: -100),
                            SIMD3<Float>(repeating:  100))
         obj.transform.columns.3 = SIMD4<Float>(c.x, c.y, c.z, p.w)
+    }
+
+    /// Moves the bake Probe by a world-space delta (Probe mode), clamped to the
+    /// Probe inspector's ±100 range, and flags the project dirty (the probe position
+    /// is persisted).  Movement is camera-relative at the call sites, so it follows
+    /// the scene camera in normal view and the Director POV in Scene mode.
+    private func moveProbe(by delta: SIMD3<Float>) {
+        let p = probeConfig.position + delta
+        probeConfig.position = simd_clamp(p,
+                                          SIMD3<Float>(repeating: -100),
+                                          SIMD3<Float>(repeating:  100))
+        onProbeEdited?()
     }
 
     private func syncLocalTransform(_ obj: SceneObject) {
@@ -2521,6 +2541,24 @@ final class ViewportView: MTKView {
                 break
             }
 
+        } else if controlMode == .probe {
+            // Probe mode: axis-locked, camera-relative translation of the bake Probe
+            // (same feel as Object mode).  viewCamera is the Director in Scene mode,
+            // the scene camera otherwise.
+            if dragLockAxis == .none {
+                dragAccumX += dx
+                dragAccumY += dy
+                let dist = (dragAccumX * dragAccumX + dragAccumY * dragAccumY).squareRoot()
+                guard dist >= dragLockThreshold else { return }
+                dragLockAxis = abs(dragAccumX) >= abs(dragAccumY) ? .horizontal : .vertical
+            }
+            let scale = viewCamera.distance * 0.001
+            switch dragLockAxis {
+            case .horizontal: moveProbe(by: viewCamera.rightVector * (dx * scale))
+            case .vertical:   moveProbe(by: viewCamera.upVector    * (dy * scale))
+            case .none:       return
+            }
+
         } else if controlMode == .director {
             // Director POV: axis-locked pan of the viewpoint (Scene mode only).
             if dragLockAxis == .none {
@@ -2793,6 +2831,9 @@ final class ViewportView: MTKView {
         case .director:
             // Director POV (Scene mode only): free-look the viewpoint.
             director.freeLook(deltaYaw: -dx * sensitivity, deltaPitch: dy * sensitivity)
+
+        case .probe:
+            break   // the Probe is a point — nothing to rotate
         }
     }
 
@@ -2903,6 +2944,13 @@ final class ViewportView: MTKView {
             return
         }
 
+        // Probe mode: scroll pushes the Probe along the view's depth (forward) axis.
+        if controlMode == .probe, !timeline.isPlaying {
+            let move = delta * viewCamera.distance * 0.05
+            moveProbe(by: viewCamera.forwardVector * move)
+            return
+        }
+
         guard controlMode == .object,
               !timeline.isPlaying,
               let obj = sceneManager.selectedObject ?? sceneManager.primaryObject
@@ -2966,8 +3014,8 @@ final class ViewportView: MTKView {
             times = idx < sceneManager.objects.count
                 ? (sceneManager.objects[idx].keyframeTrack?.keyframes.map { $0.time } ?? [])
                 : []
-        case .director:
-            // The Director POV has no keyframe track.
+        case .director, .probe:
+            // The Director POV / Probe have no keyframe track.
             times = []
         }
         guard !times.isEmpty else { return }
@@ -3103,6 +3151,15 @@ final class ViewportView: MTKView {
             } else {
                 translateGroup(parts, by: (right * dxF + up * dyF) * translateStep)
             }
+
+        case .probe:
+            // Camera-relative move in the screen plane; Shift+↑/↓ pushes along depth
+            // (view forward) since the Probe can't rotate.
+            if shift {
+                moveProbe(by: viewCamera.forwardVector * (dyF * translateStep))
+            } else {
+                moveProbe(by: (right * dxF + up * dyF) * translateStep)
+            }
         }
         if !sceneModeActive, let ref = currentTrackRef { autoKeyframeOnEdit(ref) }
     }
@@ -3151,6 +3208,10 @@ final class ViewportView: MTKView {
             } else {
                 translateGroup(parts, by: fwd * (sign * translateStep))
             }
+
+        case .probe:
+            // +/− pushes the Probe along the view's depth (forward) axis.
+            moveProbe(by: fwd * (sign * translateStep))
         }
         if !sceneModeActive, let ref = currentTrackRef { autoKeyframeOnEdit(ref) }
     }
@@ -3165,6 +3226,7 @@ final class ViewportView: MTKView {
         static let c:        UInt16 = 8    // camera mode
         static let l:        UInt16 = 37   // light mode
         static let o:        UInt16 = 31   // object mode / cycle
+        static let t:        UInt16 = 17   // T — Probe mode (move the bake Probe)
         static let p:        UInt16 = 35   // play / pause
         static let r:        UInt16 = 15   // reset object orientation to base
         static let s:        UInt16 = 1    // toggle Scene mode (Director view)
@@ -3253,8 +3315,8 @@ final class ViewportView: MTKView {
                 }
             case .light:
                 addLightKeyframeAtCurrentTime(forLightAt: lightManager.selectedIndex)
-            case .director:
-                break   // Director POV has no keyframes
+            case .director, .probe:
+                break   // Director POV / Probe have no keyframes
             }
             return
         }
@@ -3321,8 +3383,8 @@ final class ViewportView: MTKView {
                     }
                 case .light:
                     addLightKeyframeAtCurrentTime(forLightAt: lightManager.selectedIndex)
-                case .director:
-                    break   // Director POV has no keyframes
+                case .director, .probe:
+                    break   // Director POV / Probe have no keyframes
                 }
                 return
 
@@ -3408,6 +3470,15 @@ final class ViewportView: MTKView {
                 } else {
                     onControlModeChanged?(.object(sceneManager.selectedIndex))
                 }
+                return
+
+            case KC.t:
+                // T — Probe mode: move the bake Probe with drag / arrow keys / wheel.
+                // Reveal the gizmo so it's visible while positioning.  The Probe isn't
+                // a timeline track, so no onControlModeChanged broadcast (like Director).
+                controlMode = .probe
+                probeConfig.isVisible = true
+                syncOverlayState()
                 return
 
             case KC.d:

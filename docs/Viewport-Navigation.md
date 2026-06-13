@@ -15,6 +15,7 @@ HUD (top-left) shows the active mode and selection.
 | **O** | **Object** — move/rotate the selected object. Press again to cycle objects. |
 | **L** | **Light** — move/aim the selected light. Press again to cycle lights. |
 | **M** | **Model** — move/rotate a whole multi-part model group as one unit. |
+| **T** | **Probe** — move the bake [Probe](Probe-Inspector.md) (drag / arrow keys / scroll wheel). Reveals the gizmo. Works in normal view and Scene mode (uses the Director POV). |
 
 You can also select by **clicking the object in the viewport** or clicking a lane in
 the [Timeline Editor](Timeline-Editor.md) — both drive the same selection (HUD,

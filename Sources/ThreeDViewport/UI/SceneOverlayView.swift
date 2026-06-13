@@ -102,6 +102,7 @@ struct SceneOverlayView: View {
         case .object:   return "cube.fill"
         case .model:    return "square.3.layers.3d"
         case .director: return "move.3d"
+        case .probe:    return "scope"
         }
     }
 
@@ -112,6 +113,7 @@ struct SceneOverlayView: View {
         case .object:   return Color(NSColor.systemGreen)
         case .model:    return Color(NSColor.systemOrange)
         case .director: return Color(NSColor.systemPurple)
+        case .probe:    return Color(NSColor.systemTeal)
         }
     }
 }
