@@ -757,6 +757,16 @@ final class ViewportView: MTKView {
         onProbeEdited?()
     }
 
+    /// Depth (dolly) direction for the Probe: the ray from the view's eye THROUGH the
+    /// probe.  Moving along this keeps the probe locked to its on-screen position as it
+    /// goes nearer/farther — unlike the camera's forward axis, which makes an off-centre
+    /// probe drift toward / away from the view centre in perspective.
+    private var probeDepthAxis: SIMD3<Float> {
+        let d   = probeConfig.position - viewCamera.eyePosition
+        let len = simd_length(d)
+        return len > 1e-5 ? d / len : viewCamera.forwardVector
+    }
+
     private func syncLocalTransform(_ obj: SceneObject) {
         guard let parentIdx = obj.parentIndex,
               parentIdx < sceneManager.objects.count else {
@@ -2944,10 +2954,11 @@ final class ViewportView: MTKView {
             return
         }
 
-        // Probe mode: scroll pushes the Probe along the view's depth (forward) axis.
+        // Probe mode: scroll dollies the Probe toward / away along the eye→probe ray,
+        // so it stays locked to its on-screen position (no perspective drift).
         if controlMode == .probe, !timeline.isPlaying {
             let move = delta * viewCamera.distance * 0.05
-            moveProbe(by: viewCamera.forwardVector * move)
+            moveProbe(by: probeDepthAxis * move)
             return
         }
 
@@ -3153,10 +3164,10 @@ final class ViewportView: MTKView {
             }
 
         case .probe:
-            // Camera-relative move in the screen plane; Shift+↑/↓ pushes along depth
-            // (view forward) since the Probe can't rotate.
+            // Camera-relative move in the screen plane; Shift+↑/↓ dollies along the
+            // eye→probe ray (no perspective drift) since the Probe can't rotate.
             if shift {
-                moveProbe(by: viewCamera.forwardVector * (dyF * translateStep))
+                moveProbe(by: probeDepthAxis * (dyF * translateStep))
             } else {
                 moveProbe(by: (right * dxF + up * dyF) * translateStep)
             }
@@ -3210,8 +3221,8 @@ final class ViewportView: MTKView {
             }
 
         case .probe:
-            // +/− pushes the Probe along the view's depth (forward) axis.
-            moveProbe(by: fwd * (sign * translateStep))
+            // +/− dollies the Probe along the eye→probe ray (no perspective drift).
+            moveProbe(by: probeDepthAxis * (sign * translateStep))
         }
         if !sceneModeActive, let ref = currentTrackRef { autoKeyframeOnEdit(ref) }
     }

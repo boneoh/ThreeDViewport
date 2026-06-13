@@ -32,6 +32,12 @@ final class LaserHitSystem {
     /// Keyed by light-slot index; repopulated each frame by updateHits.
     private(set) var hits: [Int: HitInfo] = [:]
 
+    /// Near-origin "dead zone": hits within this fraction of the laser's range are
+    /// ignored, so a laser placed on / near an object (so the beam doesn't appear to
+    /// come from nowhere) doesn't immediately register a hit on that emitter object —
+    /// the beam must travel this far before hits count.
+    private static let beamDeadZoneFraction: Float = 0.1
+
     // MARK: - Particle simulation
 
     private struct Particle {
@@ -137,6 +143,11 @@ final class LaserHitSystem {
         var bestPoint:  SIMD3<Float>? = nil
         var bestDist:   Float         = 0
 
+        // Near-origin dead zone — skip hits in the first fraction of the beam so the
+        // object the laser emerges from doesn't trigger an immediate hit.
+        let minHit   = maxRange * Self.beamDeadZoneFraction
+        let minHitSq = minHit * minHit
+
         // An object stops the laser if it visually occludes it: either it's drawn
         // (isVisible), or it's a depth-only holdout (occludeWhenHidden) — but NOT a
         // transparent holdout (glass), which is excluded from holdout occlusion so
@@ -173,6 +184,7 @@ final class LaserHitSystem {
             let worldHit   = SIMD3<Float>(worldHit4.x, worldHit4.y, worldHit4.z)
             let distSq     = simd_length_squared(worldHit - origin)
 
+            guard distSq >= minHitSq else { continue }   // inside near-origin dead zone
             guard distSq < bestDistSq else { continue }
             bestDistSq = distSq
             bestDist   = sqrt(distSq)
