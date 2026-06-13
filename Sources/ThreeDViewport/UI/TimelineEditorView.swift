@@ -1767,10 +1767,12 @@ final class TimelineEditorView: NSView {
         case .group:         return "Delete Model"
         case .object(let i):
             guard let obj = sceneManager?.objects[safe: i] else { return nil }
-            if obj.isEnvelope         { return "Delete Glued Model" }
-            if obj.parentIndex != nil { return "Delete Member" }
-            if obj.groupID    != nil  { return "Delete Model" }
-            return "Delete Object"
+            if obj.isEnvelope     { return "Delete Glued Model" }
+            // A multi-part model PART has no per-part delete — removing one would take
+            // the whole model.  Delete the model from its own (group header) row.
+            if obj.groupID != nil { return nil }
+            if obj.parentIndex != nil { return "Delete Member" }   // glued-envelope member
+            return "Delete Object"                                 // standalone object
         case .light(let i):
             guard let lm = lightManager, i < lm.lights.count, lm.lights.count > 1 else { return nil }
             return "Delete Light"

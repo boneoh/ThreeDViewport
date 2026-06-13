@@ -116,7 +116,7 @@ final class ViewportView: MTKView {
     /// (camera / light / object) follows the current controlMode + selection.
     private var showMotionVectors = false
 
-    private var controlMode: ControlMode = .camera {
+    private(set) var controlMode: ControlMode = .camera {
         didSet {
             overlayState.controlMode = controlMode
             updateMotionVectorTarget()   // overlay tracks the active entity

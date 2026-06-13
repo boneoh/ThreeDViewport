@@ -2229,8 +2229,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(replaceSelectedModel(_:)) {
-            // Disabled when no object is selected.
-            return viewportView?.sceneManager.selectedObject != nil
+            // All-or-nothing: Replace works on a WHOLE model (Model mode) or a
+            // standalone single object — never an individual part of a multi-part
+            // model (replacing one part swaps the whole group with mismatched names
+            // and corrupts it).  Disabled when no object is selected.
+            guard let vp = viewportView, let sel = vp.sceneManager.selectedObject else { return false }
+            if vp.controlMode == .model { return true }       // whole model
+            return sel.groupID == nil && !sel.isEnvelope      // standalone single object
         }
         if menuItem.action == #selector(addFollowCameraKeyframe(_:)) {
             // Disabled when no model is in the scene (need something to follow).
