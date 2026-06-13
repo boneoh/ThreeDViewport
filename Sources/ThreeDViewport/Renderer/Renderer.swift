@@ -311,18 +311,17 @@ final class Renderer: NSObject, MTKViewDelegate {
         depthDesc.isDepthWriteEnabled  = true
         depthStencilState = device.makeDepthStencilState(descriptor: depthDesc)
 
-        // Transparent depth state — test AND write.  For a single closed mesh
-        // we need depth writes so the front-facing triangles occlude the
-        // back-facing ones; with depth-write off, back faces drawn later in
-        // the index buffer composite over the front faces and the surface
-        // breaks into diagonal seams.  The cost is that two transparent
-        // objects which *intersect* will clip at the crossing — but our
-        // back-to-front sort already handles non-intersecting overlap
-        // correctly, and intersecting transparent objects need OIT to look
-        // right regardless of how depth is configured.
+        // Transparent depth state — test but do NOT write.  Transparent geometry is
+        // drawn in two passes (back faces, then front faces — see
+        // encodeTransparentGeometry) so a closed/convex mesh composites correctly
+        // without a per-triangle sort.  With depth-write off the two layers blend in
+        // submission order instead of one occluding the other by index-buffer luck
+        // (the old depth-write-on approach made the result view-angle dependent).
+        // The depth TEST (.less) still clips transparent fragments behind opaque
+        // geometry.  Intersecting transparent objects still need OIT to be exact.
         let tDepthDesc = MTLDepthStencilDescriptor()
         tDepthDesc.depthCompareFunction = .less
-        tDepthDesc.isDepthWriteEnabled  = true
+        tDepthDesc.isDepthWriteEnabled  = false
         transparentDepthState = device.makeDepthStencilState(descriptor: tDepthDesc)
 
         // (Background + skybox pipelines now built in ScenePipeline.)
@@ -531,26 +530,43 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
 
     /// Encodes transparent (alpha-blended) geometry with the transparent pipeline.
+    ///
+    /// Two passes: all **back** faces first (cull front), then all **front** faces
+    /// (cull back).  For a closed/convex mesh this draws its two transparent layers
+    /// in back-to-front order automatically, so a glass cube / sphere composites
+    /// correctly from any angle without a per-triangle depth sort.  The transparent
+    /// depth state has depth-write off, so the layers blend in submission order.
     private func encodeTransparentGeometry(_ objects: [SceneObject], into encoder: MTLRenderCommandEncoder) {
         guard !objects.isEmpty,
               let tP = transparentPipelineState, let tDS = transparentDepthState else { return }
-        SceneGeometryEncoder.encode(
-            into:            encoder,
-            objects:         objects,
-            groupTransforms: sceneManager.groupTransforms,
-            lightUniforms:   lightManager.buildLightUniforms(from: animatedLights),
-            context: SceneGeometryEncoder.Context(
-                viewProjection:    viewCamera.viewProjectionMatrix,
-                eyePosition:       viewCamera.eyePosition,
-                pipelineState:     tP,
-                depthStencilState: tDS,
-                colorMode:         colorMode,
-                isWireframe:       isWireframe,
-                exposure:          colorGradeSettings?.exposure ?? 1.0,
-                ibl:               ibl,
-                dummyUV:           dummyUVBuffer,
-                dummyTangent:      dummyTangentBuffer,
-                dummy2D:           dummyEquirect))
+
+        let lightUniforms = lightManager.buildLightUniforms(from: animatedLights)
+        let context = SceneGeometryEncoder.Context(
+            viewProjection:    viewCamera.viewProjectionMatrix,
+            eyePosition:       viewCamera.eyePosition,
+            pipelineState:     tP,
+            depthStencilState: tDS,
+            colorMode:         colorMode,
+            isWireframe:       isWireframe,
+            exposure:          colorGradeSettings?.exposure ?? 1.0,
+            ibl:               ibl,
+            dummyUV:           dummyUVBuffer,
+            dummyTangent:      dummyTangentBuffer,
+            dummy2D:           dummyEquirect)
+
+        // Pass 1: back faces (cull front).  Pass 2: front faces (cull back).
+        for cull in [MTLCullMode.front, MTLCullMode.back] {
+            encoder.setCullMode(cull)
+            SceneGeometryEncoder.encode(
+                into:            encoder,
+                objects:         objects,
+                groupTransforms: sceneManager.groupTransforms,
+                lightUniforms:   lightUniforms,
+                context:         context)
+        }
+        // Restore the default no-cull state for any later draws in this encoder
+        // (gizmos, scene widgets, overlays) that don't set their own cull mode.
+        encoder.setCullMode(.none)
     }
 
     func draw(in view: MTKView) {
