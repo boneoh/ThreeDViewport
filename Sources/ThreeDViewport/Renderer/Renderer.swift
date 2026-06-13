@@ -841,7 +841,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         // the beam and the translucent glass composites over it.
         // Pass all objects; nearestHit decides what occludes (visible OR opaque
         // holdout), so the laser is stopped by held-out geometry in FX passes too.
-        laserHitSystem.updateHits(lights: animatedLights, objects: sceneManager.objects)
+        laserHitSystem.updateHits(lights: animatedLights, objects: sceneManager.objects,
+                                  groupTransforms: sceneManager.groupTransforms)
         laserHitSystem.updateParticles(dt: dt)
         sceneCtx.sparkGPUData = laserHitSystem.buildSparkGPUData()
 

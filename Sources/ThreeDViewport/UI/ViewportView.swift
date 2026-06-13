@@ -877,26 +877,21 @@ final class ViewportView: MTKView {
         let parts = groupParts()
         guard !parts.isEmpty else { return }
 
-        // Orientation reference: the group root (parentIndex == nil), else the
-        // selected object.  Its rendered world rotation gives the local axes.
-        let root   = parts.first(where: { $0.parentIndex == nil }) ?? parts[0]
-        let groupT = root.groupID.flatMap { sceneManager.groupTransforms[$0] }
-                   ?? matrix_identity_float4x4
-        let world  = groupT * root.transform
-        let localRight = simd_normalize(SIMD3<Float>(world.columns.0.x, world.columns.0.y, world.columns.0.z))
-        let localUp    = simd_normalize(SIMD3<Float>(world.columns.1.x, world.columns.1.y, world.columns.1.z))
-        let localFwd   = simd_normalize(SIMD3<Float>(world.columns.2.x, world.columns.2.y, world.columns.2.z))
-
-        // Eye direction (object centre → camera).  This model's front is +Z, right
-        // is +X, up is +Y.  Flip a pair here if a model reads reversed.
+        // Look along WORLD axes (not the object's local axes), so a standard view is
+        // always aligned to world front / side / top regardless of how the selected
+        // object is rotated.  Because the Director is then world-aligned, a
+        // POV-relative drag moves along a single WORLD axis (horizontal/vertical) with
+        // the wheel on the third — exact placement.  We still frame the selected
+        // object (centre + size below); only the viewing DIRECTION is world-aligned.
+        // eyeDir is the object-centre → camera direction.
         let eyeDir: SIMD3<Float>
         switch view {
-        case .front:  eyeDir =  localFwd
-        case .rear:   eyeDir = -localFwd
-        case .right:  eyeDir =  localRight
-        case .left:   eyeDir = -localRight
-        case .top:    eyeDir =  localUp
-        case .bottom: eyeDir = -localUp
+        case .front:  eyeDir = SIMD3<Float>( 0,  0,  1)
+        case .rear:   eyeDir = SIMD3<Float>( 0,  0, -1)
+        case .right:  eyeDir = SIMD3<Float>( 1,  0,  0)
+        case .left:   eyeDir = SIMD3<Float>(-1,  0,  0)
+        case .top:    eyeDir = SIMD3<Float>( 0,  1,  0)
+        case .bottom: eyeDir = SIMD3<Float>( 0, -1,  0)
         }
 
         let (center, radius) = groupWorldBounds(parts)

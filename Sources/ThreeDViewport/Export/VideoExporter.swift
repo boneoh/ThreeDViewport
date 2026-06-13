@@ -567,7 +567,8 @@ final class VideoExporter {
                 // Pass all objects; nearestHit decides what occludes (visible OR
                 // opaque holdout), so held-out geometry stops the laser in FX passes.
                 self.laserHitSystem.updateHits(lights: self.exportLights,
-                                               objects: self.sceneManager.objects)
+                                               objects: self.sceneManager.objects,
+                                               groupTransforms: self.sceneManager.groupTransforms)
                 self.laserHitSystem.updateParticles(dt: frameDt)
                 let sparkGPUData = self.laserHitSystem.buildSparkGPUData()
 

@@ -14,7 +14,7 @@ import simd
 // a long thin rod, a complex mesh — without needing triangle-level intersection.
 //
 // Usage per frame:
-//   updateHits(lights:objects:)   — detect hits
+//   updateHits(lights:objects:groupTransforms:)   — detect hits
 //   updateParticles(dt:)          — advance / emit particles
 //   buildSparkGPUData()           — produce [SparkParticleGPU] for the GPU
 
@@ -49,7 +49,8 @@ final class LaserHitSystem {
     // MARK: - Public API
 
     /// Tests every active laser against all visible objects and stores results in `hits`.
-    func updateHits(lights: [LightConfig], objects: [SceneObject]) {
+    func updateHits(lights: [LightConfig], objects: [SceneObject],
+                    groupTransforms: [Int: matrix_float4x4]) {
         hits.removeAll(keepingCapacity: true)
         for (i, laser) in lights.enumerated() {
             guard laser.type == .laser, laser.isEnabled else { continue }
@@ -58,6 +59,7 @@ final class LaserHitSystem {
             if let (hitPoint, hitDist) = nearestHit(origin:    origin,
                                                     direction: dir,
                                                     objects:   objects,
+                                                    groupTransforms: groupTransforms,
                                                     maxRange:  laser.range) {
                 hits[i] = HitInfo(point:     hitPoint,
                                   direction: dir,
@@ -128,6 +130,7 @@ final class LaserHitSystem {
     private func nearestHit(origin:    SIMD3<Float>,
                              direction: SIMD3<Float>,
                              objects:   [SceneObject],
+                             groupTransforms: [Int: matrix_float4x4],
                              maxRange:  Float) -> (SIMD3<Float>, Float)? {
 
         var bestDistSq: Float         = maxRange * maxRange
@@ -143,9 +146,16 @@ final class LaserHitSystem {
         for obj in objects where obj.isVisible
             || (obj.occludeWhenHidden
                 && !(obj.material.opacity < 1.0 || obj.material.baseColorFactor.w < 1.0)) {
+            // Full world transform must match how the object is RENDERED: grouped
+            // parts draw as groupTransforms[gid] * obj.transform, so a moved/rotated
+            // multi-part model would otherwise be hit-tested at its un-grouped origin
+            // and the beam would pass straight through it.
+            let world      = obj.groupID.flatMap { groupTransforms[$0] }
+                                .map { $0 * obj.transform } ?? obj.transform
+
             // Transform the world-space ray into this object's local space.
             // simd_inverse handles arbitrary transforms (rotation, scale, translation).
-            let inv        = simd_inverse(obj.transform)
+            let inv        = simd_inverse(world)
             let lo4        = inv * SIMD4<Float>(origin,    1)
             let ld4        = inv * SIMD4<Float>(direction, 0)
             let localO     = SIMD3<Float>(lo4.x, lo4.y, lo4.z)
@@ -159,7 +169,7 @@ final class LaserHitSystem {
 
             // Reconstruct world-space hit point and measure distance from laser origin
             let localHit   = localO + localD * localT
-            let worldHit4  = obj.transform * SIMD4<Float>(localHit, 1)
+            let worldHit4  = world * SIMD4<Float>(localHit, 1)
             let worldHit   = SIMD3<Float>(worldHit4.x, worldHit4.y, worldHit4.z)
             let distSq     = simd_length_squared(worldHit - origin)
 

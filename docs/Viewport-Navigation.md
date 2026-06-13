@@ -50,8 +50,10 @@ keyframed scene camera. The Director is never keyframed or exported.
 - **C** selects the scene **Camera** (in Scene mode, targets it for posing while the
   view stays through the Director); **D** selects the **Director**.
 
-- **1–6** snap the Director to Front / Left / Rear / Right / Top / Bottom of the
-  selected object's group (object-relative).
+- **1–6** snap the Director to world-aligned Front / Left / Rear / Right / Top /
+  Bottom views, centred on the selected object's group. Because the view is aligned
+  to the world axes, a drag then moves along a single world axis (and the scroll
+  wheel along the third) for precise placement.
 - **7 / 8** solo the selected group (hide others / make them holdout) while posing.
 - **⌘+ / ⌘−** dolly the Director; **⌘R** re-auto-fits it.
 
