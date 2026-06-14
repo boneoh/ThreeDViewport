@@ -2960,8 +2960,12 @@ final class TimelineEditorView: NSView {
             }
             // Keep lock toggles in sync (e.g. after Lock All / Unlock All).
             for b in lockToggles {
-                let want: NSControl.StateValue = locked(b.ref) ? .on : .off
-                if b.button.state != want { b.button.state = want }
+                let isLocked = locked(b.ref)
+                let want: NSControl.StateValue = isLocked ? .on : .off
+                if b.button.state != want {
+                    b.button.state = want
+                    tintLockButton(b.button, locked: isLocked)
+                }
             }
         }
     }
@@ -3068,9 +3072,9 @@ final class TimelineEditorView: NSView {
             btn.imagePosition = .imageOnly
             btn.image          = NSImage(systemSymbolName: "lock.open", accessibilityDescription: "Unlocked")
             btn.alternateImage = NSImage(systemSymbolName: "lock.fill", accessibilityDescription: "Locked")
-            btn.contentTintColor = NSColor(white: 0.75, alpha: 1)
             btn.toolTip       = "Lock this track against edits"
             btn.state         = locked(row.ref) ? .on : .off
+            tintLockButton(btn, locked: locked(row.ref))   // locked = yellow, unlocked = grey
             btn.target        = self
             btn.action        = #selector(lockToggleChanged(_:))
             btn.tag           = trackIndex   // resolved back to a ref via the binding
@@ -3084,6 +3088,11 @@ final class TimelineEditorView: NSView {
         onSetLock?(binding.ref, sender.state == .on)
         rebuildEasingPopups()   // refresh toggle states (a model header cascades to parts)
         needsDisplay = true
+    }
+
+    /// Locked padlock is medium yellow; unlocked stays grey.
+    private func tintLockButton(_ btn: NSButton, locked: Bool) {
+        btn.contentTintColor = locked ? .systemYellow : NSColor(white: 0.75, alpha: 1)
     }
 
     @objc private func easingPopupGroupChanged(_ sender: NSPopUpButton) {
