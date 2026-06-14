@@ -2630,17 +2630,71 @@ final class TimelineEditorView: NSView {
         let baseT = timeline?.currentTime ?? 0
         let maxT  = timeline?.duration ?? Double.infinity
         let sameSource = entries.dropFirst().allSatisfy { $0.ref == entries[0].ref }
+        // Single-source multi-diamond → retarget to the selected lane.
         let targetRef: TrackRef? = (sameSource ? selectedTrackIndex.map { tracks[$0].ref } : nil)
+        // Multi-lane rig (Option B) → map source group's member lanes onto a different
+        // destination group's member lanes (e.g. a duplicated multi-part model).
+        let remap = groupRemap(for: entries, sameSource: sameSource, tracks: tracks)
         for entry in entries {
             let t   = max(0, min(maxT, baseT + entry.timeOffset))
-            let dst = targetRef ?? entry.ref
+            let dst = targetRef ?? remap?[entry.ref] ?? entry.ref
             pasteClip(entry.clip, to: dst, at: t)
         }
         selectedKFIndex = nil
         needsDisplay    = true
         onKeyframePasted?()
-        print("[DEBUG] TimelineEditorView: pasted \(entries.count) keyframe(s)"
-            + (targetRef != nil ? " → selected lane" : " → matched lanes"))
+        let where_ = targetRef != nil ? " → selected lane"
+                   : remap != nil     ? " → destination group"
+                   :                     " → matched lanes"
+        print("[DEBUG] TimelineEditorView: pasted \(entries.count) keyframe(s)" + where_)
+    }
+
+    /// Option B — cross-group rig paste.  When the multi-lane clipboard holds only the
+    /// member lanes of ONE source group (optionally including its group-header lane)
+    /// and the user has selected a DIFFERENT destination group (or one of its members),
+    /// returns a source-lane → destination-lane map.  Members are matched by position
+    /// within the group, so it works even when parts share names (e.g. repeated parts
+    /// in a duplicated model).  Returns nil when the selection isn't such a paste, so
+    /// the caller falls back to pasting each lane back to its own track.
+    private func groupRemap(for entries: [MultiClipEntry],
+                            sameSource: Bool,
+                            tracks: TrackList) -> [TrackRef: TrackRef]? {
+        guard !sameSource, let sm = sceneManager else { return nil }
+
+        // Every copied lane must be an object/group lane of a single source group.
+        var srcGID: Int? = nil
+        for e in entries {
+            let g: Int?
+            switch e.ref {
+            case .object(let i): g = sm.objects[safe: i]?.groupID
+            case .group(let gid): g = gid
+            default: return nil   // a light / fog / etc. — not a single-group rig
+            }
+            guard let gg = g else { return nil }
+            if srcGID == nil { srcGID = gg } else if srcGID != gg { return nil }
+        }
+        guard let sGID = srcGID else { return nil }
+
+        // Destination group comes from the selected lane.
+        guard let ti = selectedTrackIndex, ti < tracks.count else { return nil }
+        let dGID: Int?
+        switch tracks[ti].ref {
+        case .group(let g):  dGID = g
+        case .object(let i): dGID = sm.objects[safe: i]?.groupID
+        default:             dGID = nil
+        }
+        guard let destGID = dGID, destGID != sGID else { return nil }
+
+        // Member indices in array order for each group.
+        let srcMembers  = sm.objects.indices.filter { sm.objects[$0].groupID == sGID }
+        let destMembers = sm.objects.indices.filter { sm.objects[$0].groupID == destGID }
+        guard !destMembers.isEmpty else { return nil }
+
+        var map: [TrackRef: TrackRef] = [.group(sGID): .group(destGID)]
+        for (pos, srcIdx) in srcMembers.enumerated() where pos < destMembers.count {
+            map[.object(srcIdx)] = .object(destMembers[pos])
+        }
+        return map
     }
 
     // MARK: - Copy / Paste

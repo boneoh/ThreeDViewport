@@ -16,6 +16,7 @@ HUD (top-left) shows the active mode and selection.
 | **L** | **Light** — move/aim the selected light. Press again to cycle lights. |
 | **M** | **Model** — move/rotate a whole multi-part model group as one unit. |
 | **T** | **Probe** — move the bake [Probe](Probe-Inspector.md) (drag / arrow keys / scroll wheel). Reveals the gizmo. Works in normal view and Scene mode (uses the Director POV). |
+| **Shift+T** | *(Scene mode)* Fly the **Director to the Probe** — aims at it from your current angle, pulled in close, and reveals the gizmo. Dolly (⌘− / scroll) to fine-tune. |
 
 You can also select by **clicking the object in the viewport** or clicking a lane in
 the [Timeline Editor](Timeline-Editor.md) — both drive the same selection (HUD,
@@ -56,6 +57,8 @@ keyframed scene camera. The Director is never keyframed or exported.
   to the world axes, a drag then moves along a single world axis (and the scroll
   wheel along the third) for precise placement.
 - **7 / 8** solo the selected group (hide others / make them holdout) while posing.
+- **Shift+T** flies the Director to the **Probe** (reveals the gizmo, aims at it from
+  your current angle, close in) — handy for placing the bake Probe.
 - **⌘+ / ⌘−** dolly the Director; **⌘R** re-auto-fits it.
 - **Click an object** to select it as the current model (works in the Director view
   too); **⌥-click** isolates the part. A drag still navigates the Director.

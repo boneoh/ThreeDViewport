@@ -729,6 +729,18 @@ final class ViewportView: MTKView {
         return isLocked(ref)
     }
 
+    /// Gentle audible reminder when an edit is blocked because the track is locked.
+    /// Throttled so a drag (many frames/sec) or a held arrow key (auto-repeat) makes
+    /// one beep, not a stream.
+    private var lastLockBeepTime: TimeInterval = 0
+    private func beepLocked() {
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - lastLockBeepTime > 0.6 {
+            NSSound.beep()
+            lastLockBeepTime = now
+        }
+    }
+
     /// Re-broadcasts the current selection via onControlModeChanged.  Called when
     /// the Timeline Editor opens so it highlights the active lane immediately,
     /// instead of waiting for the next selection change.
@@ -1000,6 +1012,17 @@ final class ViewportView: MTKView {
         director.distance = max(distance, 0.1)
 
         print("[DEBUG] ViewportView: director snapped to \(view)")
+    }
+
+    /// Scene-mode only: aim the Director at the bake Probe from the current viewing
+    /// angle, pulled in close so you can see / fine-tune the Probe.  Reveals the
+    /// gizmo if hidden.  One-shot — dolly (⌘− / scroll) from here to adjust.
+    func snapDirectorToProbe() {
+        guard sceneModeActive else { return }
+        probeConfig.isVisible = true
+        director.target   = probeConfig.position
+        director.distance = 3.0   // "near" — close enough to place the Probe
+        print("[DEBUG] ViewportView: director snapped to Probe")
     }
 
     /// World-space bounding sphere (centre + radius) over `parts` at their current
@@ -2521,7 +2544,7 @@ final class ViewportView: MTKView {
         lastMouseLocation = loc
 
         // Locked track: block translation/rotation edits (space-orbit still allowed).
-        if !isSpaceDown && activeTrackIsLocked { return }
+        if !isSpaceDown && activeTrackIsLocked { beepLocked(); return }
 
         if isSpaceDown {
             // Space+drag: free orbit.  In Scene mode this navigates the Director
@@ -2839,7 +2862,7 @@ final class ViewportView: MTKView {
         let dy  = Float(loc.y - lastMouseLocation.y)
         lastMouseLocation = loc
 
-        if activeTrackIsLocked { return }   // locked track — no rotate
+        if activeTrackIsLocked { beepLocked(); return }   // locked track — no rotate
 
         let sensitivity: Float = 0.005
         switch controlMode {
@@ -2983,7 +3006,7 @@ final class ViewportView: MTKView {
         let delta = Float(event.scrollingDeltaY)
 
         // Locked track: block depth/scale edits (Director/Probe view nav still allowed).
-        if activeTrackIsLocked { return }
+        if activeTrackIsLocked { beepLocked(); return }
 
         // Model mode: scale or push/pull the whole group.
         if controlMode == .model, !timeline.isPlaying {
@@ -3144,7 +3167,7 @@ final class ViewportView: MTKView {
     // (dx, dy) ∈ {(±1, 0), (0, ±1)} — screen-space direction (right = +x, up = +y).
 
     private func applyArrow(dx: Int, dy: Int, shift: Bool) {
-        if activeTrackIsLocked { return }   // locked track — no arrow-key edits
+        if activeTrackIsLocked { beepLocked(); return }   // locked track — no arrow-key edits
 
         let dxF   = Float(dx)
         let dyF   = Float(dy)
@@ -3253,7 +3276,7 @@ final class ViewportView: MTKView {
     /// `+` / `−` keys: depth movement along camera-forward, or scale (with Option).
     /// Camera mode is unaffected by Option.
     private func applyDepthKey(positive: Bool, optionDown: Bool) {
-        if activeTrackIsLocked { return }   // locked track — no +/- depth/scale edits
+        if activeTrackIsLocked { beepLocked(); return }   // locked track — no +/- depth/scale edits
 
         let sign: Float = positive ? 1 : -1
         let fwd = viewCamera.forwardVector
@@ -3408,7 +3431,7 @@ final class ViewportView: MTKView {
 
         // ── Insert key — stamp a keyframe for the current mode / selection ──────
         if kc == KC.insert, !event.isARepeat {
-            if activeTrackIsLocked { return }   // locked track — no keyframe stamp
+            if activeTrackIsLocked { beepLocked(); return }   // locked track — no keyframe stamp
             switch controlMode {
             case .camera:
                 addCameraKeyframeAtCurrentTime()
@@ -3477,7 +3500,7 @@ final class ViewportView: MTKView {
 
             case KC.i:
                 // I — add keyframe at current time (alias for Insert key)
-                if activeTrackIsLocked { return }   // locked track — no keyframe stamp
+                if activeTrackIsLocked { beepLocked(); return }   // locked track — no keyframe stamp
                 switch controlMode {
                 case .camera:
                     addCameraKeyframeAtCurrentTime()
@@ -3581,6 +3604,11 @@ final class ViewportView: MTKView {
                 return
 
             case KC.t:
+                // Shift+T (Scene mode) — fly the Director to the Probe, looking at it.
+                if event.modifierFlags.contains(.shift) {
+                    if sceneModeActive { snapDirectorToProbe() }
+                    return
+                }
                 // T — Probe mode: move the bake Probe with drag / arrow keys / wheel.
                 // Reveal the gizmo so it's visible while positioning.  The Probe isn't
                 // a timeline track, so no onControlModeChanged broadcast (like Director).

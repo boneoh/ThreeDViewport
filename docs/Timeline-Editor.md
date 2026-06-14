@@ -89,6 +89,21 @@ build-a-short-loop-and-fill workflow.
 | **Click ruler** | Scrub the playhead |
 | **Right-click a row** | Context menu — **Delete** (see below); plus paste-channel on a light/fog/particle diamond, and rename / repeat on a bundle header |
 
+### Copy / paste across objects
+
+`⌘C` / `⌘V` retarget depending on what you copied:
+
+- **One lane** (one or many diamonds from a single row) → pastes onto whatever lane is
+  **selected**, at the playhead.
+- **A whole multi-part model's lanes** (diamonds spanning the child rows of one model)
+  → select the **other model** (its header or any of its parts) and paste: each child's
+  keyframes land on the matching part of the destination model, by position. This copies
+  a full animation/spin rig from one model onto a **duplicate** of it — even when parts
+  share names. (Without a destination model selected, a multi-lane paste returns each
+  lane to its own row.)
+- A multi-lane copy that **isn't** a single model's parts (e.g. a light + an object)
+  always pastes back to its own lanes.
+
 ## Delete a row
 
 Right-click any lane and choose **Delete** (a confirmation follows). The label and what
@@ -122,7 +137,8 @@ support per-track easing.
 Each top-level row has a **lock toggle** (padlock) just right of the easing popup.
 When a track is locked it's **frozen against edits**: you can't move / rotate / scale
 it in the viewport, and you can't stamp, drag, delete, or paste its keyframes. Playback
-and export are unaffected — lock only guards editing.
+and export are unaffected — lock only guards editing. Attempting a blocked edit plays
+a gentle **beep** as a reminder.
 
 - A **model** is locked from its header row (it locks the whole model; to adjust a
   child, unlock the model, edit, then re-lock). Model **part** rows have no toggle.

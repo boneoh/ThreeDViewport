@@ -4681,6 +4681,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let vp = viewportView else { return }
         let sm = vp.sceneManager
 
+        // Locked track can't be deleted — both the Timeline right-click ▸ Delete and
+        // Edit ▸ Remove route here.  Gentle beep, like a blocked viewport edit.
+        if vp.isLocked(ref) { NSSound.beep(); return }
+
         let title: String
         let perform: () -> Void
 
@@ -5281,6 +5285,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc private func confirmRemoveAll(_ sender: Any) {
         guard let scene = viewportView?.sceneManager,
               !scene.objects.isEmpty else { return }
+
+        // Don't wipe the scene while anything is locked — beep and bail.  The user
+        // can Unlock All in the Timeline Editor first, then Remove All.
+        if scene.objects.contains(where: { $0.isLocked }) { NSSound.beep(); return }
 
         let alert = NSAlert()
         alert.messageText     = "Remove All Objects?"
