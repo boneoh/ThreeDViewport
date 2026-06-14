@@ -34,6 +34,8 @@ struct LightConfig {
 
     var type:      LightType     = .directional
     var isEnabled: Bool          = true
+    /// Timeline edit lock — frozen against viewport edits + keyframe changes.
+    var isLocked:  Bool          = false
 
     // ── Shared ───────────────────────────────────────────────────────────────
     var color:     SIMD3<Float>  = SIMD3<Float>(1.0, 1.0, 1.0)

@@ -85,6 +85,8 @@ enum ParticleType: Int, CaseIterable {
 // Observable model — owned by ViewportView, read live by Renderer and VideoExporter.
 final class ParticleEffect: ObservableObject {
     @Published var isEnabled: Bool          = false
+    /// Timeline edit lock — frozen against viewport edits + keyframe changes.
+    var isLocked: Bool = false
     @Published var type:      ParticleType  = .rain {
         didSet { if type != oldValue { applyTypeDefaults() } }   // Type acts as a preset.
     }

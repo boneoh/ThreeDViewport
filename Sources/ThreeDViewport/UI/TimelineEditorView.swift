@@ -205,6 +205,17 @@ final class TimelineEditorView: NSView {
     /// document view frame and panel height stay in sync with the visible row count.
     var onLayoutChanged: (() -> Void)?
 
+    // ── Track edit locks (wired to ViewportView.isLocked / setLocked / setAllLocked) ──
+    /// Reads whether a track is locked (for the row lock toggle + edit guards).
+    var lockProvider: ((TrackRef) -> Bool)?
+    /// Sets one track's lock (model headers cascade to parts in the viewport).
+    var onSetLock:    ((TrackRef, Bool) -> Void)?
+    /// Lock / unlock every track (footer Lock All / Unlock All).
+    var onLockAll:    ((Bool) -> Void)?
+
+    /// Convenience: is `ref` currently locked?  False when no provider is wired.
+    private func locked(_ ref: TrackRef) -> Bool { lockProvider?(ref) ?? false }
+
     /// View that receives key events not handled by the timeline editor.
     /// Set to the ViewportView so viewport shortcuts work even when the
     /// Timeline Editor panel has keyboard focus.
@@ -216,7 +227,8 @@ final class TimelineEditorView: NSView {
 
     // ── Layout constants ──────────────────────────────────────────────────────
 
-    private let labelWidth:      CGFloat = 360
+    private let labelWidth:      CGFloat = 384   // includes the lock toggle column (right edge)
+    private let lockToggleW:     CGFloat = 18    // per-row lock toggle, right of the easing popup
     private let rulerHeight:     CGFloat = 24
     private let laneHeight:      CGFloat = 28
     private let diamondHalfSize: CGFloat = 5
@@ -481,6 +493,14 @@ final class TimelineEditorView: NSView {
         let ref:   TrackRef     // either .object(i) or .group(gid)
     }
     private var easingPopups:    [EasingPopupBinding] = []
+
+    /// Per-row lock toggle (open/closed padlock), pinned to the right of the easing
+    /// popup in the frozen label column.  One per lockable top-level row.
+    private struct LockToggleBinding {
+        let button: NSButton
+        let ref:    TrackRef
+    }
+    private var lockToggles:     [LockToggleBinding] = []
     private var lastObjectCount: Int             = -1
     private var lastBounds:      NSRect          = .zero
 
@@ -1258,11 +1278,17 @@ final class TimelineEditorView: NSView {
 
     /// Positions each easing popup's x to follow the frozen label column.
     private func layoutEasingPopups(offsetX: CGFloat) {
-        let baseX = labelWidth - easingPopupW - 3
+        let baseX = labelWidth - lockToggleW - 3 - easingPopupW - 3
         for b in easingPopups {
             var f = b.popup.frame
             let newX = offsetX + baseX
             if abs(f.origin.x - newX) > 0.5 { f.origin.x = newX; b.popup.frame = f }
+        }
+        let lockBaseX = labelWidth - lockToggleW - 3
+        for b in lockToggles {
+            var f = b.button.frame
+            let newX = offsetX + lockBaseX
+            if abs(f.origin.x - newX) > 0.5 { f.origin.x = newX; b.button.frame = f }
         }
     }
 
@@ -1273,6 +1299,9 @@ final class TimelineEditorView: NSView {
         let band = NSRect(x: 0, y: visibleRect.minY, width: bounds.width, height: rulerHeight)
         for b in easingPopups {
             b.popup.isHidden = b.popup.frame.intersects(band)
+        }
+        for b in lockToggles {
+            b.button.isHidden = b.button.frame.intersects(band)
         }
     }
 
@@ -1544,6 +1573,7 @@ final class TimelineEditorView: NSView {
         // Gesture started on a diamond: begin (or continue) moving it.
         if !isDragging {
             guard let ti = selectedTrackIndex, let ki = selectedKFIndex else { return }
+            if locked(tracks[ti].ref) { return }   // locked track — can't drag its keyframes
             let times = keyframeTimes(for: tracks[ti].ref)
             guard ki < times.count else { return }
             isDragging      = true
@@ -1560,6 +1590,7 @@ final class TimelineEditorView: NSView {
                 for d in multiSelectedDiamonds where d != primaryD {
                     guard d.trackIndex < tracks.count else { continue }
                     let dRef   = tracks[d.trackIndex].ref
+                    if locked(dRef) { continue }   // locked track — don't move its keyframes
                     let dTimes = keyframeTimes(for: dRef)
                     guard d.kfIndex < dTimes.count else { continue }
                     multiDragSecondary.append(MultiDragEntry(ref: dRef,
@@ -1848,6 +1879,7 @@ final class TimelineEditorView: NSView {
     /// Writes one clipboard channel into the target keyframe, leaving its other
     /// components untouched.
     private func applyChannelPaste(_ req: ChannelPasteRequest, clipboard clip: CoordinateClipboard) {
+        if locked(req.ref) { return }   // locked track — no keyframe paste
         switch (req.ref, req.channel) {
         case (.light(let i), .position):
             guard let v = clip.position, let lm = lightManager, i < lm.keyframeTracks.count,
@@ -2232,6 +2264,7 @@ final class TimelineEditorView: NSView {
             for d in multiSelectedDiamonds {
                 guard d.trackIndex < tracks.count else { continue }
                 let ref   = tracks[d.trackIndex].ref
+                if locked(ref) { continue }   // locked track — keep its keyframes
                 let times = keyframeTimes(for: ref)
                 guard d.kfIndex < times.count else { continue }
                 toDelete.append((ref, times[d.kfIndex]))
@@ -2248,6 +2281,7 @@ final class TimelineEditorView: NSView {
         // ── Single-select path ────────────────────────────────────────────────
         guard let ti = selectedTrackIndex, let ki = selectedKFIndex else { return }
         let ref = tracks[ti].ref
+        if locked(ref) { return }   // locked track — no keyframe delete
         switch ref {
         case .camera:
             camera?.keyframeTrack?.removeKeyframe(at: ki)
@@ -2318,6 +2352,7 @@ final class TimelineEditorView: NSView {
     private func insertKeyframeInSelectedLane(tracks: TrackList) {
         guard let ti = selectedTrackIndex else { return }
         let ref = tracks[ti].ref
+        if locked(ref) { return }   // locked track — no keyframe stamp
         switch ref {
         case .camera:         onInsertCameraKeyframe?()
         case .object(let i):  onInsertObjectKeyframe?(i)
@@ -2708,6 +2743,7 @@ final class TimelineEditorView: NSView {
         }
         let t   = timeline?.currentTime ?? 0
         let ref = tracks[ti].ref
+        if locked(ref) { return }   // locked track — no keyframe paste
 
         switch (clip, ref) {
 
@@ -2796,6 +2832,7 @@ final class TimelineEditorView: NSView {
     /// Stamps a single ClipboardKeyframe onto the given track at the given time.
     /// Used by the multi-clipboard paste path to avoid duplicating the switch logic.
     private func pasteClip(_ clip: ClipboardKeyframe, to ref: TrackRef, at t: Double) {
+        if locked(ref) { return }   // locked track — no keyframe paste
         switch (clip, ref) {
         case (.camera(let src), .camera):
             if camera?.keyframeTrack == nil { camera?.keyframeTrack = CameraKeyframeTrack() }
@@ -2883,21 +2920,29 @@ final class TimelineEditorView: NSView {
                     b.popup.selectItem(withTag: mode.rawValue)
                 }
             }
+            // Keep lock toggles in sync (e.g. after Lock All / Unlock All).
+            for b in lockToggles {
+                let want: NSControl.StateValue = locked(b.ref) ? .on : .off
+                if b.button.state != want { b.button.state = want }
+            }
         }
     }
 
     private func rebuildEasingPopups() {
         easingPopups.forEach { $0.popup.removeFromSuperview() }
         easingPopups.removeAll()
+        lockToggles.forEach { $0.button.removeFromSuperview() }
+        lockToggles.removeAll()
 
         guard let sm = sceneManager else { return }
 
-        // Layout constants — popup sits in the right portion of the label column.
-        // popupX is the un-scrolled base; layoutEasingPopups() offsets it by the
-        // horizontal scroll so the dropdowns stay pinned to the frozen column.
+        // Layout constants — popup sits in the right portion of the label column,
+        // just LEFT of the per-row lock toggle (which is flush to the column's right
+        // edge).  popupX is the un-scrolled base; layoutEasingPopups() offsets it by
+        // the horizontal scroll so the controls stay pinned to the frozen column.
         let popupW: CGFloat = easingPopupW
         let popupH: CGFloat = 18
-        let popupX: CGFloat = labelOriginX + labelWidth - popupW - 3
+        let popupX: CGFloat = labelOriginX + labelWidth - lockToggleW - 3 - popupW - 3
 
         // Walk the current track list and attach a popup to:
         //   • single-mesh object rows (no groupID) — drives `obj.keyframeTrack`.
@@ -2960,6 +3005,47 @@ final class TimelineEditorView: NSView {
             addSubview(popup)
             easingPopups.append(EasingPopupBinding(popup: popup, ref: row.ref))
         }
+
+        // ── Per-row lock toggles (padlock), flush to the label column's right edge ──
+        // One per lockable TOP-LEVEL row: camera, fog, each light/emitter, standalone
+        // objects, and model/group headers.  Model PART rows are skipped — the model
+        // header locks the whole model.  Import-bundle headers are skipped.
+        let lockW: CGFloat = lockToggleW
+        let lockH: CGFloat = 18
+        let lockX: CGFloat = labelOriginX + labelWidth - lockW - 3
+        for (trackIndex, row) in tracks.enumerated() {
+            switch row.ref {
+            case .object(let i):
+                guard i < sm.objects.count, sm.objects[i].groupID == nil else { continue } // skip parts
+            case .importBundle:
+                continue
+            case .camera, .fog, .light, .particles, .group:
+                break
+            }
+            let lockY = laneTop(trackIndex) + (laneHeight - lockH) / 2
+            let btn = NSButton(frame: NSRect(x: lockX, y: lockY, width: lockW, height: lockH))
+            btn.appearance    = NSAppearance(named: .darkAqua)
+            btn.setButtonType(.toggle)
+            btn.isBordered    = false
+            btn.imagePosition = .imageOnly
+            btn.image          = NSImage(systemSymbolName: "lock.open", accessibilityDescription: "Unlocked")
+            btn.alternateImage = NSImage(systemSymbolName: "lock.fill", accessibilityDescription: "Locked")
+            btn.contentTintColor = NSColor(white: 0.75, alpha: 1)
+            btn.toolTip       = "Lock this track against edits"
+            btn.state         = locked(row.ref) ? .on : .off
+            btn.target        = self
+            btn.action        = #selector(lockToggleChanged(_:))
+            btn.tag           = trackIndex   // resolved back to a ref via the binding
+            addSubview(btn)
+            lockToggles.append(LockToggleBinding(button: btn, ref: row.ref))
+        }
+    }
+
+    @objc private func lockToggleChanged(_ sender: NSButton) {
+        guard let binding = lockToggles.first(where: { $0.button === sender }) else { return }
+        onSetLock?(binding.ref, sender.state == .on)
+        rebuildEasingPopups()   // refresh toggle states (a model header cascades to parts)
+        needsDisplay = true
     }
 
     @objc private func easingPopupGroupChanged(_ sender: NSPopUpButton) {

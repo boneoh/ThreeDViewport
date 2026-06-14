@@ -117,6 +117,18 @@ support per-track easing.
 > Live keyframe **edit mode** (formerly Return / double-click) has been removed —
 > the I / Insert stamp workflow replaces it.
 
+## Lock a track
+
+Each top-level row has a **lock toggle** (padlock) just right of the easing popup.
+When a track is locked it's **frozen against edits**: you can't move / rotate / scale
+it in the viewport, and you can't stamp, drag, delete, or paste its keyframes. Playback
+and export are unaffected — lock only guards editing.
+
+- A **model** is locked from its header row (it locks the whole model; to adjust a
+  child, unlock the model, edit, then re-lock). Model **part** rows have no toggle.
+- The footer has **Lock All** / **Unlock All** to freeze or release every track at once.
+- Lock state is saved with the project.
+
 ## In / Out marks
 
 Like an NLE, the timeline carries an optional **In** and **Out** point that define a
@@ -144,6 +156,6 @@ project can be reused later.
 
 ## Persistence
 
-All tracks, keyframes, and per-track easing modes are saved with the project, along
-with the In / Out points. (The Loop In/Out toggle is a transient playback mode and is
-not saved.)
+All tracks, keyframes, per-track easing modes, and **per-track lock state** are saved
+with the project, along with the In / Out points. (The Loop In/Out toggle is a
+transient playback mode and is not saved.)

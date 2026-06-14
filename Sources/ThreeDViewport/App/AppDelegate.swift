@@ -3857,6 +3857,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             viewport?.renderer?.invalidateAnimationCache()
         }
 
+        // ── Track edit locks ──────────────────────────────────────────────────
+        wc.editorView.lockProvider = { [weak viewport] ref in viewport?.isLocked(ref) ?? false }
+        wc.editorView.onSetLock = { [weak self, weak viewport] ref, locked in
+            viewport?.setLocked(ref, locked)
+            self?.markDirty()
+        }
+        wc.editorView.onLockAll = { [weak self, weak viewport] locked in
+            viewport?.setAllLocked(locked)
+            self?.markDirty()
+            wc.editorView.needsDisplay = true
+        }
+
         // ── Enter edit mode ───────────────────────────────────────────────────
         // Called when the user presses Return on a selected diamond.
         // Save the pose that the keyframe currently stores, seek to its time,

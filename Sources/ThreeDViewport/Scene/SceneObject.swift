@@ -107,6 +107,12 @@ final class SceneObject {
     // existing projects keep their stored value and old pre-v17 files stay off.
     var occludeWhenHidden: Bool = true
 
+    // Timeline edit lock (Timeline Editor).  When true, this object is frozen against
+    // accidental edits: no viewport move/rotate/scale and no keyframe stamp / delete /
+    // drag / paste.  A whole model is locked by setting this on all its parts.
+    // Playback/export are unaffected.
+    var isLocked: Bool = false
+
     // Production role for the "Export All" multi-pass cycle (Model Inspector).
     var objectClass: ObjectClass = .background
 

@@ -152,6 +152,9 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
         NSApp.sendAction(#selector(AppDelegate.markDirtyFromUI), to: nil, from: self)
     }
 
+    @objc private func lockAllAction()   { editorView.onLockAll?(true)  }
+    @objc private func unlockAllAction() { editorView.onLockAll?(false) }
+
     @objc private func toggleLoopInOutAction(_ sender: NSButton) {
         editorView.timeline?.loopInOut = (sender.state == .on)
         NSApp.sendAction(#selector(AppDelegate.markDirtyFromUI), to: nil, from: self)
@@ -213,7 +216,10 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
             button("Set In",  #selector(setInAction),     "Set the In point at the playhead"),
             button("Set Out", #selector(setOutAction),    "Set the Out point at the playhead"),
             button("Clear",   #selector(clearInOutAction), "Clear the In and Out points"),
-            loopToggle
+            loopToggle,
+            NSBox.footerSeparator(),
+            button("Lock All",   #selector(lockAllAction),   "Lock every track against edits"),
+            button("Unlock All", #selector(unlockAllAction), "Unlock every track")
         ])
         stack.orientation = .horizontal
         stack.spacing     = 6

@@ -434,6 +434,7 @@ final class ProjectFile {
             l.beamThickness           = lcd.beamThickness
             l.excludeBeamFromFeedback = lcd.excludeBeamFromFeedback
             l.importBundleID          = bundleID
+            l.isLocked                = lcd.isLocked ?? false
             lm.lights.append(l)
             lm.keyframeTracks.append(nil)
         }
@@ -613,6 +614,7 @@ final class ProjectFile {
                 easingMode:          (obj.keyframeTrack?.easingMode ?? .linear).rawValue,
                 isVisible:           obj.isVisible,
                 occludeWhenHidden:   obj.occludeWhenHidden,
+                isLocked:            obj.isLocked,
                 objectClass:         obj.objectClass.rawValue,
                 feedbackEnabled:     obj.feedbackEnabled,
                 normalMode:          obj.normalMode.rawValue,
@@ -695,7 +697,8 @@ final class ProjectFile {
                 range:                   l.range,
                 beamThickness:           l.beamThickness,
                 excludeBeamFromFeedback: l.excludeBeamFromFeedback,
-                importBundleID:          l.importBundleID
+                importBundleID:          l.importBundleID,
+                isLocked:                l.isLocked
             )
         }
 
@@ -846,7 +849,7 @@ final class ProjectFile {
         }
 
         return ProjectData(
-            version:             35,   // v35: rate-marker schedules (Spin / Orbit)
+            version:             36,   // v36: per-track timeline edit locks
             modelPath:           nil,           // v3+ uses modelPaths instead
             modelPaths:          modelPaths,
             timeline:            timelineData,
@@ -911,7 +914,9 @@ final class ProjectFile {
                                   sourcePath:   sp?.path         ?? "",
                                   insertOffset: sp?.insertOffset ?? 0,
                                   transform:    sp.map { encodeMatrix($0.transform) } ?? [])
-            }
+            },
+            cameraLocked:        vp.cameraLocked,
+            fogLocked:           vp.fogLocked
         )
     }
 
@@ -925,7 +930,7 @@ final class ProjectFile {
             r: fx.color.x, g: fx.color.y, b: fx.color.z,
             particleSize: fx.particleSize, fallSpeed: fx.fallSpeed, streak: fx.streak,
             lifetime: fx.lifetime, growth: fx.growth, baseAlpha: fx.baseAlpha,
-            importBundleID: fx.importBundleID)
+            importBundleID: fx.importBundleID, isLocked: fx.isLocked)
     }
 
     /// Serialises an atmosphere keyframe track (fog or particles) to Codable data.
@@ -965,6 +970,7 @@ final class ProjectFile {
                                              easingMode: Int = 0,
                                              into fx: ParticleEffect) {
         fx.isEnabled = pd.isEnabled
+        fx.isLocked  = pd.isLocked
         fx.type      = ParticleType(rawValue: pd.type) ?? .rain
         fx.position  = SIMD3<Float>(pd.px, pd.py, pd.pz)
         fx.size      = SIMD3<Float>(pd.sx, pd.sy, pd.sz)
@@ -1168,6 +1174,7 @@ final class ProjectFile {
                 l.beamThickness           = lcd.beamThickness
                 l.excludeBeamFromFeedback = lcd.excludeBeamFromFeedback
                 l.importBundleID          = lcd.importBundleID   // Part B
+                l.isLocked                = lcd.isLocked ?? false
                 return l
             }
             // Pad keyframe tracks array to match new light count
@@ -1246,6 +1253,10 @@ final class ProjectFile {
         }
         vp.probeConfig.marksVisible = data.probe.marksVisible ?? false
         vp.probeConfig.isVisible    = data.probe.visible ?? false
+        // Timeline edit locks for the singleton tracks (objects/lights/emitters
+        // restore their own isLocked above).
+        vp.cameraLocked = data.cameraLocked
+        vp.fogLocked    = data.fogLocked
         vp.probeConfig.selectedMarkIndex = nil
         // v28: hot-reload the Lighting HDR from the saved path (bundled if missing).
         vp.renderSettings.lightingHDRPath = data.lightingHDRPath
@@ -1414,6 +1425,7 @@ final class ProjectFile {
         // ── v15: restore Model Inspector state ───────────────────────────────────
         obj.isVisible = saved.isVisible
         obj.occludeWhenHidden = saved.occludeWhenHidden   // v17
+        obj.isLocked = saved.isLocked                     // timeline edit lock
         obj.objectClass = ObjectClass(rawValue: saved.objectClass) ?? .background
         obj.feedbackEnabled = saved.feedbackEnabled
         obj.importBundleID  = saved.importBundleID   // Part B (import overrides this later)

@@ -116,6 +116,11 @@ final class ViewportView: MTKView {
     /// (camera / light / object) follows the current controlMode + selection.
     private var showMotionVectors = false
 
+    // Timeline edit locks for the singleton tracks.  Objects / lights / emitters carry
+    // their own `isLocked`; these cover Camera and Fog.  See isLocked(_:) / setLocked.
+    var cameraLocked = false
+    var fogLocked    = false
+
     private(set) var controlMode: ControlMode = .camera {
         didSet {
             overlayState.controlMode = controlMode
@@ -667,6 +672,61 @@ final class ViewportView: MTKView {
         controlMode = mode
         syncOverlayState()
         if let ref = currentTrackRef { onControlModeChanged?(ref) }
+    }
+
+    // MARK: - Timeline edit locks
+
+    /// Whether the given Timeline track is locked against edits.  A model (group) is
+    /// locked when its parts are locked (set together via the model header).
+    func isLocked(_ ref: TrackRef) -> Bool {
+        switch ref {
+        case .camera: return cameraLocked
+        case .fog:    return fogLocked
+        case .light(let i):
+            return i >= 0 && i < lightManager.lights.count && lightManager.lights[i].isLocked
+        case .particles(let i):
+            guard i >= 0, i < particleManager.emitters.count else { return false }
+            return particleManager.emitters[i].isLocked
+        case .object(let i):
+            return i >= 0 && i < sceneManager.objects.count && sceneManager.objects[i].isLocked
+        case .group(let gid):
+            return sceneManager.objects.first(where: { $0.groupID == gid })?.isLocked ?? false
+        case .importBundle: return false
+        }
+    }
+
+    /// Sets the lock state for a Timeline track.  A model header cascades to all parts.
+    func setLocked(_ ref: TrackRef, _ locked: Bool) {
+        switch ref {
+        case .camera: cameraLocked = locked
+        case .fog:    fogLocked = locked
+        case .light(let i):
+            if i >= 0, i < lightManager.lights.count { lightManager.lights[i].isLocked = locked }
+        case .particles(let i):
+            if i >= 0, i < particleManager.emitters.count { particleManager.emitters[i].isLocked = locked }
+        case .object(let i):
+            if i >= 0, i < sceneManager.objects.count { sceneManager.objects[i].isLocked = locked }
+        case .group(let gid):
+            for obj in sceneManager.objects where obj.groupID == gid { obj.isLocked = locked }
+        case .importBundle: break
+        }
+    }
+
+    /// Locks or unlocks every track (Lock All / Unlock All).
+    func setAllLocked(_ locked: Bool) {
+        cameraLocked = locked
+        fogLocked    = locked
+        for i in lightManager.lights.indices { lightManager.lights[i].isLocked = locked }
+        particleManager.emitters.forEach { $0.isLocked = locked }
+        sceneManager.objects.forEach { $0.isLocked = locked }
+    }
+
+    /// True when the active edit target (current control mode) is a locked track —
+    /// used to block viewport edits.  Director / Probe have no track and are never locked.
+    var activeTrackIsLocked: Bool {
+        guard controlMode != .director, controlMode != .probe,
+              let ref = currentTrackRef else { return false }
+        return isLocked(ref)
     }
 
     /// Re-broadcasts the current selection via onControlModeChanged.  Called when
@@ -1418,6 +1478,7 @@ final class ViewportView: MTKView {
     /// discard it — updating the keyframe under the playhead, or inserting a new one
     /// between keyframes.  No-op otherwise.
     func autoKeyframeOnEdit(_ ref: TrackRef) {
+        if isLocked(ref) { return }   // locked track — no keyframe changes
         let s = AppSettings.shared
         guard s.autoKeyframeUpdateNearby || s.autoKeyframeInsertBetween else { return }
         // Skip rate-driven tracks: their keyframes are regenerated from spin/orbit
@@ -2459,6 +2520,9 @@ final class ViewportView: MTKView {
         let dy  = Float(loc.y - lastMouseLocation.y)
         lastMouseLocation = loc
 
+        // Locked track: block translation/rotation edits (space-orbit still allowed).
+        if !isSpaceDown && activeTrackIsLocked { return }
+
         if isSpaceDown {
             // Space+drag: free orbit.  In Scene mode this navigates the Director
             // (the rendering camera in that mode); otherwise it orbits the scene
@@ -2773,6 +2837,8 @@ final class ViewportView: MTKView {
         let dy  = Float(loc.y - lastMouseLocation.y)
         lastMouseLocation = loc
 
+        if activeTrackIsLocked { return }   // locked track — no rotate
+
         let sensitivity: Float = 0.005
         switch controlMode {
         case .object:
@@ -2913,6 +2979,9 @@ final class ViewportView: MTKView {
 
     override func scrollWheel(with event: NSEvent) {
         let delta = Float(event.scrollingDeltaY)
+
+        // Locked track: block depth/scale edits (Director/Probe view nav still allowed).
+        if activeTrackIsLocked { return }
 
         // Model mode: scale or push/pull the whole group.
         if controlMode == .model, !timeline.isPlaying {
@@ -3071,6 +3140,8 @@ final class ViewportView: MTKView {
     // (dx, dy) ∈ {(±1, 0), (0, ±1)} — screen-space direction (right = +x, up = +y).
 
     private func applyArrow(dx: Int, dy: Int, shift: Bool) {
+        if activeTrackIsLocked { return }   // locked track — no arrow-key edits
+
         let dxF   = Float(dx)
         let dyF   = Float(dy)
         let right = viewCamera.rightVector
@@ -3178,6 +3249,8 @@ final class ViewportView: MTKView {
     /// `+` / `−` keys: depth movement along camera-forward, or scale (with Option).
     /// Camera mode is unaffected by Option.
     private func applyDepthKey(positive: Bool, optionDown: Bool) {
+        if activeTrackIsLocked { return }   // locked track — no +/- depth/scale edits
+
         let sign: Float = positive ? 1 : -1
         let fwd = viewCamera.forwardVector
 
@@ -3313,6 +3386,7 @@ final class ViewportView: MTKView {
 
         // ── Insert key — stamp a keyframe for the current mode / selection ──────
         if kc == KC.insert, !event.isARepeat {
+            if activeTrackIsLocked { return }   // locked track — no keyframe stamp
             switch controlMode {
             case .camera:
                 addCameraKeyframeAtCurrentTime()
@@ -3381,6 +3455,7 @@ final class ViewportView: MTKView {
 
             case KC.i:
                 // I — add keyframe at current time (alias for Insert key)
+                if activeTrackIsLocked { return }   // locked track — no keyframe stamp
                 switch controlMode {
                 case .camera:
                     addCameraKeyframeAtCurrentTime()

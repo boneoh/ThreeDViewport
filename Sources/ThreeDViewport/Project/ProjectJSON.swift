@@ -82,6 +82,10 @@ struct ProjectData: Codable {
     var orbitRateSchedules:     [OrbitRateScheduleData] = []
     /// Part B: display-only import-bundle table (id → name).  Empty for older files.
     var importBundles:          [BundleData] = []
+    /// Timeline edit locks for the singleton tracks (objects/lights/emitters carry
+    /// their own isLocked).  Default false → older files load unlocked.
+    var cameraLocked:           Bool = false
+    var fogLocked:              Bool = false
 
     // MARK: - Memberwise init (required because we define init(from:) below)
 
@@ -121,7 +125,9 @@ struct ProjectData: Codable {
          envelopes:           [EnvelopeData]          = [],
          spinRateSchedules:   [SpinRateScheduleData]  = [],
          orbitRateSchedules:  [OrbitRateScheduleData] = [],
-         importBundles:       [BundleData]            = []) {
+         importBundles:       [BundleData]            = [],
+         cameraLocked:        Bool                    = false,
+         fogLocked:           Bool                    = false) {
         self.version             = version
         self.modelPath           = modelPath
         self.modelPaths          = modelPaths
@@ -159,6 +165,8 @@ struct ProjectData: Codable {
         self.spinRateSchedules   = spinRateSchedules
         self.orbitRateSchedules  = orbitRateSchedules
         self.importBundles       = importBundles
+        self.cameraLocked        = cameraLocked
+        self.fogLocked           = fogLocked
     }
 
     // MARK: - Custom decoder
@@ -210,6 +218,8 @@ struct ProjectData: Codable {
         spinRateSchedules   = (try? c.decode([SpinRateScheduleData].self,  forKey: .spinRateSchedules))  ?? []
         orbitRateSchedules  = (try? c.decode([OrbitRateScheduleData].self, forKey: .orbitRateSchedules)) ?? []
         importBundles       = (try? c.decode([BundleData].self,            forKey: .importBundles))      ?? []
+        cameraLocked        = (try? c.decode(Bool.self,                     forKey: .cameraLocked))       ?? false
+        fogLocked           = (try? c.decode(Bool.self,                     forKey: .fogLocked))          ?? false
     }
 }
 
@@ -453,6 +463,8 @@ struct ParticleEffectData: Codable {
     var baseAlpha:    Float? = nil
     /// Import-bundle membership (groups an imported emitter under its bundle header).
     var importBundleID: Int? = nil
+    /// Timeline edit lock.  Default false → older files load unlocked.
+    var isLocked: Bool = false
 
     init(from decoder: Decoder) throws {
         let c     = try decoder.container(keyedBy: CodingKeys.self)
@@ -476,6 +488,7 @@ struct ParticleEffectData: Codable {
         growth       = try? c.decode(Float.self, forKey: .growth)
         baseAlpha    = try? c.decode(Float.self, forKey: .baseAlpha)
         importBundleID = try? c.decode(Int.self, forKey: .importBundleID)
+        isLocked       = (try? c.decode(Bool.self, forKey: .isLocked)) ?? false
     }
 
     init(isEnabled: Bool = false, type: Int = 0,
@@ -485,7 +498,7 @@ struct ParticleEffectData: Codable {
          r: Float = 1, g: Float = 1, b: Float = 1,
          particleSize: Float? = nil, fallSpeed: Float? = nil, streak: Float? = nil,
          lifetime: Float? = nil, growth: Float? = nil, baseAlpha: Float? = nil,
-         importBundleID: Int? = nil) {
+         importBundleID: Int? = nil, isLocked: Bool = false) {
         self.isEnabled = isEnabled; self.type = type
         self.px = px; self.py = py; self.pz = pz
         self.sx = sx; self.sy = sy; self.sz = sz
@@ -494,6 +507,7 @@ struct ParticleEffectData: Codable {
         self.particleSize = particleSize; self.fallSpeed = fallSpeed; self.streak = streak
         self.lifetime = lifetime; self.growth = growth; self.baseAlpha = baseAlpha
         self.importBundleID = importBundleID
+        self.isLocked = isLocked
     }
 }
 
@@ -704,6 +718,8 @@ struct ObjectData: Codable {
     var isVisible:       Bool    = true
     // v17: holdout — when hidden, still occlude objects behind it (depth-only).
     var occludeWhenHidden: Bool  = false
+    // Timeline edit lock.  Default false → older files load unlocked.
+    var isLocked:        Bool    = false
     // Production class for "Export All" (rawValue: background/actor/macguffin).
     var objectClass:     String  = ObjectClass.background.rawValue
     // Per-object feedback opt-in (Effects grid).  Default true → older files keep
@@ -731,6 +747,7 @@ struct ObjectData: Codable {
         easingMode           = (try? c.decode(Int.self,           forKey: .easingMode))          ?? 0
         isVisible            = (try? c.decode(Bool.self,          forKey: .isVisible))           ?? true
         occludeWhenHidden    = (try? c.decode(Bool.self,          forKey: .occludeWhenHidden))   ?? false
+        isLocked             = (try? c.decode(Bool.self,          forKey: .isLocked))            ?? false
         objectClass          = (try? c.decode(String.self,        forKey: .objectClass))         ?? ObjectClass.background.rawValue
         feedbackEnabled      = (try? c.decode(Bool.self,          forKey: .feedbackEnabled))     ?? true
         normalMode           = (try? c.decode(Int.self,           forKey: .normalMode))          ?? 0
@@ -745,6 +762,7 @@ struct ObjectData: Codable {
     init(name: String, keyframes: [KeyframeData],
          baseTransformMatrix: [Float] = [], easingMode: Int = 0,
          isVisible: Bool = true, occludeWhenHidden: Bool = false,
+         isLocked: Bool = false,
          objectClass: String = ObjectClass.background.rawValue,
          feedbackEnabled: Bool = true, normalMode: Int = 0,
          metallicFactor: Float = -1, roughnessFactor: Float = -1,
@@ -756,6 +774,7 @@ struct ObjectData: Codable {
         self.easingMode          = easingMode
         self.isVisible           = isVisible
         self.occludeWhenHidden   = occludeWhenHidden
+        self.isLocked            = isLocked
         self.objectClass         = objectClass
         self.feedbackEnabled     = feedbackEnabled
         self.normalMode          = normalMode
@@ -921,6 +940,8 @@ struct LightConfigData: Codable {
     var excludeBeamFromFeedback: Bool  = false
     // Part B: display-only import-bundle tag (optional → older files decode to nil).
     var importBundleID:          Int?  = nil
+    // Timeline edit lock (optional → older files decode to nil = unlocked).
+    var isLocked:                Bool? = nil
 }
 
 // v6: One saved light keyframe — intensity, colour, target, position.
