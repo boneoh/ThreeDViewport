@@ -135,6 +135,10 @@ final class VideoExporter {
     // opacity<1 parts opaquely, matching pre-feature behaviour).
     private let transparentPipelineState: MTLRenderPipelineState?
     private let transparentDepthState:    MTLDepthStencilState?
+    // Holdout re-stamp depth state (.lessEqual, no write) — shared from the Renderer.
+    // Re-paints the black holdout silhouettes over background glass so held-out holes
+    // stay pure black for the keyer while real background glass still renders.
+    private let holdoutRestampDepthState: MTLDepthStencilState?
     private let animStart:         Double   // first animation time (seconds); 0 = full timeline
     private let animDuration:      Double   // length of the exported range (seconds)
     private let timelineDuration:  Double   // full timeline length — cutoff for past-end keyframes
@@ -187,12 +191,6 @@ final class VideoExporter {
     // particles are gated separately by nil-ing fogSettings/particleManager).
     var includeLaserFX: Bool = true
 
-    // When true, transparent (glass) objects are not drawn.  Export All's Background
-    // pass sets this so the station's glass doesn't alpha-composite its pale tint
-    // over the pure-black holdout silhouettes (which the Videomancer keys on black).
-    // Held-out objects behind windows then stay pure black; windows read as open.
-    var suppressTransparent: Bool = false
-
     // Phase C: image-based lighting — shared with the live Renderer so exports
     // match the viewport.  Set by ViewportView after construction.
     var ibl: IBL?
@@ -232,7 +230,8 @@ final class VideoExporter {
           scenePipeline:     ScenePipeline,
           holdoutPipelineState: MTLRenderPipelineState? = nil,
           transparentPipelineState: MTLRenderPipelineState? = nil,
-          transparentDepthState:    MTLDepthStencilState?   = nil) {
+          transparentDepthState:    MTLDepthStencilState?   = nil,
+          holdoutRestampDepthState: MTLDepthStencilState?   = nil) {
 
         self.device            = device
         self.commandQueue      = commandQueue
@@ -246,6 +245,7 @@ final class VideoExporter {
         self.holdoutPipelineState     = holdoutPipelineState
         self.transparentPipelineState = transparentPipelineState
         self.transparentDepthState    = transparentDepthState
+        self.holdoutRestampDepthState = holdoutRestampDepthState
         // Export range: clamp to [0, duration]; an empty/inverted range falls back
         // to the full timeline so a bad In/Out can't produce a zero-length export.
         let clampStart = max(0, min(rangeStart, timeline.duration))
@@ -659,14 +659,11 @@ final class VideoExporter {
     // MARK: - Geometry encode helpers (mirror the live Renderer's split)
 
     /// Splits a visible-object list into (opaque, transparent), transparent sorted
-    /// back-to-front.  `suppressTransparent` (Export All Background pass) drops glass.
+    /// back-to-front.
     private func splitOpaqueTransparent(_ objects: [SceneObject])
         -> (opaque: [SceneObject], transparent: [SceneObject]) {
         func isTransparent(_ o: SceneObject) -> Bool {
             o.material.opacity < 1.0 || o.material.baseColorFactor.w < 1.0
-        }
-        if suppressTransparent {
-            return (objects.filter { !isTransparent($0) }, [])
         }
         guard objects.contains(where: isTransparent) else { return (objects, []) }
         let opaque = objects.filter { !isTransparent($0) }
@@ -684,6 +681,33 @@ final class VideoExporter {
             .sorted { $0.1 > $1.1 }
             .map { $0.0 }
         return (opaque, transparent)
+    }
+
+    /// Encodes the holdout silhouettes (depth-only black matte) with the given depth
+    /// state.  Used twice per frame: first with the normal write-on depth state to cut
+    /// geometry behind them, then (after glass) with the .lessEqual write-off state to
+    /// re-paint pure black over any background glass that overlapped them.
+    private func encodeHoldouts(_ objects: [SceneObject],
+                                depthState: MTLDepthStencilState,
+                                into encoder: MTLRenderCommandEncoder) {
+        guard !objects.isEmpty, let holdout = holdoutPipelineState else { return }
+        SceneGeometryEncoder.encode(
+            into:            encoder,
+            objects:         objects,
+            groupTransforms: sceneManager.groupTransforms,
+            lightUniforms:   lightManager.buildLightUniforms(from: exportLights),
+            context: SceneGeometryEncoder.Context(
+                viewProjection:    camera.viewProjectionMatrix,
+                eyePosition:       camera.eyePosition,
+                pipelineState:     holdout,
+                depthStencilState: depthState,
+                colorMode:         colorMode,
+                isWireframe:       false,
+                exposure:          colorGradeSettings?.exposure ?? 1.0,
+                ibl:               ibl,
+                dummyUV:           dummyUVBuffer,
+                dummyTangent:      dummyTangentBuffer,
+                dummy2D:           dummyEquirect))
     }
 
     private func encodeOpaqueGeometry(_ objects: [SceneObject], into encoder: MTLRenderCommandEncoder) {
@@ -858,28 +882,10 @@ final class VideoExporter {
             // Transparent parts (glass) are excluded: they don't block weather/fog
             // when visible, so they must not occlude FX as depth-only holdouts.
             // (holdoutObjects hoisted above for reuse by the FX depth pre-pass.)
-            if !holdoutObjects.isEmpty, let holdout = holdoutPipelineState {
-                SceneGeometryEncoder.encode(
-                    into:            encoder,
-                    objects:         holdoutObjects,
-                    groupTransforms: sceneManager.groupTransforms,
-                    lightUniforms:   lightManager.buildLightUniforms(from: exportLights),
-                    context: SceneGeometryEncoder.Context(
-                        viewProjection:    camera.viewProjectionMatrix,
-                        eyePosition:       camera.eyePosition,
-                        pipelineState:     holdout,
-                        depthStencilState: depthStencilState,
-                        colorMode:         colorMode,
-                        isWireframe:       false,
-                        exposure:          colorGradeSettings?.exposure ?? 1.0,
-                        ibl:               ibl,
-                        dummyUV:           dummyUVBuffer,
-                        dummyTangent:      dummyTangentBuffer,
-                        dummy2D:           dummyEquirect))
-            }
+            encodeHoldouts(holdoutObjects, depthState: depthStencilState, into: encoder)
 
-            // Feedback-on lane, split opaque/transparent (suppressTransparent +
-            // baseColorFactor.w handled in splitOpaqueTransparent).
+            // Feedback-on lane, split opaque/transparent (opacity + baseColorFactor.w
+            // handled in splitOpaqueTransparent).
             let (onOpaque, onTransparent) = splitOpaqueTransparent(visibleOn)
 
             encodeOpaqueGeometry(onOpaque, into: encoder)
@@ -905,6 +911,14 @@ final class VideoExporter {
             }
 
             encodeTransparentGeometry(onTransparent, into: encoder)
+
+            // Re-stamp the holdout silhouettes over the glass so held-out holes stay
+            // pure black for the keyer (.lessEqual matches the silhouette depth the
+            // depth-write-off glass left intact; fails where opaque foreground is
+            // nearer).  Background glass NOT over a holdout is untouched.
+            if let rDS = holdoutRestampDepthState {
+                encodeHoldouts(holdoutObjects, depthState: rDS, into: encoder)
+            }
 
             drawMarksInEncoder(encoder, viewProjection: camera.viewProjectionMatrix)
 

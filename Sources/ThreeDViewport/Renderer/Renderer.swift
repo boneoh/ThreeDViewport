@@ -26,6 +26,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     // feedback compositor still distinguishes geometry from background.
     var transparentPipelineState: MTLRenderPipelineState?
     var transparentDepthState:    MTLDepthStencilState?
+    // Export-only: re-paints the black holdout silhouettes over background glass
+    // (.lessEqual, no depth write) so held-out holes stay pure black for the keyer.
+    var holdoutRestampDepthState: MTLDepthStencilState?
 
     // Background gradient + environment skybox pipelines now live in ScenePipeline
     // (drawn via scenePipeline.encodeBackground).
@@ -324,6 +327,15 @@ final class Renderer: NSObject, MTKViewDelegate {
         tDepthDesc.depthCompareFunction = .less
         tDepthDesc.isDepthWriteEnabled  = false
         transparentDepthState = device.makeDepthStencilState(descriptor: tDepthDesc)
+
+        // Holdout re-stamp (export): depth-test .lessEqual + write OFF.  Glass writes no
+        // depth, so a visible holdout pixel's depth still equals the silhouette's — this
+        // repaints exactly those pixels pure black on top of the glass, and fails where
+        // opaque foreground is nearer (so a prop in front of an actor still shows).
+        let rDepthDesc = MTLDepthStencilDescriptor()
+        rDepthDesc.depthCompareFunction = .lessEqual
+        rDepthDesc.isDepthWriteEnabled  = false
+        holdoutRestampDepthState = device.makeDepthStencilState(descriptor: rDepthDesc)
 
         // (Background + skybox pipelines now built in ScenePipeline.)
 
