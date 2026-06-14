@@ -27,9 +27,15 @@ struct TunableSlider: View {
     @Environment(\.isEnabled) private var isEnabled
     @FocusState private var focused: Bool
     @State private var repeatTimer: Timer?
+    /// True once the current gesture has dragged past `valueDragThreshold` — so a pure
+    /// click only focuses (no value jump) and you drag to actually change the value.
+    @State private var draggingValue = false
 
     private let trackHeight: CGFloat = 4
     private let thumbSize:   CGFloat = 16
+    /// A click that moves less than this (points) just focuses — it does NOT snap the
+    /// value to the click position (a big jump on a ±100 track for a small object).
+    private let valueDragThreshold: CGFloat = 4
 
     var body: some View {
         GeometryReader { geo in
@@ -61,10 +67,18 @@ struct TunableSlider: View {
                     .onChanged { g in
                         guard isEnabled else { return }
                         focused = true
+                        // A pure click only focuses; drag past the threshold to change.
+                        if !draggingValue,
+                           abs(g.location.x - g.startLocation.x) < valueDragThreshold { return }
+                        draggingValue = true
                         let f = min(1, max(0, (g.location.x - thumbSize / 2) / usable))
                         value = range.lowerBound + Double(f) * span
                     }
-                    .onEnded { _ in if isEnabled { onEditEnded?() } }
+                    .onEnded { _ in
+                        let didEdit = draggingValue
+                        draggingValue = false
+                        if isEnabled, didEdit { onEditEnded?() }   // no keyframe for a focus-only tap
+                    }
             )
         }
         .frame(height: thumbSize)

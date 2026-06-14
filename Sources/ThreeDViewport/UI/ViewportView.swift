@@ -2549,7 +2549,7 @@ final class ViewportView: MTKView {
                 dragLockAxis = abs(dragAccumX) >= abs(dragAccumY) ? .horizontal : .vertical
             }
 
-            let scale = viewCamera.distance * 0.001
+            let scale = worldUnitsPerPoint
             let move: SIMD3<Float>
             switch dragLockAxis {
             case .horizontal: move = viewCamera.rightVector * (dx * scale)
@@ -2576,7 +2576,7 @@ final class ViewportView: MTKView {
                 dragLockAxis = abs(dragAccumX) >= abs(dragAccumY) ? .horizontal : .vertical
             }
 
-            let scale = viewCamera.distance * 0.001
+            let scale = worldUnitsPerPoint
             let move: SIMD3<Float>
             switch dragLockAxis {
             case .horizontal: move = viewCamera.rightVector * (dx * scale)
@@ -2607,7 +2607,7 @@ final class ViewportView: MTKView {
                 lightManager.rotateSelected(deltaAzimuth:   -lockedDx * sensitivity,
                                             deltaElevation: -lockedDy * sensitivity)
             case .point, .spot, .laser:
-                let scale = viewCamera.distance * 0.001
+                let scale = worldUnitsPerPoint
                 let d = viewCamera.rightVector * (lockedDx * scale)
                       + viewCamera.upVector    * (lockedDy * scale)
                 lightManager.translateSelected(by: d)
@@ -2626,7 +2626,7 @@ final class ViewportView: MTKView {
                 guard dist >= dragLockThreshold else { return }
                 dragLockAxis = abs(dragAccumX) >= abs(dragAccumY) ? .horizontal : .vertical
             }
-            let scale = viewCamera.distance * 0.001
+            let scale = worldUnitsPerPoint
             switch dragLockAxis {
             case .horizontal: moveProbe(by: viewCamera.rightVector * (dx * scale))
             case .vertical:   moveProbe(by: viewCamera.upVector    * (dy * scale))
@@ -3118,7 +3118,9 @@ final class ViewportView: MTKView {
     // Sensitivity uses the Director's distance so feel matches the view.
 
     private func panSceneCameraInDirectorPlane(dx: Float, dy: Float) {
-        let s = director.distance * 0.001
+        // Director is the active view in Scene mode, so worldUnitsPerPoint is
+        // director-based here — pans track the cursor at any distance / FOV.
+        let s = worldUnitsPerPoint
         camera.target += director.rightVector * (dx * s)
         camera.target += director.upVector    * (dy * s)
     }
@@ -3173,7 +3175,7 @@ final class ViewportView: MTKView {
             }
 
         case .light:
-            let translateDelta = (right * dxF + up * dyF) * translateStep
+            let translateDelta = (right * dxF + up * dyF) * translateStepWorld
             if shift {
                 // Secondary: rotate direction (directional/spot/laser).  point/ambient: no-op.
                 lightManager.rotateSelected(deltaAzimuth:   -dxF * lightStep,
@@ -3205,7 +3207,7 @@ final class ViewportView: MTKView {
                 }
             } else {
                 // Primary: camera-relative translation.
-                let d = (right * dxF + up * dyF) * translateStep
+                let d = (right * dxF + up * dyF) * translateStepWorld
                 obj.transform.columns.3.x += d.x
                 obj.transform.columns.3.y += d.y
                 obj.transform.columns.3.z += d.z
@@ -3231,16 +3233,16 @@ final class ViewportView: MTKView {
                                 around: pivot)
                 }
             } else {
-                translateGroup(parts, by: (right * dxF + up * dyF) * translateStep)
+                translateGroup(parts, by: (right * dxF + up * dyF) * translateStepWorld)
             }
 
         case .probe:
             // Camera-relative move in the screen plane; Shift+↑/↓ dollies along the
             // eye→probe ray (no perspective drift) since the Probe can't rotate.
             if shift {
-                moveProbe(by: probeDepthAxis * (dyF * translateStep))
+                moveProbe(by: probeDepthAxis * (dyF * translateStepWorld))
             } else {
-                moveProbe(by: (right * dxF + up * dyF) * translateStep)
+                moveProbe(by: (right * dxF + up * dyF) * translateStepWorld)
             }
         }
         if !sceneModeActive, let ref = currentTrackRef { autoKeyframeOnEdit(ref) }
@@ -3264,7 +3266,7 @@ final class ViewportView: MTKView {
             director.lensZoom(delta: sign * zoomStep / 0.05)
 
         case .light:
-            lightManager.translateSelected(by: fwd * (sign * translateStep * 2))
+            lightManager.translateSelected(by: fwd * (sign * translateStepWorld * 2))
 
         case .object:
             guard let obj = sceneManager.selectedObject else { return }
@@ -3275,7 +3277,7 @@ final class ViewportView: MTKView {
                 obj.transform.columns.1 *= sv
                 obj.transform.columns.2 *= sv
             } else {
-                let d = fwd * (sign * translateStep)
+                let d = fwd * (sign * translateStepWorld)
                 obj.transform.columns.3.x += d.x
                 obj.transform.columns.3.y += d.y
                 obj.transform.columns.3.z += d.z
@@ -3290,12 +3292,12 @@ final class ViewportView: MTKView {
                 let factor: Float = positive ? scaleStep : 1.0 / scaleStep
                 scaleGroup(parts, by: factor, around: groupCenter(parts))
             } else {
-                translateGroup(parts, by: fwd * (sign * translateStep))
+                translateGroup(parts, by: fwd * (sign * translateStepWorld))
             }
 
         case .probe:
             // +/− dollies the Probe along the eye→probe ray (no perspective drift).
-            moveProbe(by: probeDepthAxis * (sign * translateStep))
+            moveProbe(by: probeDepthAxis * (sign * translateStepWorld))
         }
         if !sceneModeActive, let ref = currentTrackRef { autoKeyframeOnEdit(ref) }
     }
@@ -3368,12 +3370,25 @@ final class ViewportView: MTKView {
     // so the on-screen movement stays proportional to the current zoom level.
     private let panStep:       Float = 50.0             // camera pan pixels-equivalent per key
     private let orbitKeyStep:  Float = Float.pi / 36.0 / 0.005   // 5° per key (camera.orbit sensitivity = 0.005)
-    private let translateStep: Float = 0.05             // world-units per key (object)
     private let lightStep:     Float = Float.pi / 36.0  // 5° per key (light azimuth / elevation)
     private let rotStep:       Float = Float.pi / 36.0  // 5° per key (object/camera rotation)
     private let intensityStep: Float = 0.1
     private let zoomStep:      Float = 0.1              // fraction of current distance per key
     private let scaleStep:     Float = 1.05             // Option+=/− scales object by ±5% per key
+    private let arrowStepPoints: Float = 8             // arrow/depth nudge in screen points per press
+
+    /// World units per screen point at the view's focus distance, accounting for FOV
+    /// (focal length).  Used so drag / arrow / depth-key sensitivity tracks on-screen
+    /// size — an object follows the cursor ~1:1 and nudges stay consistent whether
+    /// you're zoomed in close on a small object or pulled back.  viewCamera is the
+    /// Director in Scene mode, the scene camera otherwise.
+    private var worldUnitsPerPoint: Float {
+        let h = max(Float(bounds.height), 1)
+        return 2 * viewCamera.distance * tan(viewCamera.fovYRadians / 2) / h
+    }
+    /// Per-press translation step: a fixed number of screen points, so a nudge looks
+    /// the same regardless of distance / focal length (replaces the old fixed 0.05).
+    private var translateStepWorld: Float { worldUnitsPerPoint * arrowStepPoints }
 
     override func keyDown(with event: NSEvent) {
         let kc = event.keyCode
