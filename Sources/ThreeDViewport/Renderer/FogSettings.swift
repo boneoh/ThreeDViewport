@@ -38,6 +38,10 @@ final class FogSettings: ObservableObject {
     /// playback never marks the project dirty — matches object/camera animation.
     var keyframeTrack: AtmosphereKeyframeTrack?
 
+    /// Timeline duration, set by the renderer/exporter each frame, used as the cutoff
+    /// so keyframes left beyond a shortened timeline don't pull the in-range animation.
+    var evaluationCutoff: Double? = nil
+
     /// Set while `syncToPlayhead` writes the static fields so the AppDelegate dirty
     /// sink can ignore it — scrubbing follows the animation without marking dirty.
     var suppressDirty: Bool = false
@@ -54,7 +58,7 @@ final class FogSettings: ObservableObject {
     /// value at the current frame, so the panel + viewport always agree and a
     /// stamp captures exactly what's on screen.
     func renderState(at time: Double, playing: Bool) -> AtmosphereKeyframe {
-        if playing, let kf = keyframeTrack?.evaluate(at: time) { return kf }
+        if playing, let kf = keyframeTrack?.evaluate(at: time, cutoff: evaluationCutoff) { return kf }
         return snapshot(at: time)
     }
 
@@ -62,7 +66,7 @@ final class FogSettings: ObservableObject {
     /// fields so the panel and the paused render follow the playhead.  No-op when
     /// there's no track.  Suppresses the dirty flag so scrubbing stays clean.
     func syncToPlayhead(at time: Double) {
-        guard let kf = keyframeTrack?.evaluate(at: time) else { return }
+        guard let kf = keyframeTrack?.evaluate(at: time, cutoff: evaluationCutoff) else { return }
         suppressDirty = true
         position = kf.position; size = kf.size; density = kf.density
         variance = kf.variance; color = kf.color

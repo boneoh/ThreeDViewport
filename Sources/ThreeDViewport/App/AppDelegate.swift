@@ -428,6 +428,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             layout.probeInspectorPanel = WindowFrameData(x: f.origin.x, y: f.origin.y,
                                                          w: f.size.width, h: f.size.height)
         }
+        // Path Animator panels.
+        func frameIfVisible(_ p: NSPanel?) -> WindowFrameData? {
+            guard let p = p, p.isVisible else { return nil }
+            let f = p.frame
+            return WindowFrameData(x: f.origin.x, y: f.origin.y, w: f.size.width, h: f.size.height)
+        }
+        layout.spinPanel   = frameIfVisible(spinPanel)
+        layout.orbitPanel  = frameIfVisible(orbitPathPanel)
+        layout.linearPanel = frameIfVisible(linearPathPanel)
+        layout.curvePanel  = frameIfVisible(curvePathPanel)
         // Atmosphere section expand/collapse (saved regardless of panel visibility).
         if let vp = viewportView {
             layout.atmosphereFogExpanded      = vp.atmospherePanelState.fogExpanded
@@ -524,6 +534,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             if probeInspectorPanel == nil { showProbeInspector(self) }
             probeInspectorPanel?.setFrame(
                 NSRect(x: pf.x, y: pf.y, width: pf.w, height: pf.h), display: true)
+        }
+
+        // Path Animator panels — open and position if they were visible.
+        if let sf = layout.spinPanel {
+            if spinPanel == nil { showSpinAnimator(self) }
+            spinPanel?.setFrame(NSRect(x: sf.x, y: sf.y, width: sf.w, height: sf.h), display: true)
+        }
+        if let of = layout.orbitPanel {
+            if orbitPathPanel == nil { showOrbitPathAnimator(self) }
+            orbitPathPanel?.setFrame(NSRect(x: of.x, y: of.y, width: of.w, height: of.h), display: true)
+        }
+        if let lf = layout.linearPanel {
+            if linearPathPanel == nil { showLinearPathAnimator(self) }
+            linearPathPanel?.setFrame(NSRect(x: lf.x, y: lf.y, width: lf.w, height: lf.h), display: true)
+        }
+        if let cf = layout.curvePanel {
+            if curvePathPanel == nil { showCurvePathAnimator(self) }
+            curvePathPanel?.setFrame(NSRect(x: cf.x, y: cf.y, width: cf.w, height: cf.h), display: true)
         }
     }
 
@@ -2080,6 +2108,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             p.orderOut(nil)
             panelsHiddenByMiniaturize.insert("probeInspector")
         }
+        if let p = spinPanel, p.isVisible {
+            p.orderOut(nil)
+            panelsHiddenByMiniaturize.insert("spin")
+        }
+        if let p = orbitPathPanel, p.isVisible {
+            p.orderOut(nil)
+            panelsHiddenByMiniaturize.insert("orbit")
+        }
+        if let p = linearPathPanel, p.isVisible {
+            p.orderOut(nil)
+            panelsHiddenByMiniaturize.insert("linear")
+        }
+        if let p = curvePathPanel, p.isVisible {
+            p.orderOut(nil)
+            panelsHiddenByMiniaturize.insert("curve")
+        }
         if let wc = timelineEditorWC, wc.window?.isVisible == true {
             wc.window?.orderOut(nil)
             panelsHiddenByMiniaturize.insert("timeline")
@@ -2136,6 +2180,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if panelsHiddenByMiniaturize.contains("modelInspector") { modelInspectorPanel?.makeKeyAndOrderFront(nil) }
         if panelsHiddenByMiniaturize.contains("atmosphere")     { atmospherePanel?.makeKeyAndOrderFront(nil) }
         if panelsHiddenByMiniaturize.contains("probeInspector") { probeInspectorPanel?.makeKeyAndOrderFront(nil) }
+        if panelsHiddenByMiniaturize.contains("spin")   { spinPanel?.makeKeyAndOrderFront(nil) }
+        if panelsHiddenByMiniaturize.contains("orbit")  { orbitPathPanel?.makeKeyAndOrderFront(nil) }
+        if panelsHiddenByMiniaturize.contains("linear") { linearPathPanel?.makeKeyAndOrderFront(nil) }
+        if panelsHiddenByMiniaturize.contains("curve")  { curvePathPanel?.makeKeyAndOrderFront(nil) }
         if panelsHiddenByMiniaturize.contains("timeline")       { timelineEditorWC?.showWindow(nil) }
         if panelsHiddenByMiniaturize.contains("effects")        { effectsGridWC?.showWindow(nil) }
         if !panelsHiddenByMiniaturize.isEmpty {

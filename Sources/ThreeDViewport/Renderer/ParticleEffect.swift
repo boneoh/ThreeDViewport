@@ -130,6 +130,10 @@ final class ParticleEffect: ObservableObject {
     /// its keyframe times.  nil = a host emitter.
     var importBundleID: Int? = nil
 
+    /// Timeline duration, set by the renderer/exporter each frame, used as the cutoff
+    /// so keyframes left beyond a shortened timeline don't pull the in-range animation.
+    var evaluationCutoff: Double? = nil
+
     /// Set while `syncToPlayhead` writes the static fields so the dirty sink can
     /// ignore it — scrubbing follows the animation without marking dirty.
     var suppressDirty: Bool = false
@@ -144,14 +148,14 @@ final class ParticleEffect: ObservableObject {
     /// keyframes drive it; paused → the static panel fields (kept in sync by
     /// `syncToPlayhead`) so the panel and viewport agree.
     func renderState(at time: Double, playing: Bool) -> AtmosphereKeyframe {
-        if playing, let kf = keyframeTrack?.evaluate(at: time) { return kf }
+        if playing, let kf = keyframeTrack?.evaluate(at: time, cutoff: evaluationCutoff) { return kf }
         return snapshot(at: time)
     }
 
     /// While paused, copy the resolved keyframe value at `time` into the static
     /// fields so the panel + paused render follow the playhead (see FogSettings).
     func syncToPlayhead(at time: Double) {
-        guard let kf = keyframeTrack?.evaluate(at: time) else { return }
+        guard let kf = keyframeTrack?.evaluate(at: time, cutoff: evaluationCutoff) else { return }
         suppressDirty = true
         position = kf.position; size = kf.size; density = kf.density
         variance = kf.variance; color = kf.color

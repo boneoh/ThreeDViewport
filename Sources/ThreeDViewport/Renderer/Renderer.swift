@@ -583,11 +583,15 @@ final class Renderer: NSObject, MTKViewDelegate {
         // jump the animation), decoupling playback speed from the draw rate.
         timeline.tick(dt: min(Double(dt), 1.0 / 15.0))
 
-        // Reset feedback only when the user manually scrubs while already paused.
-        // "Just stopped" (isPlaying flipped to false this frame) must NOT reset —
-        // that would wipe the last feedback frame at the natural end of playback.
+        // Clear the feedback buffer whenever the playhead jumps BACKWARD — loop-back to
+        // the start, the Stop button, the Home (H) key, or a backward scrub — so the
+        // trailing feedback image doesn't linger (only happens with feedback on).  A
+        // forward scrub while paused also clears.  The natural end of non-looping
+        // playback keeps its last frame (renderTime stays put, isPlaying just flips off).
         let justStopped = lastWasPlaying && !timeline.isPlaying
-        if !timeline.isPlaying && !justStopped && timeline.renderTime != lastRenderedTime {
+        if timeline.renderTime < lastRenderedTime - 1e-6 {
+            feedbackProcessor?.reset()
+        } else if !timeline.isPlaying && !justStopped && timeline.renderTime != lastRenderedTime {
             feedbackProcessor?.reset()
         }
         // On the play→pause/stop transition, publish the final animated light
@@ -616,6 +620,12 @@ final class Renderer: NSObject, MTKViewDelegate {
         // reads them.  Also runs every frame — not just when time changes — so the
         // camera stays locked to a moving target while playback is active.
         applyCameraFollow()
+
+        // Past-duration cutoff for fog/particle keyframe evaluation (renderState +
+        // syncToPlayhead) so keyframes beyond a shortened timeline don't pull the
+        // in-range animation — matching object/camera/light.
+        fogSettings?.evaluationCutoff = timeline.duration
+        particleManager?.emitters.forEach { $0.evaluationCutoff = timeline.duration }
 
         // Make the Fog/Weather panel + paused render follow the playhead on scrub.
         syncAtmosphereToPlayhead()

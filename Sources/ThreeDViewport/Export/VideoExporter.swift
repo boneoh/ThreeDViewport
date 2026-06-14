@@ -1340,6 +1340,11 @@ final class VideoExporter {
     // Evaluates keyframes at the given time and writes directly to object transforms.
     // Does NOT modify timeline.currentTime — the live UI is unaffected during export.
     private func applyAnimation(at time: Double) {
+        // Past-duration cutoff for fog/particle keyframe evaluation (renderState),
+        // matching the live renderer + object/camera/light.
+        fogSettings?.evaluationCutoff = timelineDuration
+        particleManager?.emitters.forEach { $0.evaluationCutoff = timelineDuration }
+
         // ── Object transforms ─────────────────────────────────────────────────
         for object in sceneManager.objects {
             guard let track = object.keyframeTrack,
