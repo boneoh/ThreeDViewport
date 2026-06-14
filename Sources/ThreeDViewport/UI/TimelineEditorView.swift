@@ -102,10 +102,17 @@ final class TimelineEditorView: NSView {
             timeSubscription = timeline?.$currentTime
                 .receive(on: RunLoop.main)
                 .sink { [weak self] _ in self?.playheadTick() }
+            // Always redraw on a play/pause transition (Pause, Stop, Play) so the grid
+            // lands on the final frame — the playback throttle may have skipped the last tick.
+            playingSubscription?.cancel()
+            playingSubscription = timeline?.$isPlaying
+                .receive(on: RunLoop.main)
+                .sink { [weak self] _ in self?.needsDisplay = true }
         }
     }
-    /// Cancellable for the currentTime subscription; lives as long as the view.
-    private var timeSubscription: AnyCancellable?
+    /// Cancellables for the timeline subscriptions; live as long as the view.
+    private var timeSubscription:    AnyCancellable?
+    private var playingSubscription: AnyCancellable?
 
     // Redraw coalescing for the playhead.  Redrawing all lanes is the dominant
     // main-thread cost with a complex scene, so during PLAYBACK we cap the
@@ -113,6 +120,9 @@ final class TimelineEditorView: NSView {
     // paused/scrubbing every tick redraws so dragging the playhead stays crisp.
     private var lastPlaybackRedraw: CFTimeInterval = 0
     private let playbackRedrawInterval: CFTimeInterval = 1.0 / 12.0
+    /// Last playhead time the refresh timer redrew at — so the timer only redraws the
+    /// grid when the playhead actually moved (paused/scrubbing), not 30×/sec when idle.
+    private var lastTimerDrawTime: Double = -1
 
     private func playheadTick() {
         if timeline?.isPlaying == true {
@@ -522,16 +532,24 @@ final class TimelineEditorView: NSView {
 
     func startRefreshTimer() {
         refreshTimer?.invalidate()
-        // Fire at ~30 fps; syncs easing popups and marks the view dirty for
-        // general scene changes (object names, keyframe edits, etc.).
-        // Playhead position is additionally driven by the Combine subscription on
-        // Timeline.currentTime, which updates even during event-tracking run loops.
-        // Using .common mode so this timer also fires while the user drags a slider.
+        // Fire at ~30 fps to sync the easing popups / lock toggles and follow the
+        // playhead.  It does NOT redraw the grid unconditionally (that was 30 redraws/sec
+        // even when idle).  Instead it redraws only when the playhead MOVED while paused
+        // /scrubbing; during playback the throttled $currentTime sink drives redraws, and
+        // structural changes redraw via syncEasingPopupsIfNeeded's rebuild + explicit
+        // needsDisplay on edits.  Using .common mode so it also fires during slider drags.
         let t = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
-            self?.syncEasingPopupsIfNeeded()
-            self?.updateDocumentWidth()   // tracks duration / viewport changes (guarded, cheap)
-            self?.followPlayheadIfNeeded()
-            self?.needsDisplay = true
+            guard let self else { return }
+            self.syncEasingPopupsIfNeeded()
+            self.updateDocumentWidth()   // tracks duration / viewport changes (guarded, cheap)
+            self.followPlayheadIfNeeded()
+            if self.timeline?.isPlaying != true {
+                let now = self.timeline?.currentTime ?? 0
+                if now != self.lastTimerDrawTime {
+                    self.lastTimerDrawTime = now
+                    self.needsDisplay = true
+                }
+            }
         }
         RunLoop.main.add(t, forMode: .common)
         refreshTimer = t
@@ -1064,22 +1082,54 @@ final class TimelineEditorView: NSView {
         }
 
         // ── Keyframe diamonds ─────────────────────────────────────────────────
+        // Two performance measures keep this cheap at any zoom / keyframe count:
+        //  • Only the diamonds in the VISIBLE time window are processed — binary-searched
+        //    from the sorted keyframe times (timeToX is monotonic), so off-screen
+        //    keyframes cost nothing even when zoomed in (huge document width).
+        //  • The bulk (normal + loop-repeat) batch into one NSBezierPath each and are
+        //    filled/stroked ONCE, instead of a fill+stroke per diamond.
+        //  • LOD: within the visible window, skip diamonds closer than `minDiamondSpacing`
+        //    px to the last drawn one (selected/multi always drawn) so a dense bar stays
+        //    cheap.
         let hs = diamondHalfSize
-        // Level-of-detail: dense baked tracks (e.g. a Spin/Orbit over a long timeline
-        // at a high keyframes/rev) can hold thousands of keyframes per lane that
-        // collapse into a solid bar.  Painting an NSBezierPath per keyframe is the
-        // dominant draw cost, so on each lane we skip diamonds closer than
-        // `minDiamondSpacing` px to the previous drawn one — except the selected /
-        // multi-selected ones, which always draw so they stay findable.  The result is
-        // visually identical (still reads as a bar) but caps the painted diamond count
-        // to ~lane width / spacing regardless of how many keyframes the track holds.
         let minDiamondSpacing: CGFloat = 3
+        let vis    = visibleRect
+        let leftX  = vis.minX + labelWidth - hs
+        let rightX = vis.maxX + hs
+
+        let normalPath = NSBezierPath()   // grey keyframes (the bulk)
+        let loopPath   = NSBezierPath()   // dark-green loop-repeat tiles
+
+        func addDiamond(_ path: NSBezierPath, _ cx: CGFloat, _ cy: CGFloat) {
+            path.move(to: NSPoint(x: cx,      y: cy - hs))
+            path.line(to: NSPoint(x: cx + hs, y: cy))
+            path.line(to: NSPoint(x: cx,      y: cy + hs))
+            path.line(to: NSPoint(x: cx - hs, y: cy))
+            path.close()
+        }
+        func drawSpecial(_ cx: CGFloat, _ cy: CGFloat, fill: NSColor, stroke: NSColor, wide: Bool) {
+            let d = NSBezierPath(); addDiamond(d, cx, cy)
+            fill.setFill();   d.fill()
+            stroke.setStroke(); d.lineWidth = wide ? 1.5 : 0.8; d.stroke()
+        }
+
         for (ti, row) in tracks.enumerated() {
-            let cy = laneCenter(ti)
+            let cy    = laneCenter(ti)
+            let times = keyframeTimes(for: row.ref)
+            guard !times.isEmpty else { continue }
+
+            // Binary-search the first keyframe at/after the visible left edge.
+            var lo = 0, hi = times.count
+            while lo < hi {
+                let mid = (lo + hi) / 2
+                if timeToX(times[mid]) < leftX { lo = mid + 1 } else { hi = mid }
+            }
+
             var lastDrawnX = -CGFloat.greatestFiniteMagnitude
-            for (ki, kfTime) in keyframeTimes(for: row.ref).enumerated() {
-                let cx = timeToX(kfTime)
-                guard cx >= labelWidth - hs && cx <= w + hs else { continue }
+            var ki = lo
+            while ki < times.count {
+                let cx = timeToX(times[ki])
+                if cx > rightX { break }   // past the visible right edge — done with this lane
 
                 let isSelected      = (ti == selectedTrackIndex && ki == selectedKFIndex)
                 let isMultiSelected = multiSelectedDiamonds.count >= 2 &&
@@ -1087,57 +1137,44 @@ final class TimelineEditorView: NSView {
                                           SelectedDiamond(trackIndex: ti, kfIndex: ki))
 
                 // LOD skip — keep selected / multi-selected diamonds always visible.
-                if !(isSelected || isMultiSelected), cx - lastDrawnX < minDiamondSpacing { continue }
+                if !(isSelected || isMultiSelected), cx - lastDrawnX < minDiamondSpacing {
+                    ki += 1; continue
+                }
                 lastDrawnX = cx
 
-                // True when this camera-track keyframe is a follow keyframe.
                 let isFollowKeyframe: Bool = {
                     guard case .camera = row.ref else { return false }
                     return camera?.keyframeTrack?.keyframes[safe: ki]?.followTargetName != nil
                 }()
+                let isLoopRepeat = isLoopTile(row.ref, time: times[ki])
 
-                // Generated loop repeats (past the source cycle) are dark green and
-                // non-interactive — they regenerate from the editable first cycle.
-                let isLoopRepeat = isLoopTile(row.ref, time: kfTime)
-
-                // Colour: dark green for loop repeats, amber while editing, teal when
-                // multi-selected, accent when single-selected, orange for follow
-                // keyframes, grey otherwise.
-                let fillColor: NSColor
-                if isLoopRepeat {
-                    fillColor = NSColor(red: 0.13, green: 0.42, blue: 0.20, alpha: 1)
-                } else if isSelected && isEditingKeyframe {
-                    // Pulsing amber to signal live-edit mode.
-                    fillColor = NSColor(red: 1.0, green: 0.65, blue: 0.15, alpha: 1)
-                } else if isMultiSelected {
-                    fillColor = NSColor.systemTeal
-                } else if isSelected {
-                    fillColor = NSColor.controlAccentColor
-                } else if isFollowKeyframe {
-                    // Orange to distinguish follow keyframes from free-camera keyframes.
-                    fillColor = NSColor(red: 1.0, green: 0.50, blue: 0.10, alpha: 1)
+                // Special (few) → draw inline with its colour; bulk → batch.
+                if isSelected || isMultiSelected || isFollowKeyframe {
+                    let fill: NSColor
+                    if isSelected && isEditingKeyframe { fill = NSColor(red: 1.0, green: 0.65, blue: 0.15, alpha: 1) }
+                    else if isMultiSelected            { fill = NSColor.systemTeal }
+                    else if isSelected                 { fill = NSColor.controlAccentColor }
+                    else                               { fill = NSColor(red: 1.0, green: 0.50, blue: 0.10, alpha: 1) } // follow
+                    let stroke: NSColor = (isSelected || isMultiSelected)
+                        ? NSColor.white.withAlphaComponent(0.9) : NSColor(white: 0.38, alpha: 1)
+                    drawSpecial(cx, cy, fill: fill, stroke: stroke, wide: isSelected || isMultiSelected)
+                } else if isLoopRepeat {
+                    addDiamond(loopPath, cx, cy)
                 } else {
-                    fillColor = NSColor(white: 0.72, alpha: 1)
+                    addDiamond(normalPath, cx, cy)
                 }
-
-                let strokeColor: NSColor = (isSelected || isMultiSelected)
-                    ? NSColor.white.withAlphaComponent(0.9)
-                    : NSColor(white: 0.38, alpha: 1)
-
-                let diamond = NSBezierPath()
-                diamond.move(to: NSPoint(x: cx,      y: cy - hs))
-                diamond.line(to: NSPoint(x: cx + hs, y: cy))
-                diamond.line(to: NSPoint(x: cx,      y: cy + hs))
-                diamond.line(to: NSPoint(x: cx - hs, y: cy))
-                diamond.close()
-
-                fillColor.setFill()
-                diamond.fill()
-
-                strokeColor.setStroke()
-                diamond.lineWidth = (isSelected || isMultiSelected) ? 1.5 : 0.8
-                diamond.stroke()
+                ki += 1
             }
+        }
+
+        // Batched bulk: fill + stroke each shared path once.
+        if !normalPath.isEmpty {
+            NSColor(white: 0.72, alpha: 1).setFill();  normalPath.fill()
+            NSColor(white: 0.38, alpha: 1).setStroke(); normalPath.lineWidth = 0.8; normalPath.stroke()
+        }
+        if !loopPath.isEmpty {
+            NSColor(red: 0.13, green: 0.42, blue: 0.20, alpha: 1).setFill();  loopPath.fill()
+            NSColor(white: 0.38, alpha: 1).setStroke(); loopPath.lineWidth = 0.8; loopPath.stroke()
         }
 
         // ── Playhead line through the lanes ───────────────────────────────────
@@ -2912,6 +2949,7 @@ final class TimelineEditorView: NSView {
 
         if needsRebuild {
             rebuildEasingPopups()
+            needsDisplay = true   // structural change → redraw lanes (timer no longer does so unconditionally)
         } else {
             // Lightweight pass: keep each popup's selection synced with its track.
             for b in easingPopups {
