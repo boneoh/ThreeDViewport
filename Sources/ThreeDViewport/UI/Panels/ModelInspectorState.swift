@@ -49,6 +49,10 @@ final class ModelInspectorState: ObservableObject {
     /// live-readout poll (`refresh()`) is skipped so an animating selection doesn't
     /// re-render this panel every tick and starve the render loop.
     var isPlaying:        (() -> Bool)?
+    /// True while a video export is running.  The export evaluates animation on a
+    /// background queue and mutates `sceneManager.groupTransforms`; refresh() reads
+    /// the same dictionary, so polling during export is a data race — skip it.
+    var isExporting:      (() -> Bool)?
     var onDirty:          (() -> Void)?
     var onRevealInFinder: (() -> Void)?
     /// Creates a Favorite Models alias for the current selection (wired by AppDelegate).
@@ -172,6 +176,7 @@ final class ModelInspectorState: ObservableObject {
     /// when the playhead moves through an opacity-bearing keyframe track.
     func refresh() {
         guard !(isPlaying?() ?? false) else { return }
+        guard !(isExporting?() ?? false) else { return }   // avoid racing the export thread
         guard hasSelection, let obj = anchor else { return }
         let p = worldPos(of: obj)
         if p != position {

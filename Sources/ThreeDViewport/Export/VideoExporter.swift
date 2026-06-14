@@ -710,23 +710,34 @@ final class VideoExporter {
     private func encodeTransparentGeometry(_ objects: [SceneObject], into encoder: MTLRenderCommandEncoder) {
         guard !objects.isEmpty,
               let tP = transparentPipelineState, let tDS = transparentDepthState else { return }
-        SceneGeometryEncoder.encode(
-            into:            encoder,
-            objects:         objects,
-            groupTransforms: sceneManager.groupTransforms,
-            lightUniforms:   lightManager.buildLightUniforms(from: exportLights),
-            context: SceneGeometryEncoder.Context(
-                viewProjection:    camera.viewProjectionMatrix,
-                eyePosition:       camera.eyePosition,
-                pipelineState:     tP,
-                depthStencilState: tDS,
-                colorMode:         colorMode,
-                isWireframe:       isWireframe,
-                exposure:          colorGradeSettings?.exposure ?? 1.0,
-                ibl:               ibl,
-                dummyUV:           dummyUVBuffer,
-                dummyTangent:      dummyTangentBuffer,
-                dummy2D:           dummyEquirect))
+        let context = SceneGeometryEncoder.Context(
+            viewProjection:    camera.viewProjectionMatrix,
+            eyePosition:       camera.eyePosition,
+            pipelineState:     tP,
+            depthStencilState: tDS,
+            colorMode:         colorMode,
+            isWireframe:       isWireframe,
+            exposure:          colorGradeSettings?.exposure ?? 1.0,
+            ibl:               ibl,
+            dummyUV:           dummyUVBuffer,
+            dummyTangent:      dummyTangentBuffer,
+            dummy2D:           dummyEquirect)
+        let lightUniforms = lightManager.buildLightUniforms(from: exportLights)
+
+        // Two passes: back faces first (cull front), then front faces (cull back) —
+        // mirrors the Renderer so a closed/convex glass mesh composites correctly from
+        // any angle without a per-triangle depth sort (depth-write is off).
+        for cull in [MTLCullMode.front, MTLCullMode.back] {
+            encoder.setCullMode(cull)
+            SceneGeometryEncoder.encode(
+                into:            encoder,
+                objects:         objects,
+                groupTransforms: sceneManager.groupTransforms,
+                lightUniforms:   lightUniforms,
+                context:         context)
+        }
+        // Restore the default no-cull state for any later draws in this encoder.
+        encoder.setCullMode(.none)
     }
 
     // MARK: - Offscreen render

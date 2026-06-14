@@ -2914,6 +2914,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         state.onRedraw = { [weak viewport] in viewport?.needsDisplay = true }
         state.onDirty  = { [weak self] in self?.markDirty() }
         state.isPlaying = { [weak viewport] in viewport?.timeline.isPlaying ?? false }
+        state.isExporting = { [weak self] in self?.exportState.isExporting ?? false }
         state.onRebuildNormals = { [weak viewport] mode, targets in
             viewport?.applyNormalMode(mode, toTargets: targets)
         }
