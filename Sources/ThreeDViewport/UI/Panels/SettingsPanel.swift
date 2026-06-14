@@ -23,6 +23,8 @@ struct SettingsPanel: View {
     @State private var codecIndex          = 0
     @State private var autoKeyUpdate       = false
     @State private var autoKeyInsert       = false
+    @State private var dragSensitivity     = 1.0
+    @State private var arrowSensitivity    = 1.0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -72,6 +74,16 @@ struct SettingsPanel: View {
 
             Divider()
 
+            Text("Movement sensitivity").font(.subheadline).foregroundColor(.secondary)
+            Text("Multiplier for viewport moves (1.0 = default). Higher = faster, "
+               + "lower = finer control.")
+                .font(.caption).foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            sensitivityRow("Mouse drag",  $dragSensitivity)
+            sensitivityRow("Arrow keys",  $arrowSensitivity)
+
+            Divider()
+
             HStack {
                 Spacer()
                 Button("Cancel") { onClose() }
@@ -98,6 +110,16 @@ struct SettingsPanel: View {
         }
     }
 
+    /// A labelled number up-down (stepper) for a sensitivity multiplier.
+    private func sensitivityRow(_ label: String, _ binding: Binding<Double>) -> some View {
+        HStack(spacing: 8) {
+            Text(label).frame(width: 140, alignment: .leading)
+            Text(String(format: "%.1f×", binding.wrappedValue)).frame(width: 48, alignment: .leading)
+            Stepper("", value: binding, in: 0.1...10, step: 0.1).labelsHidden()
+            Spacer()
+        }
+    }
+
     // MARK: - Actions
 
     private func seed() {
@@ -113,6 +135,8 @@ struct SettingsPanel: View {
         codecIndex          = settings.exportCodecID == "proRes422HQ" ? 1 : 0
         autoKeyUpdate       = settings.autoKeyframeUpdateNearby
         autoKeyInsert       = settings.autoKeyframeInsertBetween
+        dragSensitivity     = settings.dragSensitivity
+        arrowSensitivity    = settings.arrowSensitivity
     }
 
     private func saveAndClose() {
@@ -128,6 +152,8 @@ struct SettingsPanel: View {
         settings.exportCodecID       = codecIndex == 1 ? "proRes422HQ" : "proRes4444"
         settings.autoKeyframeUpdateNearby  = autoKeyUpdate
         settings.autoKeyframeInsertBetween = autoKeyInsert
+        settings.dragSensitivity  = dragSensitivity
+        settings.arrowSensitivity = arrowSensitivity
         settings.save()
         onClose()
     }

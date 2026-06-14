@@ -57,9 +57,11 @@ keyframed scene camera. The Director is never keyframed or exported.
   wheel along the third) for precise placement.
 - **7 / 8** solo the selected group (hide others / make them holdout) while posing.
 - **⌘+ / ⌘−** dolly the Director; **⌘R** re-auto-fits it.
+- **Click an object** to select it as the current model (works in the Director view
+  too); **⌥-click** isolates the part. A drag still navigates the Director.
 
-Typical flow: **S** to enter Scene mode → **O** to select/pose a part → **1–6** to
-reframe → pose → **S** to return to Camera mode.
+Typical flow: **S** to enter Scene mode → **click or O** to select/pose a part → **1–6**
+to reframe → pose → **S** to return to Camera mode.
 
 ## HUD
 

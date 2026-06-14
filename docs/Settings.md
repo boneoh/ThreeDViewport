@@ -26,6 +26,18 @@ Default locations used by file pickers and Export:
 | **Export width / height** | Output resolution; the camera aspect is matched to it at export. |
 | **Codec** | Default export codec (ProRes 4444 or 422 HQ). See [Export](Export.md). |
 
+## Movement sensitivity
+
+Multipliers for how far the viewport moves an object / light / camera / probe per
+input. **1.0 is the default** (a drag tracks the cursor ~1:1; an arrow-key press nudges
+~one screen point). Both scale automatically with distance and focal length, so these
+just tune the overall feel.
+
+| Setting | Effect |
+|---------|--------|
+| **Mouse drag** | Scales drag movement. Lower = finer, higher = faster. |
+| **Arrow keys** | Scales the arrow-key / ± depth nudge per press. Lower = finer. |
+
 ## Auto-keyframe on edit
 
 When you move or change an entity that is **already animated** (has keyframes) — via

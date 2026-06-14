@@ -2549,7 +2549,7 @@ final class ViewportView: MTKView {
                 dragLockAxis = abs(dragAccumX) >= abs(dragAccumY) ? .horizontal : .vertical
             }
 
-            let scale = worldUnitsPerPoint
+            let scale = dragScale
             let move: SIMD3<Float>
             switch dragLockAxis {
             case .horizontal: move = viewCamera.rightVector * (dx * scale)
@@ -2576,7 +2576,7 @@ final class ViewportView: MTKView {
                 dragLockAxis = abs(dragAccumX) >= abs(dragAccumY) ? .horizontal : .vertical
             }
 
-            let scale = worldUnitsPerPoint
+            let scale = dragScale
             let move: SIMD3<Float>
             switch dragLockAxis {
             case .horizontal: move = viewCamera.rightVector * (dx * scale)
@@ -2607,7 +2607,7 @@ final class ViewportView: MTKView {
                 lightManager.rotateSelected(deltaAzimuth:   -lockedDx * sensitivity,
                                             deltaElevation: -lockedDy * sensitivity)
             case .point, .spot, .laser:
-                let scale = worldUnitsPerPoint
+                let scale = dragScale
                 let d = viewCamera.rightVector * (lockedDx * scale)
                       + viewCamera.upVector    * (lockedDy * scale)
                 lightManager.translateSelected(by: d)
@@ -2626,7 +2626,7 @@ final class ViewportView: MTKView {
                 guard dist >= dragLockThreshold else { return }
                 dragLockAxis = abs(dragAccumX) >= abs(dragAccumY) ? .horizontal : .vertical
             }
-            let scale = worldUnitsPerPoint
+            let scale = dragScale
             switch dragLockAxis {
             case .horizontal: moveProbe(by: viewCamera.rightVector * (dx * scale))
             case .vertical:   moveProbe(by: viewCamera.upVector    * (dy * scale))
@@ -2681,8 +2681,10 @@ final class ViewportView: MTKView {
             }
             return
         }
-        // Skip while space-orbiting or in Scene/Director mode (a POV-navigation view).
-        guard !isSpaceDown, !sceneModeActive else { return }
+        // Skip only while space-orbiting.  Works in Scene mode too: pickObject casts the
+        // ray through viewCamera (the Director in Scene mode), so a click selects the
+        // object under the cursor and makes it the current model.
+        guard !isSpaceDown else { return }
         let pt = convert(event.locationInWindow, from: nil)
         if let hit = pickObject(at: pt) {
             // Option-click isolates the individual part under the cursor; a plain click
@@ -3118,9 +3120,9 @@ final class ViewportView: MTKView {
     // Sensitivity uses the Director's distance so feel matches the view.
 
     private func panSceneCameraInDirectorPlane(dx: Float, dy: Float) {
-        // Director is the active view in Scene mode, so worldUnitsPerPoint is
-        // director-based here — pans track the cursor at any distance / FOV.
-        let s = worldUnitsPerPoint
+        // Director is the active view in Scene mode, so dragScale is director-based
+        // here — pans track the cursor at any distance / FOV (drag-sensitivity applies).
+        let s = dragScale
         camera.target += director.rightVector * (dx * s)
         camera.target += director.upVector    * (dy * s)
     }
@@ -3375,20 +3377,25 @@ final class ViewportView: MTKView {
     private let intensityStep: Float = 0.1
     private let zoomStep:      Float = 0.1              // fraction of current distance per key
     private let scaleStep:     Float = 1.05             // Option+=/− scales object by ±5% per key
-    private let arrowStepPoints: Float = 8             // arrow/depth nudge in screen points per press
-
     /// World units per screen point at the view's focus distance, accounting for FOV
-    /// (focal length).  Used so drag / arrow / depth-key sensitivity tracks on-screen
-    /// size — an object follows the cursor ~1:1 and nudges stay consistent whether
-    /// you're zoomed in close on a small object or pulled back.  viewCamera is the
-    /// Director in Scene mode, the scene camera otherwise.
+    /// (focal length).  Base for drag / arrow / depth-key sensitivity so movement
+    /// tracks on-screen size whether you're zoomed in close on a small object or
+    /// pulled back.  viewCamera is the Director in Scene mode, the scene camera otherwise.
     private var worldUnitsPerPoint: Float {
         let h = max(Float(bounds.height), 1)
         return 2 * viewCamera.distance * tan(viewCamera.fovYRadians / 2) / h
     }
-    /// Per-press translation step: a fixed number of screen points, so a nudge looks
-    /// the same regardless of distance / focal length (replaces the old fixed 0.05).
-    private var translateStepWorld: Float { worldUnitsPerPoint * arrowStepPoints }
+    /// Mouse-drag move scale — 1:1 with the cursor at the default sensitivity of 1.0;
+    /// the user-tunable Settings multiplier scales it.
+    private var dragScale: Float {
+        worldUnitsPerPoint * Float(AppSettings.shared.dragSensitivity)
+    }
+    /// Per-press translation step for arrow / +- depth keys — 1 screen point per press
+    /// at the default sensitivity of 1.0 (very fine), scaled by the Settings multiplier.
+    /// Hold the key to repeat for larger moves.
+    private var translateStepWorld: Float {
+        worldUnitsPerPoint * Float(AppSettings.shared.arrowSensitivity)
+    }
 
     override func keyDown(with event: NSEvent) {
         let kc = event.keyCode

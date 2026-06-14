@@ -30,6 +30,10 @@ final class AppSettings: ObservableObject {
     @Published var autoKeyframeUpdateNearby:  Bool  // update the keyframe under the playhead
     @Published var autoKeyframeInsertBetween: Bool  // add a keyframe when between keyframes
 
+    // Viewport movement sensitivity multipliers (1.0 = the default 1:1 feel).
+    @Published var dragSensitivity:  Double   // mouse-drag move scale
+    @Published var arrowSensitivity: Double   // arrow-key / +- depth step scale
+
     enum Defaults {
         static let projects  = "~/Documents/ThreeDViewport/Projects"
         static let movies    = "~/Documents/ThreeDViewport/Movies"
@@ -43,6 +47,8 @@ final class AppSettings: ObservableObject {
         static let codecID   = "proRes4444"
         static let autoKeyUpdate = false
         static let autoKeyInsert = false
+        static let dragSensitivity:  Double = 1.0
+        static let arrowSensitivity: Double = 1.0
     }
 
     init(projectsPath:        String = Defaults.projects,
@@ -56,7 +62,9 @@ final class AppSettings: ObservableObject {
          exportHeight:        Int    = Defaults.height,
          exportCodecID:       String = Defaults.codecID,
          autoKeyframeUpdateNearby:  Bool = Defaults.autoKeyUpdate,
-         autoKeyframeInsertBetween: Bool = Defaults.autoKeyInsert) {
+         autoKeyframeInsertBetween: Bool = Defaults.autoKeyInsert,
+         dragSensitivity:  Double = Defaults.dragSensitivity,
+         arrowSensitivity: Double = Defaults.arrowSensitivity) {
         self.projectsPath        = projectsPath
         self.moviesPath          = moviesPath
         self.modelsPathPrimary   = modelsPathPrimary
@@ -69,6 +77,8 @@ final class AppSettings: ObservableObject {
         self.exportCodecID       = exportCodecID
         self.autoKeyframeUpdateNearby  = autoKeyframeUpdateNearby
         self.autoKeyframeInsertBetween = autoKeyframeInsertBetween
+        self.dragSensitivity  = dragSensitivity
+        self.arrowSensitivity = arrowSensitivity
     }
 
     // MARK: - Persistence
@@ -87,6 +97,8 @@ final class AppSettings: ObservableObject {
         var exportCodecID:       String
         var autoKeyframeUpdateNearby:  Bool?   // optional: older files predate them
         var autoKeyframeInsertBetween: Bool?
+        var dragSensitivity:  Double?   // optional: older files predate them
+        var arrowSensitivity: Double?
     }
 
     static func settingsURL() -> URL {
@@ -116,7 +128,9 @@ final class AppSettings: ObservableObject {
                            exportHeight:        s.exportHeight,
                            exportCodecID:       s.exportCodecID,
                            autoKeyframeUpdateNearby:  s.autoKeyframeUpdateNearby  ?? Defaults.autoKeyUpdate,
-                           autoKeyframeInsertBetween: s.autoKeyframeInsertBetween ?? Defaults.autoKeyInsert)
+                           autoKeyframeInsertBetween: s.autoKeyframeInsertBetween ?? Defaults.autoKeyInsert,
+                           dragSensitivity:  s.dragSensitivity  ?? Defaults.dragSensitivity,
+                           arrowSensitivity: s.arrowSensitivity ?? Defaults.arrowSensitivity)
     }
 
     func save() {
@@ -131,7 +145,9 @@ final class AppSettings: ObservableObject {
                        exportHeight:        exportHeight,
                        exportCodecID:       exportCodecID,
                        autoKeyframeUpdateNearby:  autoKeyframeUpdateNearby,
-                       autoKeyframeInsertBetween: autoKeyframeInsertBetween)
+                       autoKeyframeInsertBetween: autoKeyframeInsertBetween,
+                       dragSensitivity:  dragSensitivity,
+                       arrowSensitivity: arrowSensitivity)
         do {
             let enc = JSONEncoder()
             enc.outputFormatting = [.prettyPrinted, .sortedKeys]
