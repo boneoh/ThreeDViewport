@@ -7,6 +7,11 @@ like any other object in the host scene.
 
 **Open:** File ▸ Import Project…
 
+> **Reusing a glued gizmo with its animation:** Import Project the gizmo's **`.3dvp`** —
+> it brings the keyframes, group animation, glued [envelopes](Glue.md), and spin/orbit
+> motion. (Open Model of the exported `.glb` gives a *static* copy only.) To make the
+> imported spin/orbit **editable** afterward, see *Extending an import's spin / orbit* below.
+
 ## Workflow
 
 1. **File ▸ Import Project…**, pick a `.3dvp`.
@@ -20,6 +25,10 @@ like any other object in the host scene.
    - **Include fog & particles** — also bring in the import's effects (off by default):
      its particle emitters are **appended**, and its fog is **adopted only if the host
      has none** (see below).
+   - **Make spin/orbit editable (extends to end)** — off by default. When on, the
+     import's spin/orbit rate-markers are re-applied to the imported objects so they're
+     **editable** and run to the host timeline's end (same as *Extend Spin/Orbit to End*
+     below, done automatically). Leave it off to keep the motion exactly as authored.
    - **Use source In/Out range** — appears only when the source has **both** an In and
      an Out [timeline mark](Timeline-Editor.md#in--out-marks); imports just that slice
      (see below). Defaults on when available.
@@ -97,6 +106,9 @@ Position/Rotation/Scale and Include lights work exactly as for a full import.
 Imported spin/orbit come in as **baked keyframes that stop at the source's duration** —
 the editable rate markers aren't imported, so a spinning gizmo dropped into a longer
 scene stops partway. To carry it through:
+
+Tick **Make spin/orbit editable** in the Import dialog to do this automatically as part
+of the import, or do it later on demand:
 
 **Right-click the bundle header ▸ Extend Spin/Orbit to End.** ThreeDViewport re-opens the
 source `.3dvp`, reads its spin/orbit **rate markers**, and re-applies them to the

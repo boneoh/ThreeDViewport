@@ -1631,10 +1631,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 includeLights:  options.includeLights,
                 includeEffects: options.includeEffects,
                 sliceRange:     options.effectiveSlice)
+            let bundlesBefore = Set(viewport.sceneManager.importBundleSources.keys)
             guard ProjectFile.importProject(from: url, into: viewport, options: opts) else {
                 self.showErrorAlert(message: "Import failed",
                                     detail: "Could not read the project file.")
                 return
+            }
+            // Opt-in: make the imported spin/orbit editable (re-apply the source's rate
+            // markers, extended to the host end).  Reuses the bundle-header "Extend
+            // Spin/Orbit to End" logic, silently (no alert if there's none to extend).
+            if options.makeSpinEditable {
+                let newBundles = Set(viewport.sceneManager.importBundleSources.keys)
+                    .subtracting(bundlesBefore)
+                for bid in newBundles { self.extendBundleSpinOrbit(bid, silent: true) }
             }
             self.markDirty()
             viewport.syncOverlayState()
@@ -4847,7 +4856,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     /// (time-offset by the import's T, orbit geometry by its M).  Because rate markers
     /// always bake out to the host timeline's end, the motion now runs to the end of
     /// the big scene AND is editable (change rate, reverse, drop a rate-0 to stop).
-    private func extendBundleSpinOrbit(_ bid: Int) {
+    private func extendBundleSpinOrbit(_ bid: Int, silent: Bool = false) {
         guard let vp = viewportView else { return }
         let sm = vp.sceneManager
         guard let src = sm.importBundleSources[bid], !src.path.isEmpty else { return }
@@ -4855,6 +4864,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard FileManager.default.fileExists(atPath: src.path),
               let json = try? Data(contentsOf: URL(fileURLWithPath: src.path)),
               let data = try? JSONDecoder().decode(ProjectData.self, from: json) else {
+            if silent { return }   // auto-run on import: skip quietly if the source moved
             showErrorAlert(message: "Can't extend spin/orbit",
                            detail: "The source project couldn't be opened:\n\n\(src.path)\n\n"
                                  + "Restore the file or re-import to refresh the link.")
@@ -4904,6 +4914,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
 
         guard applied > 0 else {
+            if silent { return }   // auto-run on import: nothing to extend is fine
             let a = NSAlert()
             a.messageText     = "No editable spin/orbit found"
             a.informativeText = "The source project \"\(sm.bundleName(for: bid))\" has no spin or orbit "

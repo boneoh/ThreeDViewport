@@ -17,6 +17,10 @@ final class ImportProjectOptions: ObservableObject {
     /// Also bring in the source's particle emitters (appended) and its fog (adopted
     /// only when the host has none — fog is a single global volume).
     @Published var includeEffects: Bool = false
+    /// After importing, re-apply the source's spin/orbit rate markers to the imported
+    /// objects so they stay EDITABLE (and run to the host timeline's end).  Off by
+    /// default — the imported motion otherwise plays exactly as authored.
+    @Published var makeSpinEditable: Bool = false
     /// When the source has both In/Out marks, import only that slice (remapped so
     /// the source In lands at `insertTime`).  Defaults on when a range is available.
     @Published var useSourceInOut: Bool
@@ -103,6 +107,7 @@ struct ImportProjectSheet: View {
 
             Toggle("Include lights", isOn: $options.includeLights)
             Toggle("Include fog & particles", isOn: $options.includeEffects)
+            Toggle("Make spin/orbit editable (extends to end)", isOn: $options.makeSpinEditable)
 
             if let r = options.sourceInOut {
                 Toggle("Use source In/Out range", isOn: $options.useSourceInOut)

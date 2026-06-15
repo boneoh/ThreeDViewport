@@ -101,6 +101,10 @@ re-imports auto-normalised at the origin.
 > reopen and Unglue. See
 > [Advanced ▸ Bake a sub-assembly into a reusable model](Advanced.md#bake-a-sub-assembly-into-a-reusable-model).
 
+> **Need the animation too?** The `.glb` is geometry only — no keyframes, spin, or orbit.
+> So **Open Model** the `.glb` for a *static* copy of the unit; to reuse it *with* its
+> animation, **[Import Project](Import-Project.md)** the source `.3dvp` instead.
+
 Because `.glb` is a standard format, the exported model isn't a dead end — you can open it
 in a third-party tool such as **Blender**, edit the geometry, materials, or layout, and
 export it again as `.glb` for use back in ThreeDViewport. The original glue relationship
