@@ -26,6 +26,11 @@ final class Renderer: NSObject, MTKViewDelegate {
     // feedback compositor still distinguishes geometry from background.
     var transparentPipelineState: MTLRenderPipelineState?
     var transparentDepthState:    MTLDepthStencilState?
+    // Depth-only (no colour writes).  In the feedback path, stamps transparent
+    // feedback-ON geometry's depth into the scene depth buffer (transparent draws
+    // with depth-write OFF) so feedback-OFF opaque geometry drawn after the composite
+    // is correctly occluded by transparent objects in front of it.
+    var depthOnlyPipelineState:   MTLRenderPipelineState?
     // Export-only: re-paints the black holdout silhouettes over background glass
     // (.lessEqual, no depth write) so held-out holes stay pure black for the keyer.
     var holdoutRestampDepthState: MTLDepthStencilState?
@@ -314,6 +319,18 @@ final class Renderer: NSObject, MTKViewDelegate {
         // Restore opaque blend state on the descriptor for any later reuse.
         tCA.isBlendingEnabled = false
 
+        // Depth-only variant: same vertex transform, colour writes masked off.  Used
+        // to stamp transparent geometry's depth into the scene depth buffer (see
+        // depthOnlyPipelineState).  The fragment still runs but its output is discarded.
+        tCA.writeMask = []
+        do {
+            depthOnlyPipelineState = try device.makeRenderPipelineState(descriptor: pipelineDesc)
+            print("[DEBUG] Renderer: depth-only pipeline created")
+        } catch {
+            print("[DEBUG] Renderer: depth-only pipeline failed — " + error.localizedDescription)
+        }
+        tCA.writeMask = .all   // restore for any later reuse
+
         let depthDesc = MTLDepthStencilDescriptor()
         depthDesc.depthCompareFunction = .less
         depthDesc.isDepthWriteEnabled  = true
@@ -584,6 +601,32 @@ final class Renderer: NSObject, MTKViewDelegate {
         // Restore the default no-cull state for any later draws in this encoder
         // (gizmos, scene widgets, overlays) that don't set their own cull mode.
         encoder.setCullMode(.none)
+    }
+
+    /// Stamps `objects`' depth into the current depth attachment WITHOUT writing colour
+    /// (depth-write on, colour masked off).  Used in the feedback path so transparent
+    /// feedback-ON geometry — which renders with depth-write OFF for blending — still
+    /// occludes the feedback-OFF opaque geometry that's drawn after the composite.
+    private func encodeDepthOnly(_ objects: [SceneObject], into encoder: MTLRenderCommandEncoder) {
+        guard !objects.isEmpty, let dP = depthOnlyPipelineState,
+              let dDS = depthStencilState else { return }
+        SceneGeometryEncoder.encode(
+            into:            encoder,
+            objects:         objects,
+            groupTransforms: sceneManager.groupTransforms,
+            lightUniforms:   lightManager.buildLightUniforms(from: animatedLights),
+            context: SceneGeometryEncoder.Context(
+                viewProjection:    viewCamera.viewProjectionMatrix,
+                eyePosition:       viewCamera.eyePosition,
+                pipelineState:     dP,
+                depthStencilState: dDS,   // .less, depth-write ON
+                colorMode:         colorMode,
+                isWireframe:       false,
+                exposure:          colorGradeSettings?.exposure ?? 1.0,
+                ibl:               ibl,
+                dummyUV:           dummyUVBuffer,
+                dummyTangent:      dummyTangentBuffer,
+                dummy2D:           dummyEquirect))
     }
 
     func draw(in view: MTKView) {
@@ -885,6 +928,14 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         // Transparent geometry (feedback-on lane / all when feedback off).
         encodeTransparentGeometry(onTransparent, into: encoder)
+
+        // Feedback lane split: stamp the transparent feedback-ON geometry's depth into
+        // the scene depth buffer (it rendered with depth-write off).  Without this the
+        // feedback-OFF opaque geometry drawn after the composite isn't occluded by it,
+        // so an opaque backdrop paints over a transparent object in front of it.
+        if feedbackActive, !visibleOff.isEmpty {
+            encodeDepthOnly(onTransparent, into: encoder)
+        }
 
         // ── Scene-mode widgets (camera frustum + light gizmos) ────────────────
         // Drawn last in the main pass so they layer above geometry where depth

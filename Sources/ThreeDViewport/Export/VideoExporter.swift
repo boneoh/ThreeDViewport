@@ -139,6 +139,10 @@ final class VideoExporter {
     // Re-paints the black holdout silhouettes over background glass so held-out holes
     // stay pure black for the keyer while real background glass still renders.
     private let holdoutRestampDepthState: MTLDepthStencilState?
+    // Depth-only pipeline (no colour writes) — shared from the Renderer.  Stamps
+    // transparent feedback-ON geometry's depth so feedback-OFF opaque geometry drawn
+    // after the composite is occluded by transparent objects in front of it.
+    private let depthOnlyPipelineState: MTLRenderPipelineState?
     private let animStart:         Double   // first animation time (seconds); 0 = full timeline
     private let animDuration:      Double   // length of the exported range (seconds)
     private let timelineDuration:  Double   // full timeline length — cutoff for past-end keyframes
@@ -231,7 +235,8 @@ final class VideoExporter {
           holdoutPipelineState: MTLRenderPipelineState? = nil,
           transparentPipelineState: MTLRenderPipelineState? = nil,
           transparentDepthState:    MTLDepthStencilState?   = nil,
-          holdoutRestampDepthState: MTLDepthStencilState?   = nil) {
+          holdoutRestampDepthState: MTLDepthStencilState?   = nil,
+          depthOnlyPipelineState:   MTLRenderPipelineState? = nil) {
 
         self.device            = device
         self.commandQueue      = commandQueue
@@ -246,6 +251,7 @@ final class VideoExporter {
         self.transparentPipelineState = transparentPipelineState
         self.transparentDepthState    = transparentDepthState
         self.holdoutRestampDepthState = holdoutRestampDepthState
+        self.depthOnlyPipelineState   = depthOnlyPipelineState
         // Export range: clamp to [0, duration]; an empty/inverted range falls back
         // to the full timeline so a bad In/Out can't produce a zero-length export.
         let clampStart = max(0, min(rangeStart, timeline.duration))
@@ -710,6 +716,31 @@ final class VideoExporter {
                 dummy2D:           dummyEquirect))
     }
 
+    /// Stamps `objects`' depth into the current depth attachment without writing colour
+    /// (depth-write on, colour masked off).  Feedback path: transparent feedback-ON
+    /// geometry renders depth-write OFF, so without this the feedback-OFF opaque
+    /// geometry drawn after the composite isn't occluded by it.
+    private func encodeDepthOnly(_ objects: [SceneObject], into encoder: MTLRenderCommandEncoder) {
+        guard !objects.isEmpty, let dP = depthOnlyPipelineState else { return }
+        SceneGeometryEncoder.encode(
+            into:            encoder,
+            objects:         objects,
+            groupTransforms: sceneManager.groupTransforms,
+            lightUniforms:   lightManager.buildLightUniforms(from: exportLights),
+            context: SceneGeometryEncoder.Context(
+                viewProjection:    camera.viewProjectionMatrix,
+                eyePosition:       camera.eyePosition,
+                pipelineState:     dP,
+                depthStencilState: depthStencilState,   // .less, depth-write ON
+                colorMode:         colorMode,
+                isWireframe:       false,
+                exposure:          colorGradeSettings?.exposure ?? 1.0,
+                ibl:               ibl,
+                dummyUV:           dummyUVBuffer,
+                dummyTangent:      dummyTangentBuffer,
+                dummy2D:           dummyEquirect))
+    }
+
     private func encodeOpaqueGeometry(_ objects: [SceneObject], into encoder: MTLRenderCommandEncoder) {
         guard !objects.isEmpty else { return }
         SceneGeometryEncoder.encode(
@@ -911,6 +942,13 @@ final class VideoExporter {
             }
 
             encodeTransparentGeometry(onTransparent, into: encoder)
+
+            // Feedback lane split: stamp transparent feedback-ON geometry's depth (it
+            // rendered depth-write off) so the feedback-OFF opaque geometry drawn after
+            // the composite is occluded by transparent objects in front of it.
+            if feedbackActive, !visibleOff.isEmpty {
+                encodeDepthOnly(onTransparent, into: encoder)
+            }
 
             // Re-stamp the holdout silhouettes over the glass so held-out holes stay
             // pure black for the keyer (.lessEqual matches the silhouette depth the

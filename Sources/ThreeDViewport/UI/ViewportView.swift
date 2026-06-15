@@ -2373,7 +2373,8 @@ final class ViewportView: MTKView {
             holdoutPipelineState: r.holdoutPipelineState,
             transparentPipelineState: r.transparentPipelineState,
             transparentDepthState:    r.transparentDepthState,
-            holdoutRestampDepthState: r.holdoutRestampDepthState
+            holdoutRestampDepthState: r.holdoutRestampDepthState,
+            depthOnlyPipelineState:   r.depthOnlyPipelineState
         ) else {
             print("[DEBUG] ViewportView: startExport — VideoExporter init returned nil")
             return
