@@ -87,6 +87,7 @@ Each panel has its own page under [`docs/`](docs/) with full controls, keystroke
 | Path Animator — Spin | Window → Path Animator → Spin… | [Spin-Path-Animator](docs/Spin-Path-Animator.md) |
 | Glue (Envelopes) | Edit → Glue Objects… | [Glue](docs/Glue.md) |
 | Import Project | File → Import Project… | [Import-Project](docs/Import-Project.md) |
+| Export / Export All Passes | File → Export… · ⌘E / ⌘⇧E | [Export](docs/Export.md) |
 | Settings | ThreeDViewport → Settings… · ⌘, | [Settings](docs/Settings.md) |
 | New Instance | ThreeDViewport → New Instance | [Settings](docs/Settings.md#new-instance) |
 
@@ -126,9 +127,17 @@ A video delay-line echo/trails pass ([Feedback](docs/Feedback.md)) and an exposu
 
 Save named, colour-coded world positions from the [Probe](docs/Probe-Inspector.md) as on-screen reference marks (toggle **K**, cycle **N**) — handy for laying out and adjusting animation, and optionally rendered into exports for final-take tweaks.
 
+### Lock tracks to prevent accidental edits
+
+A per-row **padlock** in the [Timeline Editor](docs/Timeline-Editor.md) freezes a track — no viewport move/rotate/scale and no keyframe stamp/drag/delete/paste (playback and export are unaffected; a gentle beep reminds you). The **Camera, Lights, Model, Atmosphere, Probe, Feedback, and Color Grade** panels grey out their editing controls when their item is locked, and a locked Probe can't be moved in the viewport. **Lock All / Unlock All** sits in the Timeline footer; lock state is saved with the project.
+
 ### Video export
 
-**File → Export ProRes Video…** (⌘E) renders the timeline offline to ProRes 4444 (luma-alpha) or 422 HQ, each prepended with a sync countdown; **Export All Passes…** (⌘⇧E) renders a multi-pass set for compositing. See [Export](docs/Export.md).
+**File → Export ProRes Video…** (⌘E) renders the timeline offline to ProRes 4444 (luma-alpha) or 422 HQ, each prepended with a sync countdown; **Export All Passes…** (⌘⇧E) renders a multi-pass set for compositing. While exporting, the main window minimizes and an **Export Progress** panel shows the project, **pass _x_ of _y_**, and percent; if there are unsaved changes you're prompted to **save first**, so a mid-export edit can't corrupt the take. See [Export](docs/Export.md).
+
+### Reusable gizmos (Glue → Export / Import)
+
+Build a sub-assembly, animate it, and **[Glue](docs/Glue.md)** it into one unit. **File → Export Model…** bakes the unit to a reusable `.glb` (geometry only) — **Open Model** it into any project for a static copy. To reuse it *with* its animation, **[Import Project](docs/Import-Project.md)** the source `.3dvp` instead (tick *Make spin/orbit editable* to keep the spin/orbit tweakable). See the [Advanced guide](docs/Advanced.md).
 
 ---
 
@@ -144,6 +153,7 @@ Saved state covers everything needed to reproduce a session:
 - Light configurations + per-light keyframe tracks
 - Background (solid / gradient / HDRI), color-grade, feedback, fog + weather emitters, rendering-mode (color / greyscale / B+W), wireframe, and axes-gizmo settings
 - Probe position and named position **marks** (names, positions, colours)
+- Per-track and per-panel **lock** state (timeline tracks; Camera / Lights / Probe / Feedback / Color Grade)
 - Window and panel positions for the main window, Timeline Editor, and every inspector panel — restored on load
 
 Model files are referenced by absolute path; they need to remain at their original location for the project to reload cleanly. If a referenced model is missing on load, the project prompts you to locate it.
