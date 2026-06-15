@@ -289,18 +289,22 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
         pipelineDesc.fragmentFunction = fragmentFn   // restore for any later reuse
 
-        // Transparent variant: same shaders, alpha blending on for the color
-        // channels (over-compositing), but alpha-channel write is configured
-        // to preserve the destination's existing alpha — so the feedback
-        // compositor still sees geometry pixels as a=1.
+        // Transparent variant: same shaders, alpha blending on (over-compositing).
+        // The ALPHA channel uses standard source-over too, so transparent geometry
+        // CONTRIBUTES coverage (= its opacity) rather than preserving the dest alpha.
+        // This matters for the feedback content-mask (scene.a): without it, glass
+        // over the background reads a=0 and the feedback trail washes it out (e.g. a
+        // transparent torus vanishing over open sky); over opaque it still resolves
+        // to a=1.  Same treatment the laser/spark/particle blends already use.
+        // It also makes ProRes 4444 coverage alpha = opacity for transparent-over-bg.
         let tCA = pipelineDesc.colorAttachments[0]!
         tCA.isBlendingEnabled                 = true
         tCA.rgbBlendOperation                 = .add
         tCA.sourceRGBBlendFactor              = .sourceAlpha
         tCA.destinationRGBBlendFactor         = .oneMinusSourceAlpha
         tCA.alphaBlendOperation               = .add
-        tCA.sourceAlphaBlendFactor            = .zero
-        tCA.destinationAlphaBlendFactor       = .one
+        tCA.sourceAlphaBlendFactor            = .one
+        tCA.destinationAlphaBlendFactor       = .oneMinusSourceAlpha
         do {
             transparentPipelineState = try device.makeRenderPipelineState(descriptor: pipelineDesc)
             print("[DEBUG] Renderer: transparent pipeline created")
