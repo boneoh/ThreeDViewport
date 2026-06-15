@@ -2439,10 +2439,9 @@ final class ViewportView: MTKView {
     /// each export's completion (one VideoExporter run per pass).  `onAllComplete`
     /// fires once after the last pass, or on the first error.  The caller restores
     /// scene state afterward (by reloading the just-saved project).
-    func startExportAll(folder: URL, projectName: String, cycleNumber: Int,
-                        codec: ExportCodec, fps: ExportFrameRate,
-                        exportState: ExportState,
-                        onAllComplete: @escaping (Error?) -> Void) {
+    /// Builds the Export All pass list from the classes/FX present in the scene.
+    /// Shared by startExportAll and the pass-count accessor so they never disagree.
+    private func exportAllPasses() -> [ExportPass] {
         let present = Set(sceneManager.objects.map { $0.objectClass })
         // FX present if any weather emitter is enabled or fog is on (lasers ride along).
         let fxPresent = particleManager.emitters.contains { $0.isEnabled }
@@ -2469,6 +2468,17 @@ final class ViewportView: MTKView {
             passes.append(ExportPass(name: "FX Solo",  visible: [], matte: false, blackBg: true, fx: true))
             passes.append(ExportPass(name: "FX Matte", visible: [], matte: true,  blackBg: true, fx: true))
         }
+        return passes
+    }
+
+    /// Number of passes Export All will run for the current scene (for the progress UI).
+    func exportAllPassCount() -> Int { exportAllPasses().count }
+
+    func startExportAll(folder: URL, projectName: String, cycleNumber: Int,
+                        codec: ExportCodec, fps: ExportFrameRate,
+                        exportState: ExportState,
+                        onAllComplete: @escaping (Error?) -> Void) {
+        let passes = exportAllPasses()
 
         // Background fields to restore for the project-background passes (Full/Scene).
         let origMode  = backgroundConfig.mode
@@ -2480,6 +2490,9 @@ final class ViewportView: MTKView {
             guard i < passes.count else { onAllComplete(nil); return }
             let pass = passes[i]
             applyExportPass(pass, origMode: origMode, origSolid: origSolid)
+            exportState.passIndex   = i + 1
+            exportState.passCount   = total
+            exportState.passName    = pass.name
             exportState.lastMessage = "Exporting pass \(i + 1)/\(total): \(pass.name)"
             let url = folder.appendingPathComponent("\(projectName).\(nn).\(pass.name).mov")
             startExport(to: url, codec: codec, fps: fps, exportState: exportState,

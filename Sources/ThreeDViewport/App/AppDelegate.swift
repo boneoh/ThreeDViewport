@@ -11,6 +11,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     var viewportView: ViewportView?
     let exportState = ExportState()
 
+    // Export Progress panel — shown while an export runs (main window minimized).
+    private var exportProgressPanel: NSPanel?
+
     // Phase 7: Floating lights & background inspector panel.
     private var lightsPanel: NSPanel?
 
@@ -4361,6 +4364,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         print("[DEBUG] AppDelegate: added to favourites — " + ctx.aliasURL.path)
     }
 
+    /// Pre-export gate: if the project has unsaved changes, prompt Save / Cancel.
+    /// Returns true to proceed (saved or already clean), false to abort the export.
+    private func confirmSaveIfDirtyForExport() -> Bool {
+        guard isDirty else { return true }
+        let alert = NSAlert()
+        alert.messageText     = "Save Before Exporting?"
+        alert.informativeText = "The project has unsaved changes. Save before starting the export."
+        alert.alertStyle      = .warning
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return false }
+        saveProject(self)   // project already has a URL (export requires it)
+        return true
+    }
+
+    /// Starts an export session: seeds the progress panel, shows it, and minimizes the
+    /// main window (which hides all child panels via windowWillMiniaturize — so no edits
+    /// can corrupt the in-progress scene).  `passCount` 1 = a single export.
+    private func beginExportSession(projectName: String, passCount: Int) {
+        exportState.projectName = projectName
+        exportState.passCount   = passCount
+        exportState.passIndex   = 1
+        exportState.passName    = ""
+        exportState.progress    = 0
+
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 340, height: 150),
+                            styleMask: [.titled, .nonactivatingPanel],   // no close button
+                            backing: .buffered, defer: false)
+        panel.title             = "Export Progress"
+        panel.isFloatingPanel   = true
+        panel.level             = .floating
+        panel.hidesOnDeactivate = false
+        panel.contentView       = NSHostingView(rootView: ExportProgressPanel(state: exportState))
+        panel.center()
+        panel.orderFront(nil)
+        exportProgressPanel = panel
+
+        window?.miniaturize(nil)   // hides child panels via windowWillMiniaturize
+    }
+
+    /// Ends an export session: closes the progress panel and restores the main window
+    /// (which restores the hidden child panels via windowDidDeminiaturize).
+    private func endExportSession() {
+        exportProgressPanel?.orderOut(nil)
+        exportProgressPanel = nil
+        if let w = window, w.isMiniaturized { w.deminiaturize(nil) }
+    }
+
     @objc private func exportAll(_ sender: Any) {
         guard let window = window else { return }
         guard viewportView?.sceneManager.primaryObject != nil else {
@@ -4406,12 +4457,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 tl.frameRate = fps.value
             }
 
-            // Checkpoint: save current state so the cycle can reload it afterward.
-            self.saveProject(sender)
+            // Dirty gate: prompt Save / Cancel (Cancel aborts).  The saved file is the
+            // checkpoint reloaded after the cycle; if clean, it already is.
+            guard self.confirmSaveIfDirtyForExport() else { return }
 
             let cycle = self.nextCycleNumber(projectName: projectName, in: projectMovieDir)
             print("[DEBUG] AppDelegate: Export All cycle \(cycle) codec=\(codec.displayName)"
                 + " res=\(res.width)x\(res.height) fps=\(fps.display)")
+
+            // Progress panel up + main window minimized (no edits possible mid-export).
+            let total = self.viewportView?.exportAllPassCount() ?? 0
+            self.beginExportSession(projectName: projectName, passCount: total)
 
             self.viewportView?.startExportAll(
                 folder: projectMovieDir, projectName: projectName, cycleNumber: cycle,
@@ -4420,6 +4476,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 guard let self = self else { return }
                 // Restore exact pre-cycle state by reloading the checkpoint project.
                 self.loadProject(from: projectURL)
+                // Hide progress + restore the main window (and its child panels) first.
+                self.endExportSession()
                 if let error = error {
                     self.showErrorAlert(message: "Export All failed", detail: error.localizedDescription)
                 } else {
@@ -4465,6 +4523,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             alert.beginSheetModal(for: window)
             return
         }
+
+        // Dirty gate: prompt Save / Cancel before the filename panel (Cancel aborts).
+        guard confirmSaveIfDirtyForExport() else { return }
 
         let projectName = projectURL.deletingPathExtension().lastPathComponent
         let projectMovieDir = defaultDirectory(for: "Movies")
@@ -4525,10 +4586,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 + " codec=" + codec.displayName
                 + " res=\(res.width)×\(res.height) fps=" + fps.display
                 + (rEnd != nil ? " range=\(rStart)…\(rEnd!)" : " range=full"))
+            // Progress panel up + main window minimized (no edits possible mid-export).
+            self.beginExportSession(projectName: projectName, passCount: 1)
+            self.exportState.passName = url.lastPathComponent
             self.viewportView?.startExport(
                 to: url, codec: codec, fps: fps, exportState: self.exportState,
                 rangeStart: rStart, rangeEnd: rEnd
             ) { [weak self] error in
+                // Hide progress + restore the main window (and child panels) first.
+                self?.endExportSession()
                 // Mirror the HDR export confirmation so the user gets explicit
                 // acknowledgement at the end of a (often long) video export.
                 if let error = error {
