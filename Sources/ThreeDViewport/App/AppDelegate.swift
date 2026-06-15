@@ -4978,9 +4978,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // Candidate display name = the Timeline's first-column name (group name for a
         // model, else object name) — including the duplicate-instance suffix so two
         // copies of the same file read as "name 1" / "name 2".
-        let candidates: [GlueOptions.Candidate] = roots.map { idx in
-            GlueOptions.Candidate(id: idx, name: scene.displayName(for: scene.objects[idx]))
-        }
+        let candidates: [GlueOptions.Candidate] = roots
+            .map { GlueOptions.Candidate(id: $0, name: scene.glueListName(for: scene.objects[$0])) }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
 
         // Pre-select the currently selected root (plus a sensible second one) so the
         // common "select A, glue with B" flow needs minimal clicking.
@@ -5074,7 +5074,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let addable = scene.rootObjectIndicesSorted.filter { !scene.objects[$0].isEnvelope }
         let ids     = Array(Set(current).union(addable))
         let candidates: [GlueOptions.Candidate] = ids
-            .map { GlueOptions.Candidate(id: $0, name: scene.displayName(for: scene.objects[$0])) }
+            .map { GlueOptions.Candidate(id: $0, name: scene.glueListName(for: scene.objects[$0])) }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
 
         let options = GlueOptions(

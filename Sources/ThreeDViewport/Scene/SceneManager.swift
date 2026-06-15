@@ -142,6 +142,19 @@ final class SceneManager {
     /// instances are numbered ("hand 1", "hand 2") so they're distinguishable in the
     /// timeline / pickers; a single instance keeps its plain name ("hand").
     /// Display only — identity/persistence key on filename + occurrence, not this.
+    /// Name for the Glue sheet's FLAT candidate list.  A multi-part model's parts are
+    /// all roots with the same group name, so `displayName` makes them indistinguishable
+    /// there; this prefixes the model name so each part reads as "Model - part" (the
+    /// Timeline relies on indentation instead).  Other objects use `displayName`.
+    func glueListName(for obj: SceneObject) -> String {
+        if let gid = obj.groupID {
+            // partName adds the "name N" suffix for duplicate part names within the
+            // model (matching the Timeline Editor grid).
+            return "\(groupName(for: gid)) - \(partName(for: obj))"
+        }
+        return displayName(for: obj)
+    }
+
     func groupName(for groupID: Int) -> String {
         guard objects.contains(where: { $0.groupID == groupID }) else {
             return "Group \(groupID)"
