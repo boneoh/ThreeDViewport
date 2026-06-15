@@ -7,6 +7,11 @@ final class AtmospherePanelState: ObservableObject {
     @Published var fogExpanded      = true
     @Published var weatherExpanded  = true
     @Published var advancedExpanded = false
+    /// True when the fog track is locked (Timeline padlock).  Fog lives on the
+    /// viewport (ViewportView.fogLocked), which isn't observable, so a light timer
+    /// poll keeps this in sync.  Weather emitters carry their own @Published isLocked.
+    @Published var fogLocked = false
+    var fogLockedProvider: (() -> Bool)?
 }
 
 // Floating panel for atmosphere effects.  Three collapsible sections:
@@ -81,6 +86,7 @@ struct AtmospherePanel: View {
                         FogSliderRow(label: "Quality", value: $fog.raymarchSteps, range: 8...96, format: "%.0f")
                     }
                     .padding(.top, 6)
+                    .disabled(sections.fogLocked)   // freeze fog edits when the fog track is locked
                 } label: {
                     Text("Fog").font(.subheadline.bold())
                 }
@@ -103,7 +109,8 @@ struct AtmospherePanel: View {
                             Button { particleManager.addEmitter() } label: { Image(systemName: "plus") }
                                 .disabled(particleManager.emitters.count >= ParticleManager.maxEmitters)
                             Button { particleManager.removeEmitter(at: particleManager.selectedIndex) } label: { Image(systemName: "minus") }
-                                .disabled(particleManager.emitters.count <= 1)
+                                .disabled(particleManager.emitters.count <= 1
+                                          || (particleManager.selected?.isLocked ?? false))
                             Spacer()
                             Text("\(particleManager.emitters.count) / \(ParticleManager.maxEmitters)")
                                 .font(.caption2.monospacedDigit()).foregroundColor(.secondary)
@@ -112,18 +119,23 @@ struct AtmospherePanel: View {
 
                         Divider().padding(.bottom, 6)
 
-                        // Selected emitter's main + spatial/advanced controls
+                        // Selected emitter's main + spatial/advanced controls.  Editing
+                        // freezes when that emitter is locked; the emitter list above
+                        // stays tappable so you can still select a locked emitter.
                         if let fx = particleManager.selected {
-                            EmitterMainControls(emitter: fx, onStamp: onStampParticles, onClear: onClearParticles,
-                                                onAutoKeyframe: onAutoKeyframeParticles)
+                            Group {
+                                EmitterMainControls(emitter: fx, onStamp: onStampParticles, onClear: onClearParticles,
+                                                    onAutoKeyframe: onAutoKeyframeParticles)
 
-                            Divider().padding(.vertical, 8)
-                            Text("Shape").font(.caption2).foregroundColor(.secondary)
-                            AtmoDetailControls(source: fx, varianceKP: \.variance,
-                                               positionKP: \.position, sizeKP: \.size, clipboard: clipboard,
-                                               onAutoStampPosition: onAutoStampParticles,
-                                               onEditEnded: onAutoKeyframeParticles)
-                            EmitterAdvancedControls(emitter: fx)
+                                Divider().padding(.vertical, 8)
+                                Text("Shape").font(.caption2).foregroundColor(.secondary)
+                                AtmoDetailControls(source: fx, varianceKP: \.variance,
+                                                   positionKP: \.position, sizeKP: \.size, clipboard: clipboard,
+                                                   onAutoStampPosition: onAutoStampParticles,
+                                                   onEditEnded: onAutoKeyframeParticles)
+                                EmitterAdvancedControls(emitter: fx)
+                            }
+                            .disabled(fx.isLocked)
                         }
                     }
                     .padding(.top, 6)
@@ -135,6 +147,12 @@ struct AtmospherePanel: View {
         }
         .frame(width: 280)
         .background(Color(NSColor.windowBackgroundColor))
+        // Keep the fog-lock state in sync with the Timeline padlock (fog lock lives on
+        // the viewport, which isn't observable).  Cheap bool read.
+        .onReceive(Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()) { _ in
+            let lk = sections.fogLockedProvider?() ?? false
+            if lk != sections.fogLocked { sections.fogLocked = lk }
+        }
     }
 }
 

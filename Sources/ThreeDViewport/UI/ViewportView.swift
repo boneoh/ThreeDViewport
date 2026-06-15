@@ -2331,6 +2331,8 @@ final class ViewportView: MTKView {
         // panel next polls after playback stops.)  Also skip during export — the
         // export thread mutates the live camera, so polling it both updates need-
         // lessly and races that thread.
+        // Lock state is cheap and must track the padlock even mid-play/export.
+        if cameraPanelState.isLocked != cameraLocked { cameraPanelState.isLocked = cameraLocked }
         guard !timeline.isPlaying, activeExporter == nil else { return }
         let fl = 12.0 / tan(camera.fovYRadians / 2)
         cameraPanelState.refresh(position:    camera.eyePosition,

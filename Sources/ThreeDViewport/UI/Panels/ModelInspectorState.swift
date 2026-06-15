@@ -41,6 +41,9 @@ final class ModelInspectorState: ObservableObject {
     /// obj.transform directly) and for a uniform-group selection (delegates
     /// to setGroupWorldScale so the whole model scales about its anchor).
     @Published var canEditScale:    Bool            = false
+    /// True when the selected model is locked (Timeline padlock).  The panel disables
+    /// its editing controls; the Reveal link + Add to Favorites stay enabled.
+    @Published var isLocked:        Bool            = false
 
     // ── Callbacks wired by AppDelegate ───────────────────────────────────────
     var onRebuildNormals: ((NormalMode, [SceneObject]) -> Void)?
@@ -53,6 +56,8 @@ final class ModelInspectorState: ObservableObject {
     /// background queue and mutates `sceneManager.groupTransforms`; refresh() reads
     /// the same dictionary, so polling during export is a data race — skip it.
     var isExporting:      (() -> Bool)?
+    /// Returns whether the currently inspected model is locked (Timeline padlock).
+    var isLockedProvider: (() -> Bool)?
     var onDirty:          (() -> Void)?
     var onRevealInFinder: (() -> Void)?
     /// Creates a Favorite Models alias for the current selection (wired by AppDelegate).
@@ -175,6 +180,10 @@ final class ModelInspectorState: ObservableObject {
     /// value driven by the timeline today — without this, the slider would lag
     /// when the playhead moves through an opacity-bearing keyframe track.
     func refresh() {
+        // Poll the lock first (cheap bool) so controls disable/enable promptly when the
+        // Timeline padlock is toggled — even while playing/exporting.
+        let lk = isLockedProvider?() ?? false
+        if lk != isLocked { isLocked = lk }
         guard !(isPlaying?() ?? false) else { return }
         guard !(isExporting?() ?? false) else { return }   // avoid racing the export thread
         guard hasSelection, let obj = anchor else { return }

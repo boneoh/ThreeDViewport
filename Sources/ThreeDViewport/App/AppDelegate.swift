@@ -2581,6 +2581,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.level                  = .normal    // don't float above other applications
         panel.hidesOnDeactivate  = false
 
+        // Fog lock lives on the viewport (not observable) — feed it to the panel.
+        viewport.atmospherePanelState.fogLockedProvider = { [weak viewport] in viewport?.fogLocked ?? false }
+
         let atmoView = AtmospherePanel(
             fog: viewport.fogSettings,
             particleManager: viewport.particleManager,
@@ -2915,6 +2918,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         state.onDirty  = { [weak self] in self?.markDirty() }
         state.isPlaying = { [weak viewport] in viewport?.timeline.isPlaying ?? false }
         state.isExporting = { [weak self] in self?.exportState.isExporting ?? false }
+        state.isLockedProvider = { [weak viewport] in
+            viewport?.sceneManager.selectedObject?.isLocked ?? false
+        }
         state.onRebuildNormals = { [weak viewport] mode, targets in
             viewport?.applyNormalMode(mode, toTargets: targets)
         }

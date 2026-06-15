@@ -86,7 +86,8 @@ enum ParticleType: Int, CaseIterable {
 final class ParticleEffect: ObservableObject {
     @Published var isEnabled: Bool          = false
     /// Timeline edit lock — frozen against viewport edits + keyframe changes.
-    var isLocked: Bool = false
+    /// @Published so the Atmosphere panel disables this emitter's controls reactively.
+    @Published var isLocked: Bool = false
     @Published var type:      ParticleType  = .rain {
         didSet { if type != oldValue { applyTypeDefaults() } }   // Type acts as a preset.
     }

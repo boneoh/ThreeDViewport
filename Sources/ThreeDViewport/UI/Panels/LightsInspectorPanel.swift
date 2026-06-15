@@ -208,7 +208,8 @@ struct LightsInspectorPanel: View {
                             .foregroundColor(.red.opacity(0.7))
                     }
                     .buttonStyle(.plain)
-                    .disabled(lightManager.lights.count <= 1)
+                    .disabled(lightManager.lights.count <= 1
+                              || lightManager.lights[min(lightManager.selectedIndex, lightManager.lights.count - 1)].isLocked)
                     .help("Remove the selected light")
                 }
             }
@@ -216,7 +217,14 @@ struct LightsInspectorPanel: View {
             // Selected light detail editor
             if lightManager.selectedIndex < lightManager.lights.count {
                 Divider().padding(.vertical, 4)
+                // Editing controls freeze when the selected light is locked; the light
+                // selector dropdown above stays enabled so you can still browse lights.
                 lightDetailEditor(index: lightManager.selectedIndex)
+                    .disabled(lightManager.lights[lightManager.selectedIndex].isLocked)
+                    // Stable identity per selection: when a light is removed and the
+                    // index clamps, SwiftUI replaces this subtree instead of diffing the
+                    // old editor's bindings (which would index the removed light → crash).
+                    .id(lightManager.selectedIndex)
             }
         }
     }

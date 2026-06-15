@@ -13,15 +13,17 @@ struct ModelInspectorPanel: View {
                     VStack(alignment: .leading, spacing: 0) {
                         identitySection
                         Divider().padding(.vertical, 8)
-                        positionSection
+                        // Editing sections freeze when the model is locked (the
+                        // identity section keeps Reveal + Add to Favorites enabled).
+                        positionSection.disabled(state.isLocked)
                         Divider().padding(.vertical, 8)
-                        rotationSection
+                        rotationSection.disabled(state.isLocked)
                         Divider().padding(.vertical, 8)
-                        scaleSection
+                        scaleSection.disabled(state.isLocked)
                         Divider().padding(.vertical, 8)
-                        displaySection
+                        displaySection.disabled(state.isLocked)
                         Divider().padding(.vertical, 8)
-                        materialSection
+                        materialSection.disabled(state.isLocked)
                     }
                     .padding(12)
                 }
@@ -125,7 +127,7 @@ struct ModelInspectorPanel: View {
                 TextField("", text: $state.name)
                     .textFieldStyle(.roundedBorder)
                     .font(.caption)
-                    .disabled(!state.canEditName)
+                    .disabled(!state.canEditName || state.isLocked)
             }
 
             HStack(spacing: 6) {

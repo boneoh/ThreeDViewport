@@ -39,6 +39,9 @@ final class CameraPanelState: ObservableObject {
     /// Elevation above/below the object's local equator, in degrees.
     /// 0° = head height, +90° = directly above, −90° = below.
     @Published var povElevation: Float = 15
+    /// True when the camera track is locked (Timeline padlock) — disables the panel's
+    /// editing controls.
+    @Published var isLocked: Bool = false
 
     /// Propagate Position / Target / FOV edits back to the active camera (wired by ViewportView).
     var onPositionEdited:    ((SIMD3<Float>) -> Void)?
@@ -262,6 +265,9 @@ struct CameraPanel: View {
                           onEditEnded: { state.onSliderEdited?() })
             }
             .padding(14)
+            // Editing controls freeze when the camera track is locked.  Applied to the
+            // inner VStack (not the ScrollView) so the panel still scrolls.
+            .disabled(state.isLocked)
         }
         .frame(width: 280)
         .background(Color(NSColor.windowBackgroundColor))

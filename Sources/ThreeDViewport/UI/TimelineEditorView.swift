@@ -226,6 +226,18 @@ final class TimelineEditorView: NSView {
     /// Convenience: is `ref` currently locked?  False when no provider is wired.
     private func locked(_ ref: TrackRef) -> Bool { lockProvider?(ref) ?? false }
 
+    /// Gentle audible reminder when a keyframe edit is blocked by a track lock.
+    /// Throttled so a drag (many frames) or a held key (auto-repeat) beeps once,
+    /// matching ViewportView.beepLocked.
+    private var lastLockBeepTime: TimeInterval = 0
+    private func beepLocked() {
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - lastLockBeepTime > 0.6 {
+            NSSound.beep()
+            lastLockBeepTime = now
+        }
+    }
+
     /// View that receives key events not handled by the timeline editor.
     /// Set to the ViewportView so viewport shortcuts work even when the
     /// Timeline Editor panel has keyboard focus.
@@ -1610,7 +1622,7 @@ final class TimelineEditorView: NSView {
         // Gesture started on a diamond: begin (or continue) moving it.
         if !isDragging {
             guard let ti = selectedTrackIndex, let ki = selectedKFIndex else { return }
-            if locked(tracks[ti].ref) { return }   // locked track — can't drag its keyframes
+            if locked(tracks[ti].ref) { beepLocked(); return }   // locked track — can't drag its keyframes
             let times = keyframeTimes(for: tracks[ti].ref)
             guard ki < times.count else { return }
             isDragging      = true
@@ -2301,7 +2313,7 @@ final class TimelineEditorView: NSView {
             for d in multiSelectedDiamonds {
                 guard d.trackIndex < tracks.count else { continue }
                 let ref   = tracks[d.trackIndex].ref
-                if locked(ref) { continue }   // locked track — keep its keyframes
+                if locked(ref) { beepLocked(); continue }   // locked track — keep its keyframes
                 let times = keyframeTimes(for: ref)
                 guard d.kfIndex < times.count else { continue }
                 toDelete.append((ref, times[d.kfIndex]))
@@ -2318,7 +2330,7 @@ final class TimelineEditorView: NSView {
         // ── Single-select path ────────────────────────────────────────────────
         guard let ti = selectedTrackIndex, let ki = selectedKFIndex else { return }
         let ref = tracks[ti].ref
-        if locked(ref) { return }   // locked track — no keyframe delete
+        if locked(ref) { beepLocked(); return }   // locked track — no keyframe delete
         switch ref {
         case .camera:
             camera?.keyframeTrack?.removeKeyframe(at: ki)
@@ -2389,7 +2401,7 @@ final class TimelineEditorView: NSView {
     private func insertKeyframeInSelectedLane(tracks: TrackList) {
         guard let ti = selectedTrackIndex else { return }
         let ref = tracks[ti].ref
-        if locked(ref) { return }   // locked track — no keyframe stamp
+        if locked(ref) { beepLocked(); return }   // locked track — no keyframe stamp
         switch ref {
         case .camera:         onInsertCameraKeyframe?()
         case .object(let i):  onInsertObjectKeyframe?(i)
@@ -2465,6 +2477,7 @@ final class TimelineEditorView: NSView {
         for d in multiSelectedDiamonds {
             guard d.trackIndex < tracks.count else { continue }
             let ref   = tracks[d.trackIndex].ref
+            if locked(ref) { beepLocked(); continue }   // locked track — don't nudge
             let times = keyframeTimes(for: ref)
             guard d.kfIndex < times.count else { continue }
             entries.append((ref, times[d.kfIndex]))
@@ -2506,6 +2519,7 @@ final class TimelineEditorView: NSView {
                 return
             }
             let ref   = tracks[d.trackIndex].ref
+            if locked(ref) { beepLocked(); continue }   // locked track — don't realign
             let times = keyframeTimes(for: ref)
             guard d.kfIndex < times.count else { continue }
             entries.append((ref, times[d.kfIndex]))
@@ -2537,6 +2551,7 @@ final class TimelineEditorView: NSView {
     private func nudgeSelected(by delta: Double, tracks: TrackList) {
         guard let ti = selectedTrackIndex, let ki = selectedKFIndex else { return }
         let ref   = tracks[ti].ref
+        if locked(ref) { beepLocked(); return }   // locked track — no keyframe nudge
         let times = keyframeTimes(for: ref)
         guard ki < times.count else { return }
 
