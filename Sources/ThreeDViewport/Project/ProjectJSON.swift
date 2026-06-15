@@ -352,6 +352,8 @@ struct ProbeData: Codable {
     /// Whether the probe gizmo is drawn. Optional so pre-existing projects (no key)
     /// decode to nil → treated as hidden.
     var visible:      Bool?       = nil
+    /// v37 edit lock. Optional so older projects decode to nil → unlocked.
+    var isLocked:     Bool?       = nil
 }
 
 // v33: one saved position mark (name + world position + RGB colour).
@@ -380,21 +382,25 @@ struct ColorGradeData: Codable {
     var brightness: Float = 0.0   // identity = 0
     var contrast:   Float = 1.0   // identity = 1
     var gamma:      Float = 1.0   // identity = 1; v13 — absent in v12 files, falls back to 1.0
+    var isLocked:   Bool  = false // v37 edit lock
 
-    // Custom decoder so older files (missing exposure/gamma) decode cleanly using defaults.
+    // Custom decoder so older files (missing exposure/gamma/isLocked) decode cleanly.
     init(from decoder: Decoder) throws {
         let c  = try decoder.container(keyedBy: CodingKeys.self)
         exposure   = (try? c.decode(Float.self, forKey: .exposure))   ?? 1.0
         brightness = (try? c.decode(Float.self, forKey: .brightness)) ?? 0.0
         contrast   = (try? c.decode(Float.self, forKey: .contrast))   ?? 1.0
         gamma      = (try? c.decode(Float.self, forKey: .gamma))      ?? 1.0
+        isLocked   = (try? c.decode(Bool.self,  forKey: .isLocked))   ?? false
     }
 
-    init(exposure: Float = 1.0, brightness: Float = 0.0, contrast: Float = 1.0, gamma: Float = 1.0) {
+    init(exposure: Float = 1.0, brightness: Float = 0.0, contrast: Float = 1.0, gamma: Float = 1.0,
+         isLocked: Bool = false) {
         self.exposure   = exposure
         self.brightness = brightness
         self.contrast   = contrast
         self.gamma      = gamma
+        self.isLocked   = isLocked
     }
 }
 
@@ -583,8 +589,9 @@ struct FeedbackData: Codable {
     var length:     Int   = 10
     var blendMode:  Int   = 0       // BlendMode.normal
     var swapLayers: Bool  = false
+    var isLocked:   Bool  = false   // v37 edit lock
 
-    // Custom decoder so files saved before v9 (missing blendMode/swapLayers)
+    // Custom decoder so files saved before v9 (missing blendMode/swapLayers/isLocked)
     // load cleanly using the defaults above.
     init(from decoder: Decoder) throws {
         let c        = try decoder.container(keyedBy: CodingKeys.self)
@@ -594,6 +601,7 @@ struct FeedbackData: Codable {
         length       = (try? c.decode(Int.self,   forKey: .length))     ?? 10
         blendMode    = (try? c.decode(Int.self,   forKey: .blendMode))  ?? 0
         swapLayers   = (try? c.decode(Bool.self,  forKey: .swapLayers)) ?? false
+        isLocked     = (try? c.decode(Bool.self,  forKey: .isLocked))   ?? false
     }
 
     init(isEnabled:  Bool  = false,
@@ -601,13 +609,15 @@ struct FeedbackData: Codable {
          decay:      Float = 0.5,
          length:     Int   = 10,
          blendMode:  Int   = 0,
-         swapLayers: Bool  = false) {
+         swapLayers: Bool  = false,
+         isLocked:   Bool  = false) {
         self.isEnabled  = isEnabled
         self.interval   = interval
         self.decay      = decay
         self.length     = length
         self.blendMode  = blendMode
         self.swapLayers = swapLayers
+        self.isLocked   = isLocked
     }
 }
 

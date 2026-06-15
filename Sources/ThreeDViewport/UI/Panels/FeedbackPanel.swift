@@ -69,6 +69,8 @@ struct FeedbackPanel: View {
                         .labelsHidden()
                         .tint(.green)
                         .environment(\.controlActiveState, .active)
+                        .disabled(settings.isLocked)
+                    PanelLockButton(isLocked: $settings.isLocked)
                 }
                 .padding(.bottom, 10)
 
@@ -193,7 +195,7 @@ struct FeedbackPanel: View {
                             .padding(.top, 4)
                     }
                 }
-                .disabled(!settings.isEnabled)
+                .disabled(!settings.isEnabled || settings.isLocked)
                 .opacity(settings.isEnabled ? 1.0 : 0.45)
             }
             .padding(14)

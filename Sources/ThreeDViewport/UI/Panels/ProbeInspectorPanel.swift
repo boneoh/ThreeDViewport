@@ -21,6 +21,7 @@ struct ProbeInspectorPanel: View {
                     Image(systemName: "scope").foregroundColor(.accentColor)
                     Text("Probe").font(.headline)
                     Spacer()
+                    PanelLockButton(isLocked: $probe.isLocked)
                 }
 
                 Toggle(isOn: $probe.isVisible) {
@@ -35,19 +36,22 @@ struct ProbeInspectorPanel: View {
 
                 Divider()
 
-                HStack {
-                    Text("Position").font(.headline)
-                    Spacer()
-                    CoordCopyPasteButtons(
-                        onCopy:   { clipboard.position = probe.position },
-                        onPaste:  { if let p = clipboard.position { probe.position = p } },
-                        canPaste: clipboard.position != nil,
-                        onZero:   { probe.position = .zero },
-                        canZero:  true)
+                Group {
+                    HStack {
+                        Text("Position").font(.headline)
+                        Spacer()
+                        CoordCopyPasteButtons(
+                            onCopy:   { clipboard.position = probe.position },
+                            onPaste:  { if let p = clipboard.position { probe.position = p } },
+                            canPaste: clipboard.position != nil,
+                            onZero:   { probe.position = .zero },
+                            canZero:  true)
+                    }
+                    SliderRow(label: "X", value: $probe.position.x, range: -100...100, format: "%.2f")
+                    SliderRow(label: "Y", value: $probe.position.y, range: -100...100, format: "%.2f")
+                    SliderRow(label: "Z", value: $probe.position.z, range: -100...100, format: "%.2f")
                 }
-                SliderRow(label: "X", value: $probe.position.x, range: -100...100, format: "%.2f")
-                SliderRow(label: "Y", value: $probe.position.y, range: -100...100, format: "%.2f")
-                SliderRow(label: "Z", value: $probe.position.z, range: -100...100, format: "%.2f")
+                .disabled(probe.isLocked)   // freeze probe position when locked
 
                 Divider()
 
@@ -60,6 +64,7 @@ struct ProbeInspectorPanel: View {
                     Label("Mark Position", systemImage: "mappin.and.ellipse")
                         .frame(maxWidth: .infinity)
                 }
+                .disabled(probe.isLocked)   // no new marks while locked
                 Toggle(isOn: $probe.marksVisible) {
                     Text("Show marks (viewport + export)")
                         .font(.caption)

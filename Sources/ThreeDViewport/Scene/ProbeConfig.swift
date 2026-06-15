@@ -28,6 +28,8 @@ final class ProbeConfig: ObservableObject {
     @Published var marksVisible: Bool = false
     /// Index into `marks` of the currently cycled/highlighted mark, if any.
     @Published var selectedMarkIndex: Int? = nil
+    /// Edit lock — freezes the probe panel's controls and viewport probe moves.
+    @Published var isLocked: Bool = false
 
     init() {}
 }

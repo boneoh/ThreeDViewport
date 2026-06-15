@@ -21,7 +21,9 @@ struct ColorGradePanel: View {
                             .buttonStyle(.borderless)
                             .font(.caption)
                             .foregroundColor(.secondary)
+                            .disabled(settings.isLocked)
                     }
+                    PanelLockButton(isLocked: $settings.isLocked)
                 }
                 .padding(.bottom, 10)
 
@@ -36,6 +38,7 @@ struct ColorGradePanel: View {
                     range:  0.1...4.0,
                     format: "%.2f"
                 )
+                .disabled(settings.isLocked)
 
                 Divider().padding(.vertical, 10)
 
@@ -46,6 +49,7 @@ struct ColorGradePanel: View {
                     range:  -1.0...1.0,
                     format: "%+.2f"
                 )
+                .disabled(settings.isLocked)
 
                 Divider().padding(.vertical, 10)
 
@@ -56,6 +60,7 @@ struct ColorGradePanel: View {
                     range:  0.0...3.0,
                     format: "%.2f"
                 )
+                .disabled(settings.isLocked)
 
                 Divider().padding(.vertical, 10)
 
@@ -66,6 +71,7 @@ struct ColorGradePanel: View {
                     range:  0.2...3.0,
                     format: "%.2f"
                 )
+                .disabled(settings.isLocked)
 
                 Divider().padding(.vertical, 10)
 

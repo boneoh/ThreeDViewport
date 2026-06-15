@@ -23,6 +23,9 @@ final class ColorGradeSettings: ObservableObject {
     /// 1 = no change (identity).
     @Published var gamma: Float = 1.0
 
+    /// Edit lock — freezes the Color Grade panel's controls (persisted with the project).
+    @Published var isLocked: Bool = false
+
     /// True when the POST-PROCESS parameters are at identity — lets the renderer
     /// skip the color-grade pass.  Exposure is excluded on purpose: it's applied
     /// in the main scene shader, not in that pass.

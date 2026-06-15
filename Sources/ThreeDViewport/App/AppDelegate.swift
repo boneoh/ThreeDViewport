@@ -625,6 +625,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             .dropFirst()
             .sink { [weak self] _ in self?.markDirty() }
             .store(in: &settingsCancellables)
+        // Probe lock toggle also dirties the project (position-only observation above
+        // skips it).
+        viewport.probeConfig.$isLocked
+            .dropFirst()
+            .sink { [weak self] _ in self?.markDirty() }
+            .store(in: &settingsCancellables)
 
         // ColorGradeSettings covers brightness and contrast.
         viewport.colorGradeSettings.objectWillChange

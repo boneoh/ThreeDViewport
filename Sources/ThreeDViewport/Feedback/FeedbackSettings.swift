@@ -94,6 +94,9 @@ final class FeedbackSettings: ObservableObject {
     // When true:  feedback is foreground, scene is background.
     @Published var swapLayers:  Bool      = false
 
+    // Edit lock — freezes the Feedback panel's controls (persisted with the project).
+    @Published var isLocked:    Bool      = false
+
     init() {
         print("[DEBUG] FeedbackSettings: initialized")
     }

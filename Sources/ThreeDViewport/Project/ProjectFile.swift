@@ -655,7 +655,8 @@ final class ProjectFile {
             decay:      fs.decay,
             length:     fs.length,
             blendMode:  fs.blendMode.rawValue,
-            swapLayers: fs.swapLayers
+            swapLayers: fs.swapLayers,
+            isLocked:   fs.isLocked
         )
 
         // ── Light keyframe tracks (v6) ────────────────────────────────────────
@@ -727,7 +728,8 @@ final class ProjectFile {
             exposure:   cg.exposure,
             brightness: cg.brightness,
             contrast:   cg.contrast,
-            gamma:      cg.gamma
+            gamma:      cg.gamma,
+            isLocked:   cg.isLocked
         )
 
         // ── Group keyframe tracks (v14 / Phase 2) ─────────────────────────────
@@ -849,7 +851,7 @@ final class ProjectFile {
         }
 
         return ProjectData(
-            version:             36,   // v36: per-track timeline edit locks
+            version:             37,   // v37: Probe/Feedback/Color Grade panel locks
             modelPath:           nil,           // v3+ uses modelPaths instead
             modelPaths:          modelPaths,
             timeline:            timelineData,
@@ -895,7 +897,8 @@ final class ProjectFile {
                                                         r: $0.color.x, g: $0.color.y, b: $0.color.z)
                                            },
                                            marksVisible: vp.probeConfig.marksVisible,
-                                           visible:      vp.probeConfig.isVisible),
+                                           visible:      vp.probeConfig.isVisible,
+                                           isLocked:     vp.probeConfig.isLocked),
             groupBaseTransforms: captureGroupBaseTransforms(from: vp),
             cameraEasingMode:    (cam.keyframeTrack?.easingMode ?? .linear).rawValue,
             lightEasingModes:    lm.keyframeTracks.map { ($0?.easingMode ?? .linear).rawValue },
@@ -1124,6 +1127,7 @@ final class ProjectFile {
         vp.feedbackSettings.length     = fb.length
         vp.feedbackSettings.blendMode  = BlendMode(rawValue: fb.blendMode) ?? .normal
         vp.feedbackSettings.swapLayers = fb.swapLayers
+        vp.feedbackSettings.isLocked   = fb.isLocked
         print("[DEBUG] ProjectFile: feedback enabled=\(fb.isEnabled)"
             + " interval=\(fb.interval) decay=\(fb.decay) length=\(fb.length)"
             + " blendMode=\(fb.blendMode) swapLayers=\(fb.swapLayers)")
@@ -1235,6 +1239,7 @@ final class ProjectFile {
         vp.colorGradeSettings.brightness = data.colorGrade.brightness
         vp.colorGradeSettings.contrast   = data.colorGrade.contrast
         vp.colorGradeSettings.gamma      = data.colorGrade.gamma
+        vp.colorGradeSettings.isLocked   = data.colorGrade.isLocked
         print("[DEBUG] ProjectFile: colorGrade exposure=\(data.colorGrade.exposure)"
             + " brightness=\(data.colorGrade.brightness)"
             + " contrast=\(data.colorGrade.contrast)"
@@ -1253,6 +1258,7 @@ final class ProjectFile {
         }
         vp.probeConfig.marksVisible = data.probe.marksVisible ?? false
         vp.probeConfig.isVisible    = data.probe.visible ?? false
+        vp.probeConfig.isLocked     = data.probe.isLocked ?? false
         // Timeline edit locks for the singleton tracks (objects/lights/emitters
         // restore their own isLocked above).
         vp.cameraLocked = data.cameraLocked

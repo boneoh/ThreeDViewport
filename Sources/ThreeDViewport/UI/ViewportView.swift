@@ -822,6 +822,7 @@ final class ViewportView: MTKView {
     /// is persisted).  Movement is camera-relative at the call sites, so it follows
     /// the scene camera in normal view and the Director POV in Scene mode.
     private func moveProbe(by delta: SIMD3<Float>) {
+        if probeConfig.isLocked { beepLocked(); return }   // locked probe — no viewport move
         let p = probeConfig.position + delta
         probeConfig.position = simd_clamp(p,
                                           SIMD3<Float>(repeating: -100),
