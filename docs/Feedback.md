@@ -24,6 +24,13 @@ The panel shows a **priming / active** status while the buffer fills.
 - Feedback forces single-slot (non-pipelined) export, so 4444/422 exports run a bit
   slower with it enabled.
 - The buffer is reset on each loop revolution so trails restart cleanly.
+- **Feedback-off backdrop + a feedback-on transparent object in front:** per-object
+  feedback is toggled in the **Effects** window (Window ▸ Effects). If an **opaque** object
+  has feedback **off** (a stable, non-trailing backdrop) and a **transparent** object in
+  front of it has feedback **on**, the transparent object composites over the sky / its
+  own trail — *not* over the backdrop. It renders in front correctly, but its **trail
+  can read as "behind"** the backdrop. (Putting the backdrop in the feedback lane fixes
+  the layering, but then it trails too.)
 
 ## Persistence
 

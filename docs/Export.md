@@ -57,6 +57,14 @@ Object **class** (Actor / Background / MacGuffin) is set in the
 [Model Inspector](Model-Inspector.md). On 4444, color passes use luma alpha and
 matte passes use coverage alpha; "background-off" passes render on solid black.
 
+> **Transparent objects don't hole-out the Background plate.** Held-out classes are
+> normally punched out as pure-black silhouettes so other layers composite into them.
+> But **transparent** (opacity < 1) objects are deliberately *excluded* from that
+> holdout set — so fog and lasers can show through glass. Side effect: a transparent
+> **MacGuffin** (or Actor) does **not** cut a hole in **Background.mov / Background
+> Matte.mov** — the background renders as if it weren't there. If you need a translucent
+> object to cut the background plate, make it opaque (opacity = 1).
+
 ## Marks in export
 
 If **Show marks** is on in the [Probe Inspector](Probe-Inspector.md), the position
