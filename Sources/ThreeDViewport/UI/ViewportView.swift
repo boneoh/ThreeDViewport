@@ -1075,6 +1075,14 @@ final class ViewportView: MTKView {
         print("[DEBUG] ViewportView: director snapped to Probe")
     }
 
+    /// Inverse of `setProbeToDirectorEye`: move the Director's eye to the Probe's
+    /// position, keeping the current view direction (translates the whole rig).
+    func setDirectorEyeToProbe() {
+        director.target += probeConfig.position - director.eyePosition
+        needsDisplay = true
+        print("[DEBUG] ViewportView: director eye moved to Probe")
+    }
+
     /// Moves the bake Probe to the Director's eye position (the complement of Shift+T) —
     /// e.g. frame the capture viewpoint with the Director, then drop the Probe there.
     /// Reveals the gizmo; clamps to the Probe's ±100 range.  Most useful in Scene mode.
@@ -2872,9 +2880,16 @@ final class ViewportView: MTKView {
         guard !isSpaceDown else { return }
         let pt = convert(event.locationInWindow, from: nil)
         if let hit = pickObject(at: pt) {
-            // Option-click isolates the individual part under the cursor; a plain click
-            // selects the whole multi-part model.
-            selectByPick(objectIndex: hit, isolatePart: event.modifierFlags.contains(.option))
+            if controlMode == .probe {
+                // Probe mode: a click drops the Probe onto the clicked surface point and
+                // STAYS in Probe mode (no selection) — fast positioning.
+                probeConfig.isVisible = true
+                moveProbe(by: hit.point - probeConfig.position)
+            } else {
+                // Option-click isolates the individual part under the cursor; a plain click
+                // selects the whole multi-part model.
+                selectByPick(objectIndex: hit.index, isolatePart: event.modifierFlags.contains(.option))
+            }
         }
     }
 
@@ -2882,7 +2897,7 @@ final class ViewportView: MTKView {
 
     /// Returns the index of the nearest visible object whose mesh the click ray hits,
     /// or nil for empty space.  Ray-vs-mesh (precise) with a bounding-sphere broad phase.
-    private func pickObject(at point: NSPoint) -> Int? {
+    private func pickObject(at point: NSPoint) -> (index: Int, point: SIMD3<Float>)? {
         guard bounds.width > 0, bounds.height > 0 else { return nil }
         // Screen point → NDC (AppKit origin is bottom-left, y up — matches Metal NDC y).
         let ndcX = Float(2 * point.x / bounds.width  - 1)
@@ -2917,7 +2932,9 @@ final class ViewportView: MTKView {
                 bestIndex = i
             }
         }
-        return bestIndex
+        guard let idx = bestIndex else { return nil }
+        // World-space hit point along the (normalized) ray — used by probe click-place.
+        return (idx, rayOrigin + rayDir * bestDist)
     }
 
     /// The rendered world transform of an object (group multiplier composed in when

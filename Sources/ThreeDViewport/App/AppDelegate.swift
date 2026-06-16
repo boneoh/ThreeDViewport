@@ -1006,6 +1006,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         probeToEyeItem.target = self
         marksMenu.addItem(probeToEyeItem)
 
+        // Inverse: move the Director's eye to the Probe (keeping its view direction).
+        let eyeToProbeItem = NSMenuItem(title: "Set Director Eye to Probe",
+                                        action: #selector(setDirectorEyeToProbeMenu(_:)),
+                                        keyEquivalent: "")
+        eyeToProbeItem.target = self
+        marksMenu.addItem(eyeToProbeItem)
+
         let goToMarkItem = NSMenuItem(title: "Go To Position Mark", action: nil, keyEquivalent: "")
         let goToSub = NSMenu(title: "Go To Position Mark")
         goToSub.delegate = self
@@ -3199,6 +3206,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // MARK: - Marks menu actions
 
     @objc private func promptForMarkMenu(_ sender: Any) { promptForMark() }
+
+    @objc private func setDirectorEyeToProbeMenu(_ sender: Any) {
+        viewportView?.setDirectorEyeToProbe()
+    }
 
     @objc private func setProbeToDirectorEyeMenu(_ sender: Any) {
         viewportView?.setProbeToDirectorEye()   // marks dirty via onProbeEdited

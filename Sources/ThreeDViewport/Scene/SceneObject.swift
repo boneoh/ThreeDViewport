@@ -118,9 +118,10 @@ final class SceneObject {
 
     // Per-object feedback opt-in (Effects grid).  When feedback is active, objects
     // with this ON render into the feedback scene texture (they trail); objects with
-    // it OFF are drawn after the feedback composite (crisp, no trail).  Defaults ON
-    // so existing projects keep today's "everything trails" behaviour.
-    var feedbackEnabled: Bool = true
+    // it OFF are drawn after the feedback composite (crisp, no trail).  Defaults OFF
+    // for newly added / imported models (trails are opt-in); project load always sets
+    // this from the saved value, so existing projects keep their stored behaviour.
+    var feedbackEnabled: Bool = false
 
     // Normal shading mode — set by the Model Inspector.
     // cpuPositions, cpuIndices, and originalNormals are kept so the GPU normal

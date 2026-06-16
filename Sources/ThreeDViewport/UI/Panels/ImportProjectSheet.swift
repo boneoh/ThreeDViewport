@@ -18,9 +18,9 @@ final class ImportProjectOptions: ObservableObject {
     /// only when the host has none — fog is a single global volume).
     @Published var includeEffects: Bool = false
     /// After importing, re-apply the source's spin/orbit rate markers to the imported
-    /// objects so they stay EDITABLE (and run to the host timeline's end).  Off by
-    /// default — the imported motion otherwise plays exactly as authored.
-    @Published var makeSpinEditable: Bool = false
+    /// objects so they stay EDITABLE (and run to the host timeline's end).  On by
+    /// default so the imported motion is editable in the host project.
+    @Published var makeSpinEditable: Bool = true
     /// When the source has both In/Out marks, import only that slice (remapped so
     /// the source In lands at `insertTime`).  Defaults on when a range is available.
     @Published var useSourceInOut: Bool
