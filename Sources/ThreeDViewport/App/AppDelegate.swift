@@ -54,6 +54,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // Spin Animator helper panel.
     private var spinPanel: NSPanel?
 
+    // Gait (walk) Animator helper panel.
+    private var gaitPanel: NSPanel?
+
     // Global settings panel.
     private var settingsPanel: NSPanel?
 
@@ -1171,6 +1174,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         )
         curvePathItem.target = self
         pathSubmenu.addItem(curvePathItem)
+        let gaitItem = NSMenuItem(
+            title: "Gait…",
+            action: #selector(showGaitAnimator(_:)),
+            keyEquivalent: ""
+        )
+        gaitItem.target = self
+        pathSubmenu.addItem(gaitItem)
         let spinItem = NSMenuItem(
             title: "Spin…",
             action: #selector(showSpinAnimator(_:)),
@@ -3426,6 +3436,104 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         markDirty()
         state.status = "Created \(samples.count) keyframes for \(pathAnimatorTrackLabel(ref))."
         print("[DEBUG] AppDelegate: curve path animator created \(samples.count) keyframes")
+    }
+
+    // MARK: - Gait (Walk) Animator
+
+    @objc private func showGaitAnimator(_ sender: Any) {
+        guard let viewport = viewportView else { return }
+        let state = viewport.gaitState
+        // Only whole models (groups) can walk — they own the root path + limb parts.
+        state.targets = pathAnimatorTargets(camera: false, lights: false, objects: false, groups: true)
+        if let ref = state.capturedRef, !state.targets.contains(where: { $0.ref == ref }) {
+            state.capturedRef = nil
+        }
+        if let sel = viewport.currentTrackRef, state.targets.contains(where: { $0.ref == sel }) {
+            state.capturedRef = sel
+        } else if state.capturedRef == nil {
+            state.capturedRef = state.targets.first?.ref
+        }
+        // Refresh the marks list (preserve any still-valid selection; default = all).
+        let marks = viewport.probeConfig.marks
+        state.markList = marks
+        let valid = Set(marks.map { $0.id })
+        state.selectedMarks = state.selectedMarks.isEmpty
+            ? valid : state.selectedMarks.intersection(valid)
+        if state.selectedMarks.isEmpty { state.selectedMarks = valid }
+
+        if let panel = gaitPanel {
+            panel.isVisible ? panel.orderOut(nil) : panel.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        let panel = KeyForwardingPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 300, height: 560),
+            styleMask:   [.titled, .closable, .miniaturizable, .resizable, .utilityWindow, .nonactivatingPanel],
+            backing:     .buffered,
+            defer:       false
+        )
+        panel.title                  = "Gait Animator"
+        panel.isFloatingPanel        = true
+        panel.becomesKeyOnlyIfNeeded = false
+        panel.forwardTarget          = viewport
+        panel.level                  = .normal
+        panel.hidesOnDeactivate      = false
+
+        panel.contentView = FirstClickHostingView(rootView: GaitAnimatorPanel(
+            state: state,
+            captureStart: { [weak viewport] in
+                state.startTime = viewport?.timeline.currentTime ?? 0
+                state.status = "Start time set to playhead."
+            },
+            create: { [weak self] in self?.gaitCreate() }
+        ))
+
+        if let win = window {
+            let f = win.frame
+            panel.setFrameOrigin(NSPoint(x: f.minX + 20, y: f.maxY - panel.frame.height - 40))
+        } else {
+            panel.center()
+        }
+
+        gaitPanel = panel
+        panel.makeKeyAndOrderFront(nil)
+        print("[DEBUG] AppDelegate: gait animator panel opened")
+    }
+
+    private func gaitCreate() {
+        guard let viewport = viewportView else { return }
+        let state = viewport.gaitState
+
+        guard case .group(let gid)? = state.capturedRef else {
+            state.validationAlert = "Pick a model (group) to walk."; return
+        }
+        // Selected marks, in their stored order, as the path waypoints.
+        let positions = viewport.probeConfig.marks
+            .filter { state.selectedMarks.contains($0.id) }
+            .map { $0.position }
+        guard positions.count >= 2 else {
+            state.validationAlert = "Select at least two path marks."; return
+        }
+        guard let speed = Float(state.speed), speed > 0 else {
+            state.validationAlert = "Speed must be a positive number."; return
+        }
+        guard let stride = Float(state.stride), stride > 0 else {
+            state.validationAlert = "Stride must be a positive number."; return
+        }
+        let start = state.startTime ?? 0
+
+        let missing = viewport.generateGait(
+            groupID: gid, gait: state.gait, markPositions: positions,
+            speed: speed, strideLength: stride, startTime: start)
+
+        timelineEditorWC?.editorView.needsDisplay = true
+        markDirty()
+        if missing.isEmpty {
+            state.status = "Created \(state.gait.label) along \(positions.count) marks."
+        } else {
+            state.status = "Created \(state.gait.label); missing joints skipped: \(missing.joined(separator: ", "))."
+        }
+        print("[DEBUG] AppDelegate: gait created (missing: \(missing))")
     }
 
     // MARK: - Orbit Path Animator

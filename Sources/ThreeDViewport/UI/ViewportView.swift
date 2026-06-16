@@ -98,6 +98,8 @@ final class ViewportView: MTKView {
     let curvePathState     = CurvePathAnimatorState()
     // Spin Animator helper state.
     let spinAnimatorState  = SpinAnimatorState()
+    // Gait (walk) Animator helper state.
+    let gaitState          = GaitAnimatorState()
 
     // Rate-marker schedules (Spin / Orbit animators), keyed by track.  These are the
     // editable source of truth; the dense pose keyframes are regenerated from them.
@@ -1845,6 +1847,55 @@ final class ViewportView: MTKView {
         default:
             break   // group / fog / particles not supported
         }
+    }
+
+    /// Gait (walk) generator: bakes a locomotion along `markPositions` for the model
+    /// `gid` — root path + heading on the group track, limb cycle on the per-part
+    /// tracks (matched by canonical joint name).  Replaces keyframes in the generated
+    /// time window.  Returns the joint names that were expected but missing.
+    @discardableResult
+    func generateGait(groupID gid: Int,
+                      gait: GaitType,
+                      markPositions: [SIMD3<Float>],
+                      speed: Float,
+                      strideLength: Float,
+                      startTime: Double) -> [String] {
+
+        // Parts of this model, indexed by their (unique-within-group) name.
+        var partIndexByName: [String: Int] = [:]
+        for (i, obj) in sceneManager.objects.enumerated() where obj.groupID == gid {
+            partIndexByName[obj.name] = i
+        }
+        let groupScale = TransformMath.scale(of: sceneManager.groupTransforms[gid] ?? matrix_identity_float4x4)
+
+        let out = GaitGenerator.generate(
+            gait: gait, marks: markPositions, speed: speed, strideLength: strideLength,
+            startTime: startTime, groupScale: groupScale,
+            availableJoints: Set(partIndexByName.keys))
+        guard let firstRoot = out.rootKeys.first, let lastRoot = out.rootKeys.last else { return out.missingJoints }
+
+        let lo = min(firstRoot.time, lastRoot.time) - 1e-6
+        let hi = max(firstRoot.time, lastRoot.time) + 1e-6
+
+        // Root path → group track.
+        if sceneManager.groupKeyframeTracks[gid] == nil {
+            sceneManager.groupKeyframeTracks[gid] = KeyframeTrack()
+        }
+        sceneManager.groupKeyframeTracks[gid]?.keyframes.removeAll { $0.time >= lo && $0.time <= hi }
+        for kf in out.rootKeys { sceneManager.groupKeyframeTracks[gid]?.addKeyframe(kf) }
+        onKeyframeStamped?(.group(gid))
+
+        // Limb cycles → per-part tracks.
+        for (name, keys) in out.limbKeys {
+            guard let i = partIndexByName[name] else { continue }
+            let obj = sceneManager.objects[i]
+            if obj.keyframeTrack == nil { obj.keyframeTrack = KeyframeTrack() }
+            obj.keyframeTrack?.keyframes.removeAll { $0.time >= lo && $0.time <= hi }
+            for kf in keys { obj.keyframeTrack?.addKeyframe(kf) }
+            onKeyframeStamped?(.object(i))
+        }
+
+        return out.missingJoints
     }
 
     /// Linear variant: replaces the selected track's keyframes in [start, end] with
