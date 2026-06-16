@@ -1458,6 +1458,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         print("[DEBUG] AppDelegate: new project")
 
         applyTemplateIfPresent()
+        syncGaitPanelToProject()
     }
 
     // MARK: - Open Model (adds to scene; use New Project to start fresh)
@@ -1732,6 +1733,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             // Sync the Camera panel's Follow Target list to the new scene so it
             // doesn't keep showing objects from the previously-loaded project.
             refreshCameraFollowTargets()
+            syncGaitPanelToProject()
             checkMissingHDRs(in: viewport)
             checkAndOfferGroupOffsetMigration(in: viewport)
             print("[DEBUG] AppDelegate: project loaded from " + url.lastPathComponent)
@@ -3450,7 +3452,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     // MARK: - Gait (Walk) Animator
 
-    @objc private func showGaitAnimator(_ sender: Any) {
+    /// Resync the Gait panel's target list + marks to the CURRENT project.  Called on
+    /// new/open project (so a panel left open from a previous project doesn't keep
+    /// stale mark IDs → the spurious "select at least two marks" error) and on open.
+    private func syncGaitPanelToProject() {
         guard let viewport = viewportView else { return }
         let state = viewport.gaitState
         // Only whole models (groups) can walk — they own the root path + limb parts.
@@ -3458,18 +3463,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if let ref = state.capturedRef, !state.targets.contains(where: { $0.ref == ref }) {
             state.capturedRef = nil
         }
-        if let sel = viewport.currentTrackRef, state.targets.contains(where: { $0.ref == sel }) {
-            state.capturedRef = sel
-        } else if state.capturedRef == nil {
-            state.capturedRef = state.targets.first?.ref
-        }
-        // Refresh the marks list (preserve any still-valid selection; default = all).
+        if state.capturedRef == nil { state.capturedRef = state.targets.first?.ref }
+        // Drop marks that no longer exist; default to all when nothing valid remains.
         let marks = viewport.probeConfig.marks
         state.markList = marks
         let valid = Set(marks.map { $0.id })
-        state.selectedMarks = state.selectedMarks.isEmpty
-            ? valid : state.selectedMarks.intersection(valid)
+        state.selectedMarks = state.selectedMarks.intersection(valid)
         if state.selectedMarks.isEmpty { state.selectedMarks = valid }
+    }
+
+    @objc private func showGaitAnimator(_ sender: Any) {
+        guard let viewport = viewportView else { return }
+        let state = viewport.gaitState
+        syncGaitPanelToProject()
+        // Prefer the current viewport/timeline selection as the target when valid.
+        if let sel = viewport.currentTrackRef, state.targets.contains(where: { $0.ref == sel }) {
+            state.capturedRef = sel
+        }
 
         if let panel = gaitPanel {
             panel.isVisible ? panel.orderOut(nil) : panel.makeKeyAndOrderFront(nil)

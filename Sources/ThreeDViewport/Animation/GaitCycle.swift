@@ -87,16 +87,19 @@ struct GaitCycle {
 
         case .swim:
             // Prone body (see bodyOrientation): legs flutter fast + shallow, arms take
-            // big alternating strokes.
+            // big alternating strokes, and the head tilts up ~45° to look forward out
+            // of the water (constant; eases back to rest as the swimmer stands up).
             let legL  =  p.hipSwing * sin(2 * w)
             let legR  =  p.hipSwing * sin(2 * w + .pi)
             let kneeL =  p.kneeFlex * max(0, sin(2 * w))
             let kneeR =  p.kneeFlex * max(0, sin(2 * w + .pi))
             let armL  =  p.armSwing * sin(w)
             let armR  =  p.armSwing * sin(w + .pi)
+            let headUp: Float = -45 * .pi / 180     // tilt head up out of the water
             return ["upper_leg_L": rotX(legL),  "upper_leg_R": rotX(legR),
                     "knee_L":      rotX(kneeL), "knee_R":      rotX(kneeR),
-                    "upper_arm_L": rotX(armL),  "upper_arm_R": rotX(armR)]
+                    "upper_arm_L": rotX(armL),  "upper_arm_R": rotX(armR),
+                    "neck":        rotX(headUp)]
         }
     }
 
@@ -124,6 +127,7 @@ struct GaitCycle {
     static func requiredJoints(for gait: GaitType) -> [String] {
         var j = ["upper_leg_L", "upper_leg_R", "knee_L", "knee_R", "upper_arm_L", "upper_arm_R"]
         if gait != .swim { j += ["elbow_L", "elbow_R"] }   // walk/run/hop swing the forearms
+        else             { j += ["neck"] }                 // swim tilts the head up
         return j
     }
 }

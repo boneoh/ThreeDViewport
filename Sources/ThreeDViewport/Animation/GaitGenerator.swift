@@ -50,7 +50,10 @@ struct GaitGenerator {
 
         let identityQ = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
         let prone     = GaitCycle.bodyOrientation(gait)   // identity for non-swim
-        let settleStart: Float = 0.85                     // ease to a standing rest over the last 15%
+        // Ease to a standing rest over a fixed TIME at the end (works for long and
+        // short paths alike), capped to the gait's own length.
+        let totalTime: Float = total / speed
+        let settleDur: Float = min(1.0, totalTime)        // seconds
 
         for k in 0..<count {
             let f    = Float(k) / Float(count - 1)
@@ -60,9 +63,11 @@ struct GaitGenerator {
             let tan  = spline.tangent(atDistance: dist)
             let phase = (dist / strideLength).truncatingRemainder(dividingBy: 1)
 
-            // Every gait eases to a clean standing rest over the final stretch so it
-            // arrives upright and still on its feet at the last mark.
-            let u      = max(0, min(1, (f - settleStart) / (1 - settleStart)))
+            // Every gait eases to a clean standing rest over the final `settleDur`
+            // seconds so it arrives upright and still on its feet at the last mark.
+            let remaining = (total - dist) / speed        // seconds left to the end
+            let u: Float  = (settleDur > 1e-4 && remaining < settleDur)
+                            ? (settleDur - remaining) / settleDur : 0
             let settle = u * u * (3 - 2 * u)              // smoothstep 0→1
 
             // Root: heading (yaw so +Z faces travel) composed with body orientation.
