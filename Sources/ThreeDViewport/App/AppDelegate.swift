@@ -448,6 +448,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         layout.orbitPanel  = frameIfVisible(orbitPathPanel)
         layout.linearPanel = frameIfVisible(linearPathPanel)
         layout.curvePanel  = frameIfVisible(curvePathPanel)
+        layout.gaitPanel   = frameIfVisible(gaitPanel)
         // Atmosphere section expand/collapse (saved regardless of panel visibility).
         if let vp = viewportView {
             layout.atmosphereFogExpanded      = vp.atmospherePanelState.fogExpanded
@@ -562,6 +563,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if let cf = layout.curvePanel {
             if curvePathPanel == nil { showCurvePathAnimator(self) }
             curvePathPanel?.setFrame(NSRect(x: cf.x, y: cf.y, width: cf.w, height: cf.h), display: true)
+        }
+        if let gf = layout.gaitPanel {
+            if gaitPanel == nil { showGaitAnimator(self) }
+            gaitPanel?.setFrame(NSRect(x: gf.x, y: gf.y, width: gf.w, height: gf.h), display: true)
         }
     }
 
@@ -2163,6 +2168,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             p.orderOut(nil)
             panelsHiddenByMiniaturize.insert("curve")
         }
+        if let p = gaitPanel, p.isVisible {
+            p.orderOut(nil)
+            panelsHiddenByMiniaturize.insert("gait")
+        }
         if let wc = timelineEditorWC, wc.window?.isVisible == true {
             wc.window?.orderOut(nil)
             panelsHiddenByMiniaturize.insert("timeline")
@@ -2223,6 +2232,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if panelsHiddenByMiniaturize.contains("orbit")  { orbitPathPanel?.makeKeyAndOrderFront(nil) }
         if panelsHiddenByMiniaturize.contains("linear") { linearPathPanel?.makeKeyAndOrderFront(nil) }
         if panelsHiddenByMiniaturize.contains("curve")  { curvePathPanel?.makeKeyAndOrderFront(nil) }
+        if panelsHiddenByMiniaturize.contains("gait")   { gaitPanel?.makeKeyAndOrderFront(nil) }
         if panelsHiddenByMiniaturize.contains("timeline")       { timelineEditorWC?.showWindow(nil) }
         if panelsHiddenByMiniaturize.contains("effects")        { effectsGridWC?.showWindow(nil) }
         if !panelsHiddenByMiniaturize.isEmpty {
@@ -3467,7 +3477,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
 
         let panel = KeyForwardingPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 300, height: 560),
+            contentRect: NSRect(x: 0, y: 0, width: 300, height: 720),
             styleMask:   [.titled, .closable, .miniaturizable, .resizable, .utilityWindow, .nonactivatingPanel],
             backing:     .buffered,
             defer:       false
@@ -3522,9 +3532,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
         let start = state.startTime ?? 0
 
+        // Tuning multipliers (default 1.0 when a field is blank/invalid).
+        func mul(_ s: String) -> Float { Float(s).map { $0 > 0 ? $0 : 1 } ?? 1 }
+        let params = GaitParams.defaults(for: state.gait)
+            .scaled(hip: mul(state.swingMul), knee: mul(state.kneeMul),
+                    arm: mul(state.armMul),  bob: mul(state.bobMul))
+
         let missing = viewport.generateGait(
-            groupID: gid, gait: state.gait, markPositions: positions,
-            speed: speed, strideLength: stride, startTime: start)
+            groupID: gid, gait: state.gait, params: params, markPositions: positions,
+            speed: speed, strideLength: stride, startTime: start, plantFeet: state.plantFeet)
 
         timelineEditorWC?.editorView.needsDisplay = true
         markDirty()

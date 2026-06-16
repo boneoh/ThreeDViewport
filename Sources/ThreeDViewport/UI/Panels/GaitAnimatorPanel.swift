@@ -21,6 +21,14 @@ final class GaitAnimatorState: ObservableObject {
     @Published var stride: String = "1.6"
     @Published var startTime: Double? = 0
 
+    // Tuning multipliers (1.0 = the gait's default amplitude).
+    @Published var swingMul: String = "1.0"
+    @Published var kneeMul:  String = "1.0"
+    @Published var armMul:   String = "1.0"
+    @Published var bobMul:   String = "1.0"
+    /// Drop the model so its feet meet the marks (vs. its origin at the hips).
+    @Published var plantFeet: Bool = true
+
     /// Marks available to walk, plus which are selected (in this stored order).
     @Published var markList:      [ProbeMark] = []
     @Published var selectedMarks: Set<UUID> = []
@@ -38,6 +46,15 @@ struct GaitAnimatorPanel: View {
     private func timeText(_ t: Double?) -> String {
         guard let t = t else { return "—" }
         return String(format: "%.3f s", t)
+    }
+
+    @ViewBuilder
+    private func tuneRow(_ label: String, _ binding: Binding<String>) -> some View {
+        HStack {
+            Text(label).frame(width: 70, alignment: .leading)
+            TextField("", text: binding).textFieldStyle(.roundedBorder).frame(width: 70)
+            Text("×").font(.caption).foregroundColor(.secondary)
+        }
     }
 
     var body: some View {
@@ -111,6 +128,18 @@ struct GaitAnimatorPanel: View {
                         Text(timeText(state.startTime)).font(.system(.caption, design: .monospaced))
                             .foregroundColor(.secondary)
                     }
+                }
+                .padding(4)
+            }
+
+            // ── Tuning ────────────────────────────────────────────────────────
+            GroupBox(label: Text("Tuning (× default)").font(.headline)) {
+                VStack(alignment: .leading, spacing: 6) {
+                    tuneRow("Swing", $state.swingMul)
+                    tuneRow("Knee",  $state.kneeMul)
+                    tuneRow("Arm",   $state.armMul)
+                    tuneRow("Bob",   $state.bobMul)
+                    Toggle("Plant feet on marks", isOn: $state.plantFeet)
                 }
                 .padding(4)
             }

@@ -1856,32 +1856,68 @@ final class ViewportView: MTKView {
     @discardableResult
     func generateGait(groupID gid: Int,
                       gait: GaitType,
+                      params: GaitParams,
                       markPositions: [SIMD3<Float>],
                       speed: Float,
                       strideLength: Float,
-                      startTime: Double) -> [String] {
+                      startTime: Double,
+                      plantFeet: Bool) -> [String] {
 
         // Parts of this model, indexed by their (unique-within-group) name.
         var partIndexByName: [String: Int] = [:]
+        var groupPartIndices: [Int] = []
         for (i, obj) in sceneManager.objects.enumerated() where obj.groupID == gid {
             partIndexByName[obj.name] = i
+            groupPartIndices.append(i)
         }
         let groupScale = TransformMath.scale(of: sceneManager.groupTransforms[gid] ?? matrix_identity_float4x4)
 
-        let out = GaitGenerator.generate(
-            gait: gait, marks: markPositions, speed: speed, strideLength: strideLength,
-            startTime: startTime, groupScale: groupScale,
-            availableJoints: Set(partIndexByName.keys))
-        guard let firstRoot = out.rootKeys.first, let lastRoot = out.rootKeys.last else { return out.missingJoints }
+        // Ground offset: lowest point of the model in its rest pose (group-local), so
+        // setting the root translation to a mark plants the feet there instead of the
+        // hips.  Scaled by the group's Y scale.
+        var groundOffset: Float = 0
+        if plantFeet {
+            var restCache: [Int: matrix_float4x4] = [:]
+            func restWorld(_ i: Int) -> matrix_float4x4 {
+                if let m = restCache[i] { return m }
+                let o = sceneManager.objects[i]
+                let m = (o.parentIndex.map { restWorld($0) } ?? matrix_identity_float4x4) * o.baseTransform
+                restCache[i] = m
+                return m
+            }
+            var minY = Float.greatestFiniteMagnitude
+            for i in groupPartIndices {
+                let o   = sceneManager.objects[i]
+                let rw  = restWorld(i)
+                let lo  = o.boundingMin, hi = o.boundingMax
+                for cx in [lo.x, hi.x] { for cy in [lo.y, hi.y] { for cz in [lo.z, hi.z] {
+                    let p = rw * SIMD4<Float>(cx, cy, cz, 1)
+                    minY = min(minY, p.y)
+                }}}
+            }
+            if minY < Float.greatestFiniteMagnitude { groundOffset = -minY * groupScale.y }
+        }
 
-        let lo = min(firstRoot.time, lastRoot.time) - 1e-6
-        let hi = max(firstRoot.time, lastRoot.time) + 1e-6
+        let out = GaitGenerator.generate(
+            gait: gait, params: params, marks: markPositions, speed: speed,
+            strideLength: strideLength, startTime: startTime, groundOffset: groundOffset,
+            groupScale: groupScale, availableJoints: Set(partIndexByName.keys))
+        guard let firstRoot = out.rootKeys.first else { return out.missingJoints }
+
+        let lo = firstRoot.time - 1e-6
+
+        // Clear this gait's region ONWARD across the whole model first — the group
+        // track and every part — so a previous (longer/slower, or different-gait)
+        // bake leaves no tail that keeps the model moving after this one ends.
+        sceneManager.groupKeyframeTracks[gid]?.keyframes.removeAll { $0.time >= lo }
+        for i in groupPartIndices {
+            sceneManager.objects[i].keyframeTrack?.keyframes.removeAll { $0.time >= lo }
+        }
 
         // Root path → group track.
         if sceneManager.groupKeyframeTracks[gid] == nil {
             sceneManager.groupKeyframeTracks[gid] = KeyframeTrack()
         }
-        sceneManager.groupKeyframeTracks[gid]?.keyframes.removeAll { $0.time >= lo && $0.time <= hi }
         for kf in out.rootKeys { sceneManager.groupKeyframeTracks[gid]?.addKeyframe(kf) }
         onKeyframeStamped?(.group(gid))
 
@@ -1890,7 +1926,6 @@ final class ViewportView: MTKView {
             guard let i = partIndexByName[name] else { continue }
             let obj = sceneManager.objects[i]
             if obj.keyframeTrack == nil { obj.keyframeTrack = KeyframeTrack() }
-            obj.keyframeTrack?.keyframes.removeAll { $0.time >= lo && $0.time <= hi }
             for kf in keys { obj.keyframeTrack?.addKeyframe(kf) }
             onKeyframeStamped?(.object(i))
         }

@@ -647,6 +647,7 @@ struct WindowLayoutData: Codable {
     var orbitPanel:          WindowFrameData? = nil
     var linearPanel:         WindowFrameData? = nil
     var curvePanel:          WindowFrameData? = nil
+    var gaitPanel:           WindowFrameData? = nil
     // v25; Atmosphere panel section expand/collapse state.  Optional so older
     // window-layout blobs still decode (nil → defaults on restore).
     var atmosphereFogExpanded:      Bool? = nil

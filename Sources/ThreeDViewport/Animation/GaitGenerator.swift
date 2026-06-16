@@ -20,10 +20,12 @@ struct GaitGenerator {
     /// - groupScale:   keep the model's current scale on the root keyframes.
     /// - availableJoints: part names present in the target model (for missing-joint report).
     static func generate(gait: GaitType,
+                         params: GaitParams,
                          marks: [SIMD3<Float>],
                          speed: Float,
                          strideLength: Float,
                          startTime: Double,
+                         groundOffset: Float,
                          groupScale: SIMD3<Float>,
                          availableJoints: Set<String>) -> Output {
 
@@ -46,6 +48,10 @@ struct GaitGenerator {
         let missing  = required.filter { !availableJoints.contains($0) }
         for j in present { limbKeys[j] = [] }
 
+        let identityQ = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+        let prone     = GaitCycle.bodyOrientation(gait)   // identity for non-swim
+        let settleStart: Float = 0.85                     // ease to a standing rest over the last 15%
+
         for k in 0..<count {
             let f    = Float(k) / Float(count - 1)
             let dist = f * total
@@ -54,20 +60,33 @@ struct GaitGenerator {
             let tan  = spline.tangent(atDistance: dist)
             let phase = (dist / strideLength).truncatingRemainder(dividingBy: 1)
 
-            // Root: position (+ bob) and heading (yaw so +Z faces travel).
+            // Every gait eases to a clean standing rest over the final stretch so it
+            // arrives upright and still on its feet at the last mark.
+            let u      = max(0, min(1, (f - settleStart) / (1 - settleStart)))
+            let settle = u * u * (3 - 2 * u)              // smoothstep 0→1
+
+            // Root: heading (yaw so +Z faces travel) composed with body orientation.
+            // Swim swims prone with its center at the mark (yOffset 0) then stands up
+            // (body → upright, yOffset → groundOffset) over the settle; upright gaits
+            // keep feet on the ground throughout.  The bob fades out so the body ends level.
             let yaw      = atan2(tan.x, tan.z)
             let heading  = simd_quatf(angle: yaw, axis: SIMD3<Float>(0, 1, 0))
-            let bobbed   = SIMD3<Float>(pos.x, pos.y + GaitCycle.bob(phase: phase), pos.z)
+            let body     = simd_slerp(prone, identityQ, settle)   // prone=identity for non-swim
+            let rotation = heading * body
+            let yOffset  = (gait == .swim) ? groundOffset * settle : groundOffset
+            let y        = pos.y + yOffset + GaitCycle.bob(gait, phase: phase, params) * (1 - settle)
+            let bobbed   = SIMD3<Float>(pos.x, y, pos.z)
             rootKeys.append(TransformKeyframe(time: time, translation: bobbed,
-                                              rotation: heading, scale: groupScale))
+                                              rotation: rotation, scale: groupScale))
 
-            // Limbs: local joint rotations (translation 0, scale 1 → pure joint swing).
-            let pose = GaitCycle.walkPose(phase: phase)
+            // Limbs: local joint rotations (translation 0, scale 1 → pure joint swing),
+            // blended back to rest as the gait settles to standing.
+            let pose = GaitCycle.pose(gait, phase: phase, params)
             for j in present {
-                if let q = pose[j] {
-                    limbKeys[j]?.append(TransformKeyframe(time: time, translation: .zero,
-                                                          rotation: q, scale: SIMD3<Float>(1, 1, 1)))
-                }
+                var q = pose[j] ?? identityQ
+                if settle > 0 { q = simd_slerp(q, identityQ, settle) }
+                limbKeys[j]?.append(TransformKeyframe(time: time, translation: .zero,
+                                                      rotation: q, scale: SIMD3<Float>(1, 1, 1)))
             }
         }
 
