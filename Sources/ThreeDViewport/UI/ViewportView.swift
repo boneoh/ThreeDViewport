@@ -830,14 +830,39 @@ final class ViewportView: MTKView {
         onProbeEdited?()
     }
 
-    /// Depth (dolly) direction for the Probe: the ray from the view's eye THROUGH the
-    /// probe.  Moving along this keeps the probe locked to its on-screen position as it
-    /// goes nearer/farther — unlike the camera's forward axis, which makes an off-centre
-    /// probe drift toward / away from the view centre in perspective.
-    private var probeDepthAxis: SIMD3<Float> {
-        let d   = probeConfig.position - viewCamera.eyePosition
-        let len = simd_length(d)
-        return len > 1e-5 ? d / len : viewCamera.forwardVector
+    /// World-space origin of an object (folds in its group transform if grouped), for
+    /// aiming the eye→target depth ray.
+    private func objectWorldOrigin(_ obj: SceneObject) -> SIMD3<Float> {
+        let w: matrix_float4x4
+        if let gid = obj.groupID, let gt = sceneManager.groupTransforms[gid] { w = gt * obj.transform }
+        else { w = obj.transform }
+        return SIMD3<Float>(w.columns.3.x, w.columns.3.y, w.columns.3.z)
+    }
+
+    /// World-space delta for a depth dolly of a target at world `p` by `move` (signed)
+    /// along the eye→target ray — clamped so the target can't reach the eye (a NEAR
+    /// limit; crossing it flips behind the camera and "jumps") nor run past the ±100
+    /// world box (a FAR limit computed ALONG the ray, so it stops on the boundary
+    /// instead of deviating per-axis the way a coordinate-wise clamp does).
+    private func dollyDelta(towardWorld p: SIMD3<Float>, by move: Float) -> SIMD3<Float> {
+        let eye  = viewCamera.eyePosition
+        let toP  = p - eye
+        let dist = simd_length(toP)
+        guard dist > 1e-4 else { return .zero }
+        let dir  = toP / dist
+
+        // Farthest distance along +dir from the eye before any coordinate leaves ±100.
+        let bound: Float = 100
+        var maxFar: Float = .greatestFiniteMagnitude
+        for a in 0..<3 {
+            let d = dir[a]
+            guard abs(d) > 1e-5 else { continue }
+            let t = max((bound - eye[a]) / d, (-bound - eye[a]) / d)   // boundary ahead along +dir
+            if t > 0 { maxFar = min(maxFar, t) }
+        }
+        let minNear: Float = 0.5
+        let newDist = min(max(dist + move, minNear), max(minNear, maxFar))
+        return (eye + dir * newDist) - p
     }
 
     private func syncLocalTransform(_ obj: SceneObject) {
@@ -1024,6 +1049,19 @@ final class ViewportView: MTKView {
         director.target   = probeConfig.position
         director.distance = 3.0   // "near" — close enough to place the Probe
         print("[DEBUG] ViewportView: director snapped to Probe")
+    }
+
+    /// Moves the bake Probe to the Director's eye position (the complement of Shift+T) —
+    /// e.g. frame the capture viewpoint with the Director, then drop the Probe there.
+    /// Reveals the gizmo; clamps to the Probe's ±100 range.  Most useful in Scene mode.
+    func setProbeToDirectorEye() {
+        let p = simd_clamp(director.eyePosition,
+                           SIMD3<Float>(repeating: -100),
+                           SIMD3<Float>(repeating:  100))
+        probeConfig.position  = p
+        probeConfig.isVisible = true
+        onProbeEdited?()
+        print("[DEBUG] ViewportView: probe set to Director eye \(p)")
     }
 
     /// World-space bounding sphere (centre + radius) over `parts` at their current
@@ -3036,7 +3074,7 @@ final class ViewportView: MTKView {
                     scaleGroup(parts, by: factor, around: groupCenter(parts))
                 } else {
                     let move = delta * viewCamera.distance * 0.05
-                    translateGroup(parts, by: viewCamera.forwardVector * move)
+                    translateGroup(parts, by: dollyDelta(towardWorld: groupCenter(parts), by: move))
                 }
                 return
             }
@@ -3063,15 +3101,17 @@ final class ViewportView: MTKView {
         // (along the camera's forward axis — "into / out of the screen").
         if controlMode == .light, !timeline.isPlaying {
             let move = delta * viewCamera.distance * 0.05
-            lightManager.translateSelected(by: viewCamera.forwardVector * move)
+            let li   = lightManager.selectedIndex
+            guard li < lightManager.lights.count else { return }
+            lightManager.translateSelected(by: dollyDelta(towardWorld: lightManager.lights[li].position, by: move))
             return
         }
 
         // Probe mode: scroll dollies the Probe toward / away along the eye→probe ray,
-        // so it stays locked to its on-screen position (no perspective drift).
+        // so it stays locked to its on-screen position (no perspective drift / jump).
         if controlMode == .probe, !timeline.isPlaying {
             let move = delta * viewCamera.distance * 0.05
-            moveProbe(by: probeDepthAxis * move)
+            moveProbe(by: dollyDelta(towardWorld: probeConfig.position, by: move))
             return
         }
 
@@ -3102,12 +3142,13 @@ final class ViewportView: MTKView {
             syncLocalTransform(obj)
 
         } else {
-            // Plain scroll → translate along the view forward axis (depth push/pull)
+            // Plain scroll → dolly along the eye→object ray, distance-clamped so it
+            // stays on target and never crosses the eye or deviates at the ±100 box.
             let move = delta * viewCamera.distance * 0.05
-            let fwd  = viewCamera.forwardVector
-            obj.transform.columns.3.x += fwd.x * move
-            obj.transform.columns.3.y += fwd.y * move
-            obj.transform.columns.3.z += fwd.z * move
+            let d    = dollyDelta(towardWorld: objectWorldOrigin(obj), by: move)
+            obj.transform.columns.3.x += d.x
+            obj.transform.columns.3.y += d.y
+            obj.transform.columns.3.z += d.z
             clampObjectPosition(obj)
             syncLocalTransform(obj)
         }
@@ -3282,9 +3323,9 @@ final class ViewportView: MTKView {
 
         case .probe:
             // Camera-relative move in the screen plane; Shift+↑/↓ dollies along the
-            // eye→probe ray (no perspective drift) since the Probe can't rotate.
+            // eye→probe ray (distance-clamped, no eye-cross/drift) since the Probe can't rotate.
             if shift {
-                moveProbe(by: probeDepthAxis * (dyF * translateStepWorld))
+                moveProbe(by: dollyDelta(towardWorld: probeConfig.position, by: dyF * translateStepWorld))
             } else {
                 moveProbe(by: (right * dxF + up * dyF) * translateStepWorld)
             }
@@ -3298,7 +3339,6 @@ final class ViewportView: MTKView {
         if activeTrackIsLocked { beepLocked(); return }   // locked track — no +/- depth/scale edits
 
         let sign: Float = positive ? 1 : -1
-        let fwd = viewCamera.forwardVector
 
         switch controlMode {
         case .camera:
@@ -3310,7 +3350,10 @@ final class ViewportView: MTKView {
             director.lensZoom(delta: sign * zoomStep / 0.05)
 
         case .light:
-            lightManager.translateSelected(by: fwd * (sign * translateStepWorld * 2))
+            let li = lightManager.selectedIndex
+            guard li < lightManager.lights.count else { return }
+            lightManager.translateSelected(by: dollyDelta(towardWorld: lightManager.lights[li].position,
+                                                          by: sign * translateStepWorld * 2))
 
         case .object:
             guard let obj = sceneManager.selectedObject else { return }
@@ -3321,7 +3364,8 @@ final class ViewportView: MTKView {
                 obj.transform.columns.1 *= sv
                 obj.transform.columns.2 *= sv
             } else {
-                let d = fwd * (sign * translateStepWorld)
+                // Dolly along the eye→object ray, distance-clamped (no eye-cross / drift).
+                let d = dollyDelta(towardWorld: objectWorldOrigin(obj), by: sign * translateStepWorld)
                 obj.transform.columns.3.x += d.x
                 obj.transform.columns.3.y += d.y
                 obj.transform.columns.3.z += d.z
@@ -3336,12 +3380,12 @@ final class ViewportView: MTKView {
                 let factor: Float = positive ? scaleStep : 1.0 / scaleStep
                 scaleGroup(parts, by: factor, around: groupCenter(parts))
             } else {
-                translateGroup(parts, by: fwd * (sign * translateStepWorld))
+                translateGroup(parts, by: dollyDelta(towardWorld: groupCenter(parts), by: sign * translateStepWorld))
             }
 
         case .probe:
-            // +/− dollies the Probe along the eye→probe ray (no perspective drift).
-            moveProbe(by: probeDepthAxis * (sign * translateStepWorld))
+            // +/− dollies the Probe along the eye→probe ray, distance-clamped.
+            moveProbe(by: dollyDelta(towardWorld: probeConfig.position, by: sign * translateStepWorld))
         }
         if !sceneModeActive, let ref = currentTrackRef { autoKeyframeOnEdit(ref) }
     }

@@ -15,9 +15,11 @@ struct ModelInspectorPanel: View {
                         Divider().padding(.vertical, 8)
                         // Editing sections freeze when the model is locked (the
                         // identity section keeps Reveal + Add to Favorites enabled).
-                        positionSection.disabled(state.isLocked)
+                        // Position/Rotation handle the lock per-control so their
+                        // read-only Copy button stays live even when locked.
+                        positionSection
                         Divider().padding(.vertical, 8)
-                        rotationSection.disabled(state.isLocked)
+                        rotationSection
                         Divider().padding(.vertical, 8)
                         scaleSection.disabled(state.isLocked)
                         Divider().padding(.vertical, 8)
@@ -55,17 +57,17 @@ struct ModelInspectorPanel: View {
                 CoordCopyPasteButtons(
                     onCopy:   { clipboard.position = state.position },
                     onPaste:  { if let p = clipboard.position { state.position = p } },
-                    canPaste: state.canEditPosition && clipboard.position != nil,
+                    canPaste: state.canEditPosition && !state.isLocked && clipboard.position != nil,
                     onZero:   { state.position = .zero },
-                    canZero:  state.canEditPosition,
+                    canZero:  state.canEditPosition && !state.isLocked,
                     onAutoStamp: { state.onAutoStamp?() })
             }
             SliderRow(label: "X", value: $state.position.x, range: -100...100, format: "%.2f",
-                      onEditEnded: { state.onSliderEdited?() }).disabled(!state.canEditPosition)
+                      onEditEnded: { state.onSliderEdited?() }).disabled(!state.canEditPosition || state.isLocked)
             SliderRow(label: "Y", value: $state.position.y, range: -100...100, format: "%.2f",
-                      onEditEnded: { state.onSliderEdited?() }).disabled(!state.canEditPosition)
+                      onEditEnded: { state.onSliderEdited?() }).disabled(!state.canEditPosition || state.isLocked)
             SliderRow(label: "Z", value: $state.position.z, range: -100...100, format: "%.2f",
-                      onEditEnded: { state.onSliderEdited?() }).disabled(!state.canEditPosition)
+                      onEditEnded: { state.onSliderEdited?() }).disabled(!state.canEditPosition || state.isLocked)
         }
     }
 
@@ -79,17 +81,17 @@ struct ModelInspectorPanel: View {
                 CoordCopyPasteButtons(
                     onCopy:   { clipboard.rotation = state.rotation },
                     onPaste:  { if let r = clipboard.rotation { state.rotation = r } },
-                    canPaste: state.canEditRotation && clipboard.rotation != nil,
+                    canPaste: state.canEditRotation && !state.isLocked && clipboard.rotation != nil,
                     onZero:   { state.rotation = .zero },
-                    canZero:  state.canEditRotation,
+                    canZero:  state.canEditRotation && !state.isLocked,
                     onAutoStamp: { state.onAutoStamp?() })
             }
             SliderRow(label: "X", value: $state.rotation.x, range: -180...180, format: "%.1f",
-                      onEditEnded: { state.onSliderEdited?() }).disabled(!state.canEditRotation)
+                      onEditEnded: { state.onSliderEdited?() }).disabled(!state.canEditRotation || state.isLocked)
             SliderRow(label: "Y", value: $state.rotation.y, range: -180...180, format: "%.1f",
-                      onEditEnded: { state.onSliderEdited?() }).disabled(!state.canEditRotation)
+                      onEditEnded: { state.onSliderEdited?() }).disabled(!state.canEditRotation || state.isLocked)
             SliderRow(label: "Z", value: $state.rotation.z, range: -180...180, format: "%.1f",
-                      onEditEnded: { state.onSliderEdited?() }).disabled(!state.canEditRotation)
+                      onEditEnded: { state.onSliderEdited?() }).disabled(!state.canEditRotation || state.isLocked)
         }
     }
 

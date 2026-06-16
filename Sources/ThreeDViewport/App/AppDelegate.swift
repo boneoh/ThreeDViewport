@@ -987,6 +987,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         addMarkItem.target = self
         marksMenu.addItem(addMarkItem)
 
+        // Probe placement: drop the Probe at the Director's eye (complement of Shift+T).
+        let probeToEyeItem = NSMenuItem(title: "Set Probe to Director Eye",
+                                        action: #selector(setProbeToDirectorEyeMenu(_:)),
+                                        keyEquivalent: "")
+        probeToEyeItem.target = self
+        marksMenu.addItem(probeToEyeItem)
+
         let goToMarkItem = NSMenuItem(title: "Go To Position Mark", action: nil, keyEquivalent: "")
         let goToSub = NSMenu(title: "Go To Position Mark")
         goToSub.delegate = self
@@ -3165,6 +3172,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // MARK: - Marks menu actions
 
     @objc private func promptForMarkMenu(_ sender: Any) { promptForMark() }
+
+    @objc private func setProbeToDirectorEyeMenu(_ sender: Any) {
+        viewportView?.setProbeToDirectorEye()   // marks dirty via onProbeEdited
+    }
 
     @objc private func toggleVectorPath(_ sender: Any) {
         viewportView?.toggleMotionVectors()

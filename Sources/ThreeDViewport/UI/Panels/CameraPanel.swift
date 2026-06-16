@@ -220,9 +220,9 @@ struct CameraPanel: View {
                     CoordCopyPasteButtons(
                         onCopy:   { clipboard.position = state.position },
                         onPaste:  { if let p = clipboard.position { state.position = p } },
-                        canPaste: clipboard.position != nil,
+                        canPaste: clipboard.position != nil && !state.isLocked,
                         onZero:   { state.position = .zero },
-                        canZero:  true,
+                        canZero:  !state.isLocked,
                         onAutoStamp: { state.onAutoStamp?() })
                 }
                 .padding(.bottom, 4)
@@ -242,9 +242,9 @@ struct CameraPanel: View {
                     CoordCopyPasteButtons(
                         onCopy:   { clipboard.position = state.target },
                         onPaste:  { if let p = clipboard.position { state.target = p } },
-                        canPaste: clipboard.position != nil,
+                        canPaste: clipboard.position != nil && !state.isLocked,
                         onZero:   { state.target = .zero },
-                        canZero:  true,
+                        canZero:  !state.isLocked,
                         onAutoStamp: { state.onAutoStamp?() })
                 }
                 .padding(.bottom, 4)

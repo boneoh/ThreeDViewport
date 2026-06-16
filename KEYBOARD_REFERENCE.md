@@ -6,6 +6,8 @@ Available in the main viewport (no modifier unless noted).
 
 | Key | Action |
 |-----|--------|
+| **A** | Align the multi-selected keyframes to the earliest selected (Timeline Editor) |
+| **Arrow keys** / **Keypad arrows** | Move the active entity (object / model / light / probe) in the view plane; in Camera mode, orbit the target. **Shift+arrows** rotate / free-look (Camera, Director) |
 | **B** | Nudge selected keyframe 1 frame backward |
 | **C** | Camera mode |
 | **D** | Director mode — navigate the Director's POV (Scene mode only) |
@@ -25,11 +27,15 @@ Available in the main viewport (no modifier unless noted).
 | **R** | Reset current object, light, or camera orientation |
 | **⌘R** | Re-auto-fit Director (only in Scene mode) |
 | **S** | Toggle Scene mode (Director's POV — see camera, lights, models from above and behind); auto-engages Director mode |
+| **T** | Probe mode — move the bake probe (drag / arrow keys / scroll wheel; reveals the gizmo). Works in normal view and Scene mode |
+| **Shift+T** | Fly the Director to the probe — aims at it, pulled in close (Scene mode only) |
 | **V** | Toggle the keyframe motion-path overlay for the selected entity |
 | **W** | Wireframe toggle |
 | **1**–**6** | Snap Director to a standard view of the selection — Front/Left/Rear/Right/Top/Bottom (Scene mode only) |
 | **7** | Solo: hide everything except the selected object's group (Scene mode only) |
 | **8** | Solo: make the hidden others still occlude (Scene mode only; pairs with 7) |
+| **[** / **]** | Roll the object / model left / right; in Camera mode orbit yaw left / right; in Light mode rotate azimuth |
+| **+** / **−** (also keypad) | Move the active object / model / light / probe in / out (depth). In Camera / Director mode, change focal length (FOV). **⌥+** / **⌥−** scales the object / model |
 | **⌘+** / **⌘−** | Dolly Director in / out (only in Scene mode) |
 | **Shift+Tab** | Previous keyframe across visible Timeline rows |
 | **Tab** | Next keyframe across visible Timeline rows |

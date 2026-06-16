@@ -43,9 +43,9 @@ struct ProbeInspectorPanel: View {
                         CoordCopyPasteButtons(
                             onCopy:   { clipboard.position = probe.position },
                             onPaste:  { if let p = clipboard.position { probe.position = p } },
-                            canPaste: clipboard.position != nil,
+                            canPaste: clipboard.position != nil && !probe.isLocked,
                             onZero:   { probe.position = .zero },
-                            canZero:  true)
+                            canZero:  !probe.isLocked)
                     }
                     SliderRow(label: "X", value: $probe.position.x, range: -100...100, format: "%.2f")
                     SliderRow(label: "Y", value: $probe.position.y, range: -100...100, format: "%.2f")

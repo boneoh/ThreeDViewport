@@ -82,7 +82,8 @@ struct AtmospherePanel: View {
                         AtmoDetailControls(source: fog, varianceKP: \.variance,
                                            positionKP: \.position, sizeKP: \.size, clipboard: clipboard,
                                            onAutoStampPosition: onAutoStampFog,
-                                           onEditEnded: onAutoKeyframeFog)
+                                           onEditEnded: onAutoKeyframeFog,
+                                           locked: sections.fogLocked)
                         FogSliderRow(label: "Quality", value: $fog.raymarchSteps, range: 8...96, format: "%.0f")
                     }
                     .padding(.top, 6)
@@ -132,7 +133,8 @@ struct AtmospherePanel: View {
                                 AtmoDetailControls(source: fx, varianceKP: \.variance,
                                                    positionKP: \.position, sizeKP: \.size, clipboard: clipboard,
                                                    onAutoStampPosition: onAutoStampParticles,
-                                                   onEditEnded: onAutoKeyframeParticles)
+                                                   onEditEnded: onAutoKeyframeParticles,
+                                                   locked: fx.isLocked)
                                 EmitterAdvancedControls(emitter: fx)
                             }
                             .disabled(fx.isLocked)
@@ -230,6 +232,9 @@ private struct AtmoDetailControls<Source: ObservableObject>: View {
     var onAutoStampPosition: () -> Void = {}
     /// Fires when any of these (keyframeable) variance/position/size sliders settle.
     var onEditEnded: (() -> Void)? = nil
+    /// When true, the fog/emitter track is locked: Paste / Zero grey out (Copy stays
+    /// live).  The surrounding `.disabled(…)` already freezes the sliders.
+    var locked: Bool = false
 
     private func fbind<V>(_ kp: ReferenceWritableKeyPath<Source, V>) -> Binding<V> {
         Binding(get: { source[keyPath: kp] }, set: { source[keyPath: kp] = $0 })
@@ -247,9 +252,9 @@ private struct AtmoDetailControls<Source: ObservableObject>: View {
                 CoordCopyPasteButtons(
                     onCopy:   { clipboard.position = source[keyPath: positionKP] },
                     onPaste:  { if let p = clipboard.position { source[keyPath: positionKP] = p } },
-                    canPaste: clipboard.position != nil,
+                    canPaste: clipboard.position != nil && !locked,
                     onZero:   { source[keyPath: positionKP] = .zero },
-                    canZero:  true,
+                    canZero:  !locked,
                     onAutoStamp: { onAutoStampPosition() })
             }
             FogSliderRow(label: "X", value: fbind(positionKP).x, range: -100...100, format: "%.1f",
@@ -266,7 +271,7 @@ private struct AtmoDetailControls<Source: ObservableObject>: View {
                 CoordCopyPasteButtons(
                     onCopy:   { clipboard.size = source[keyPath: sizeKP] },
                     onPaste:  { if let s = clipboard.size { source[keyPath: sizeKP] = s } },
-                    canPaste: clipboard.size != nil)
+                    canPaste: clipboard.size != nil && !locked)
             }
             FogSliderRow(label: "W", value: fbind(sizeKP).x, range: 0.5...40, format: "%.1f",
                          onEditEnded: onEditEnded)

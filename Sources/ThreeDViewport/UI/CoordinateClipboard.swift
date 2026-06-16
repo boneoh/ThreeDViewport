@@ -104,6 +104,11 @@ struct CoordCopyPasteButtons: View {
                 Image(systemName: "doc.on.doc").foregroundColor(.editableBlue)
             }
             .buttonStyle(.borderless)
+            // Copy is read-only, so it stays usable even when a lock disables the
+            // surrounding section.  A hard environment write overrides an ancestor
+            // `.disabled(…)` (unlike `.disabled(false)`, which only ANDs).  Paste /
+            // Zero deliberately inherit the lock (see each call site's canPaste).
+            .environment(\.isEnabled, true)
             .help("Copy these coordinates")
 
             Button(action: { onPaste(); onAutoStamp?() }) {
