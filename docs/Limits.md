@@ -13,6 +13,12 @@ hitting one is **not silent**: it plays a beep (throttled, so holding a key agai
 limit doesn't machine-gun) and writes a `[LIMIT] …` line to the log when diagnostic
 logging is on (see below).
 
+Position moves are **all-or-nothing**: if a move would push *any* axis (x, y, or z)
+out of range, the whole move is refused and the entity stays put. (Earlier the app
+clamped each axis independently, which let the in-range axes keep moving and slid the
+entity along the boundary — a jolting jump.) This applies to objects, models, lights,
+the probe, and the camera / Director viewpoint.
+
 **Inspector slider ranges** are the min…max each panel slider allows. These stop
 visibly at the slider handle, so they don't beep.
 
@@ -20,7 +26,7 @@ visibly at the slider handle, so they don't beep.
 
 | Limit | Value | Applies to | Beeps + logs as |
 |---|---|---|---|
-| Position bound | **±100** per axis | object / model / light / probe moved by keys, drag, scroll | "Object/Model/Light/Probe position" |
+| Position bound | **±100** per axis | object / model / light / probe / camera + Director viewpoint moved by keys, drag, scroll (all-or-nothing) | "Object/Model/Light/Probe/Camera-Director position" |
 | Depth-dolly near limit | **0.5** | closest a `+` / scroll depth move pulls an entity toward the eye | "Depth dolly (near limit)" |
 | Depth-dolly world bound | **±100** along the ray | a `+` / scroll depth move that would leave the ±100 box | "Depth dolly (world bound)" |
 | Lens FOV (zoom) | **10° – 90°** | `+` / `−` in Camera mode; `⌘+` / `⌘−` for the Director | "Lens FOV" / "Director FOV" |
@@ -28,11 +34,10 @@ visibly at the slider handle, so they don't beep.
 The position bound is the same number the position **sliders** enforce, so the
 viewport and the inspectors agree.
 
-**Clamped silently (no beep yet):** the **camera target** hitting ±100 while panning,
-and the **camera/Director orbit distance** (0.05–5000) — the latter is visible as the
-zoom simply stopping. The camera-target clamp lives in a `didSet` that also runs during
-playback, so beeping there would fire on every keyframe; wiring a playback-safe report
-for camera pan is a possible follow-up.
+**Clamped silently (no beep):** the **camera / Director orbit distance** (0.05–5000),
+visible as the scroll-zoom simply stopping. (The camera target's `didSet` also keeps a
+per-axis safety clamp for keyframe playback, but user pans go through the all-or-nothing
+path above and beep.)
 
 ## Inspector slider ranges
 

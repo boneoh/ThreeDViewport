@@ -138,10 +138,11 @@ final class CameraController {
     /// camera physically moves through the scene.  Unlike lens zoom (which changes FOV),
     /// dolly physically repositions the camera.
     /// Step size is proportional to max(distance, 1.0) so it never freezes at small radii.
-    func dolly(delta: Float) {
+    @discardableResult
+    func dolly(delta: Float) -> Bool {
         let sensitivity: Float = 0.05
         let step = delta * sensitivity * max(distance, 1.0)
-        target += forwardVector * step
+        return translateTarget(by: forwardVector * step)
     }
 
     /// Lens zoom: change the field of view to simulate a zoom lens.
@@ -157,15 +158,33 @@ final class CameraController {
         return clamped != desired
     }
 
+    /// All-or-nothing target translate for user pan / dolly: applies `delta` only if
+    /// EVERY axis stays within ±positionBound, so an out-of-range axis can't slide the
+    /// view along the boundary.  Beeps + logs and leaves the target put when refused.
+    /// (User-only path — keyframe playback writes `target` directly, hitting the
+    /// per-axis `didSet` safety clamp instead.)
+    @discardableResult
+    func translateTarget(by delta: SIMD3<Float>) -> Bool {
+        let n = target + delta
+        let b = SceneLimits.positionBound + 1e-3   // tolerance for a ray-clamped wall touch
+        guard abs(n.x) <= b && abs(n.y) <= b && abs(n.z) <= b else {
+            LimitReporter.report("Camera/Director position"); return false
+        }
+        target = n
+        return true
+    }
+
     // Pan in the plane perpendicular to the view direction
-    func pan(deltaX: Float, deltaY: Float) {
+    @discardableResult
+    func pan(deltaX: Float, deltaY: Float) -> Bool {
         let sensitivity: Float = 0.001
         let eye     = eyePosition
         let forward = simd_normalize(target - eye)
         let right   = simd_normalize(simd_cross(forward, SIMD3<Float>(0, 1, 0)))
         let up      = simd_cross(right, forward)
-        target -= right * (deltaX * sensitivity * distance)
-        target += up    * (deltaY * sensitivity * distance)
+        let delta   = -right * (deltaX * sensitivity * distance)
+                    +  up    * (deltaY * sensitivity * distance)
+        return translateTarget(by: delta)
     }
 
     /// Free-look: camera position stays fixed; aim direction rotates.

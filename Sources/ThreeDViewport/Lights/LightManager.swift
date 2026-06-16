@@ -121,16 +121,17 @@ final class LightManager: ObservableObject {
         case .ambient, .directional:
             return
         case .point, .spot, .laser:
-            // Clamp to ±positionBound per axis to match the Lights Inspector slider's
-            // hard limit, so mouse drag / arrow keys can't push the light beyond the
-            // same bound the slider enforces.  translateSelected is a user-edit path
-            // (keyframe playback writes position directly), so it's safe to beep here.
-            let p = lights[selectedIndex].position + delta
-            let c = simd_clamp(p,
-                               SIMD3<Float>(repeating: -SceneLimits.positionBound),
-                               SIMD3<Float>(repeating:  SceneLimits.positionBound))
-            if c != p { LimitReporter.report("Light position") }
-            lights[selectedIndex].position = c
+            // All-or-nothing against ±positionBound (matches the Lights Inspector
+            // slider): if the move would push ANY axis out of range, nothing moves and
+            // it beeps + logs — no per-axis slide along the wall.  translateSelected is
+            // a user-edit path (keyframe playback writes position directly), so it's
+            // safe to beep here.
+            let n = lights[selectedIndex].position + delta
+            let b = SceneLimits.positionBound + 1e-3   // tolerance for a ray-clamped wall touch
+            guard abs(n.x) <= b && abs(n.y) <= b && abs(n.z) <= b else {
+                LimitReporter.report("Light position"); return
+            }
+            lights[selectedIndex].position = n
         }
     }
 

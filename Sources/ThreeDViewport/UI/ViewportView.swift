@@ -817,18 +817,33 @@ final class ViewportView: MTKView {
         obj.transform.columns.3 = SIMD4<Float>(c.x, c.y, c.z, p.w)
     }
 
+    /// True if every axis of `p` is within ±positionBound (tiny tolerance so a
+    /// ray-clamped dolly that lands exactly on the wall isn't rejected by FP rounding).
+    private func withinPositionBound(_ p: SIMD3<Float>) -> Bool {
+        let b = SceneLimits.positionBound + 1e-3
+        return abs(p.x) <= b && abs(p.y) <= b && abs(p.z) <= b
+    }
+
+    /// All-or-nothing object translate: applies `delta` only if EVERY axis stays in
+    /// range — so an out-of-range axis can't slide the object along the boundary (the
+    /// jolting "jump" a per-axis clamp produces).  Beeps + logs and leaves the object
+    /// put when refused.  Used by every viewport translate (drag / arrow / depth / scroll).
+    private func translateObject(_ obj: SceneObject, by delta: SIMD3<Float>) {
+        let p = obj.transform.columns.3
+        let n = SIMD3<Float>(p.x + delta.x, p.y + delta.y, p.z + delta.z)
+        guard withinPositionBound(n) else { LimitReporter.report("Object position"); return }
+        obj.transform.columns.3 = SIMD4<Float>(n.x, n.y, n.z, p.w)
+    }
+
     /// Moves the bake Probe by a world-space delta (Probe mode), clamped to the
     /// Probe inspector's ±100 range, and flags the project dirty (the probe position
     /// is persisted).  Movement is camera-relative at the call sites, so it follows
     /// the scene camera in normal view and the Director POV in Scene mode.
     private func moveProbe(by delta: SIMD3<Float>) {
         if probeConfig.isLocked { beepLocked(); return }   // locked probe — no viewport move
-        let p = probeConfig.position + delta
-        let c = simd_clamp(p,
-                           SIMD3<Float>(repeating: -SceneLimits.positionBound),
-                           SIMD3<Float>(repeating:  SceneLimits.positionBound))
-        if c != p { LimitReporter.report("Probe position") }
-        probeConfig.position = c
+        let n = probeConfig.position + delta
+        guard withinPositionBound(n) else { LimitReporter.report("Probe position"); return }
+        probeConfig.position = n
         onProbeEdited?()
     }
 
@@ -1153,31 +1168,30 @@ final class ViewportView: MTKView {
     // single group-level matrix in SceneManager.groupTransforms[gid].
     // The renderer multiplies: groupTransform × obj.transform for each part.
 
-    /// Translates the group transform by `delta` (world-space).
+    /// Translates the group transform by `delta` (world-space).  All-or-nothing: if the
+    /// move would push the group translation (or any ungrouped part) out of range on
+    /// ANY axis, nothing moves and it beeps + logs — no per-axis slide along the wall.
     private func translateGroup(_ parts: [SceneObject], by delta: SIMD3<Float>) {
         guard let gid = parts.first?.groupID else {
-            // Ungrouped fallback — move parts directly.
+            // Ungrouped fallback — move parts directly, but only if every part stays
+            // in range (so the group still moves as one unit).
             for obj in parts {
-                obj.transform.columns.3.x += delta.x
-                obj.transform.columns.3.y += delta.y
-                obj.transform.columns.3.z += delta.z
-                clampObjectPosition(obj)
+                let p = obj.transform.columns.3
+                if !withinPositionBound(SIMD3<Float>(p.x + delta.x, p.y + delta.y, p.z + delta.z)) {
+                    LimitReporter.report("Model position"); return
+                }
             }
+            for obj in parts { translateObject(obj, by: delta) }
             return
         }
         var t = matrix_identity_float4x4
         t.columns.3 = SIMD4<Float>(delta.x, delta.y, delta.z, 1)
         let current = sceneManager.groupTransforms[gid] ?? matrix_identity_float4x4
-        var combined = t * current
-        // Clamp the group transform's translation column to ±100 per axis so
-        // Model-mode drag / arrow / depth-key moves honour the same hard limit
-        // as the Position sliders.
+        let combined = t * current
         let p = combined.columns.3
-        let c = simd_clamp(SIMD3<Float>(p.x, p.y, p.z),
-                           SIMD3<Float>(repeating: -SceneLimits.positionBound),
-                           SIMD3<Float>(repeating:  SceneLimits.positionBound))
-        if c.x != p.x || c.y != p.y || c.z != p.z { LimitReporter.report("Model position") }
-        combined.columns.3 = SIMD4<Float>(c.x, c.y, c.z, p.w)
+        guard withinPositionBound(SIMD3<Float>(p.x, p.y, p.z)) else {
+            LimitReporter.report("Model position"); return
+        }
         sceneManager.groupTransforms[gid] = combined
     }
 
@@ -2644,10 +2658,7 @@ final class ViewportView: MTKView {
             case .vertical:   move = viewCamera.upVector   * (dy * scale)
             case .none:       return
             }
-            obj.transform.columns.3.x += move.x
-            obj.transform.columns.3.y += move.y
-            obj.transform.columns.3.z += move.z
-            clampObjectPosition(obj)
+            translateObject(obj, by: move)
             syncLocalTransform(obj)
 
         } else if controlMode == .model {
@@ -3154,10 +3165,7 @@ final class ViewportView: MTKView {
             // stays on target and never crosses the eye or deviates at the ±100 box.
             let move = delta * viewCamera.distance * 0.05
             let d    = dollyDelta(towardWorld: objectWorldOrigin(obj), by: move)
-            obj.transform.columns.3.x += d.x
-            obj.transform.columns.3.y += d.y
-            obj.transform.columns.3.z += d.z
-            clampObjectPosition(obj)
+            translateObject(obj, by: d)
             syncLocalTransform(obj)
         }
     }
@@ -3214,12 +3222,11 @@ final class ViewportView: MTKView {
         // Director is the active view in Scene mode, so dragScale is director-based
         // here — pans track the cursor at any distance / FOV (drag-sensitivity applies).
         let s = dragScale
-        camera.target += director.rightVector * (dx * s)
-        camera.target += director.upVector    * (dy * s)
+        camera.translateTarget(by: director.rightVector * (dx * s) + director.upVector * (dy * s))
     }
 
     private func dollySceneCameraAlongDirector(delta: Float) {
-        camera.target += director.forwardVector * (delta * 0.05 * max(director.distance, 1.0))
+        camera.translateTarget(by: director.forwardVector * (delta * 0.05 * max(director.distance, 1.0)))
     }
 
     // MARK: - Arrow-key dispatch
@@ -3301,10 +3308,7 @@ final class ViewportView: MTKView {
             } else {
                 // Primary: camera-relative translation.
                 let d = (right * dxF + up * dyF) * translateStepWorld
-                obj.transform.columns.3.x += d.x
-                obj.transform.columns.3.y += d.y
-                obj.transform.columns.3.z += d.z
-                clampObjectPosition(obj)
+                translateObject(obj, by: d)
                 syncLocalTransform(obj)
             }
 
@@ -3375,10 +3379,7 @@ final class ViewportView: MTKView {
             } else {
                 // Dolly along the eye→object ray, distance-clamped (no eye-cross / drift).
                 let d = dollyDelta(towardWorld: objectWorldOrigin(obj), by: sign * translateStepWorld)
-                obj.transform.columns.3.x += d.x
-                obj.transform.columns.3.y += d.y
-                obj.transform.columns.3.z += d.z
-                clampObjectPosition(obj)
+                translateObject(obj, by: d)
             }
             syncLocalTransform(obj)
 
