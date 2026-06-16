@@ -35,8 +35,8 @@ Available in the main viewport (no modifier unless noted).
 | **7** | Solo: hide everything except the selected object's group (Scene mode only) |
 | **8** | Solo: make the hidden others still occlude (Scene mode only; pairs with 7) |
 | **[** / **]** | Roll the object / model left / right; in Camera mode orbit yaw left / right; in Light mode rotate azimuth |
-| **+** / **−** (also keypad) | Move the active object / model / light / probe in / out (depth). In Camera / Director mode, change focal length (FOV). **⌥+** / **⌥−** scales the object / model |
-| **⌘+** / **⌘−** | Dolly Director in / out (only in Scene mode) |
+| **+** / **−** (also keypad) | Move the active object / model / light / probe in / out (depth). In **Camera** mode, change focal length (FOV). In **Director** mode, dolly the viewpoint in / out (like the scroll wheel). **⌥+** / **⌥−** scales the object / model |
+| **⌘+** / **⌘−** | Change the Director's FOV — narrow / wide (only in Scene mode) |
 | **Shift+Tab** | Previous keyframe across visible Timeline rows |
 | **Tab** | Next keyframe across visible Timeline rows |
 
@@ -122,8 +122,8 @@ Press **D** in Scene mode — or just press **S**, which auto-engages Director m
 | Input | Director action |
 |-------|-----------------|
 | **← → ↑ ↓** | Pan |
-| **+** / **−** | FOV narrow / wide |
-| **⌘+** / **⌘−** | Dolly in / out |
+| **+** / **−** | Dolly in / out (like the scroll wheel) |
+| **⌘+** / **⌘−** | FOV narrow / wide |
 | **Left drag** | Truck + Pedestal (pan) |
 | **Right drag** | Free-look (aim) |
 | **⌘R** | Re-auto-fit the Director to the scene |

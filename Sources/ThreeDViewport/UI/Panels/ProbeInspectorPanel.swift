@@ -47,9 +47,9 @@ struct ProbeInspectorPanel: View {
                             onZero:   { probe.position = .zero },
                             canZero:  !probe.isLocked)
                     }
-                    SliderRow(label: "X", value: $probe.position.x, range: -100...100, format: "%.2f")
-                    SliderRow(label: "Y", value: $probe.position.y, range: -100...100, format: "%.2f")
-                    SliderRow(label: "Z", value: $probe.position.z, range: -100...100, format: "%.2f")
+                    SliderRow(label: "X", value: $probe.position.x, range: SceneLimits.positionRange, format: "%.2f")
+                    SliderRow(label: "Y", value: $probe.position.y, range: SceneLimits.positionRange, format: "%.2f")
+                    SliderRow(label: "Z", value: $probe.position.z, range: SceneLimits.positionRange, format: "%.2f")
                 }
                 .disabled(probe.isLocked)   // freeze probe position when locked
 

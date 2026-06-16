@@ -62,11 +62,11 @@ struct ModelInspectorPanel: View {
                     canZero:  state.canEditPosition && !state.isLocked,
                     onAutoStamp: { state.onAutoStamp?() })
             }
-            SliderRow(label: "X", value: $state.position.x, range: -100...100, format: "%.2f",
+            SliderRow(label: "X", value: $state.position.x, range: SceneLimits.positionRange, format: "%.2f",
                       onEditEnded: { state.onSliderEdited?() }).disabled(!state.canEditPosition || state.isLocked)
-            SliderRow(label: "Y", value: $state.position.y, range: -100...100, format: "%.2f",
+            SliderRow(label: "Y", value: $state.position.y, range: SceneLimits.positionRange, format: "%.2f",
                       onEditEnded: { state.onSliderEdited?() }).disabled(!state.canEditPosition || state.isLocked)
-            SliderRow(label: "Z", value: $state.position.z, range: -100...100, format: "%.2f",
+            SliderRow(label: "Z", value: $state.position.z, range: SceneLimits.positionRange, format: "%.2f",
                       onEditEnded: { state.onSliderEdited?() }).disabled(!state.canEditPosition || state.isLocked)
         }
     }
@@ -86,11 +86,11 @@ struct ModelInspectorPanel: View {
                     canZero:  state.canEditRotation && !state.isLocked,
                     onAutoStamp: { state.onAutoStamp?() })
             }
-            SliderRow(label: "X", value: $state.rotation.x, range: -180...180, format: "%.1f",
+            SliderRow(label: "X", value: $state.rotation.x, range: SceneLimits.rotationRange, format: "%.1f",
                       onEditEnded: { state.onSliderEdited?() }).disabled(!state.canEditRotation || state.isLocked)
-            SliderRow(label: "Y", value: $state.rotation.y, range: -180...180, format: "%.1f",
+            SliderRow(label: "Y", value: $state.rotation.y, range: SceneLimits.rotationRange, format: "%.1f",
                       onEditEnded: { state.onSliderEdited?() }).disabled(!state.canEditRotation || state.isLocked)
-            SliderRow(label: "Z", value: $state.rotation.z, range: -180...180, format: "%.1f",
+            SliderRow(label: "Z", value: $state.rotation.z, range: SceneLimits.rotationRange, format: "%.1f",
                       onEditEnded: { state.onSliderEdited?() }).disabled(!state.canEditRotation || state.isLocked)
         }
     }
@@ -104,11 +104,11 @@ struct ModelInspectorPanel: View {
     private var scaleSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Scale").font(.headline)
-            SliderRow(label: "X", value: $state.scale.x, range: 0.01...10, format: "%.2f",
+            SliderRow(label: "X", value: $state.scale.x, range: SceneLimits.scaleRange, format: "%.2f",
                       onEditEnded: { state.onSliderEdited?() }).disabled(!state.canEditScale)
-            SliderRow(label: "Y", value: $state.scale.y, range: 0.01...10, format: "%.2f",
+            SliderRow(label: "Y", value: $state.scale.y, range: SceneLimits.scaleRange, format: "%.2f",
                       onEditEnded: { state.onSliderEdited?() }).disabled(!state.canEditScale)
-            SliderRow(label: "Z", value: $state.scale.z, range: 0.01...10, format: "%.2f",
+            SliderRow(label: "Z", value: $state.scale.z, range: SceneLimits.scaleRange, format: "%.2f",
                       onEditEnded: { state.onSliderEdited?() }).disabled(!state.canEditScale)
         }
     }
@@ -209,23 +209,23 @@ struct ModelInspectorPanel: View {
 
             SliderRow(label: "Metallic",
                       value: $state.metallicFactor,
-                      range: 0...1,
+                      range: SceneLimits.materialRange,
                       format: "%.2f")
 
             SliderRow(label: "Roughness",
                       value: $state.roughnessFactor,
-                      range: 0...1,
+                      range: SceneLimits.materialRange,
                       format: "%.2f")
 
             SliderRow(label: "Opacity",
                       value: $state.opacity,
-                      range: 0...1,
+                      range: SceneLimits.materialRange,
                       format: "%.2f",
                       onEditEnded: { state.onSliderEdited?() })
 
             SliderRow(label: "Brightness",
                       value: $state.emissiveStrength,
-                      range: 0...1,
+                      range: SceneLimits.materialRange,
                       format: "%.2f")
 
             LabeledColorRow(label: "Base Color", binding: $state.baseColor)

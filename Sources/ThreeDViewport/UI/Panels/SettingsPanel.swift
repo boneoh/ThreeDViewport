@@ -25,6 +25,7 @@ struct SettingsPanel: View {
     @State private var autoKeyInsert       = false
     @State private var dragSensitivity     = 1.0
     @State private var arrowSensitivity    = 1.0
+    @State private var loggingEnabled      = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -84,6 +85,16 @@ struct SettingsPanel: View {
 
             Divider()
 
+            Text("Diagnostics").font(.subheadline).foregroundColor(.secondary)
+            Text("Print diagnostic messages to the console — including a note whenever "
+               + "a viewport move hits a limit. Also enables per-frame performance "
+               + "logging. Leave off unless you're chasing a bug.")
+                .font(.caption).foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Toggle("Enable diagnostic logging", isOn: $loggingEnabled)
+
+            Divider()
+
             HStack {
                 Spacer()
                 Button("Cancel") { onClose() }
@@ -115,7 +126,7 @@ struct SettingsPanel: View {
         HStack(spacing: 8) {
             Text(label).frame(width: 140, alignment: .leading)
             Text(String(format: "%.1f×", binding.wrappedValue)).frame(width: 48, alignment: .leading)
-            Stepper("", value: binding, in: 0.1...10, step: 0.1).labelsHidden()
+            Stepper("", value: binding, in: SceneLimits.sensitivityRange, step: 0.1).labelsHidden()
             Spacer()
         }
     }
@@ -137,6 +148,7 @@ struct SettingsPanel: View {
         autoKeyInsert       = settings.autoKeyframeInsertBetween
         dragSensitivity     = settings.dragSensitivity
         arrowSensitivity    = settings.arrowSensitivity
+        loggingEnabled      = settings.loggingEnabled
     }
 
     private func saveAndClose() {
@@ -154,6 +166,8 @@ struct SettingsPanel: View {
         settings.autoKeyframeInsertBetween = autoKeyInsert
         settings.dragSensitivity  = dragSensitivity
         settings.arrowSensitivity = arrowSensitivity
+        settings.loggingEnabled   = loggingEnabled
+        settings.applyLoggingFlags()
         settings.save()
         onClose()
     }

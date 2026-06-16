@@ -35,7 +35,7 @@ struct ColorGradePanel: View {
                 GradeSliderRow(
                     label:  "Exposure",
                     value:  $settings.exposure,
-                    range:  0.1...4.0,
+                    range:  SceneLimits.gradeExposureRange,
                     format: "%.2f"
                 )
                 .disabled(settings.isLocked)
@@ -46,7 +46,7 @@ struct ColorGradePanel: View {
                 GradeSliderRow(
                     label:  "Brightness",
                     value:  $settings.brightness,
-                    range:  -1.0...1.0,
+                    range:  SceneLimits.gradeBrightnessRange,
                     format: "%+.2f"
                 )
                 .disabled(settings.isLocked)
@@ -57,7 +57,7 @@ struct ColorGradePanel: View {
                 GradeSliderRow(
                     label:  "Contrast",
                     value:  $settings.contrast,
-                    range:  0.0...3.0,
+                    range:  SceneLimits.gradeContrastRange,
                     format: "%.2f"
                 )
                 .disabled(settings.isLocked)
@@ -68,7 +68,7 @@ struct ColorGradePanel: View {
                 GradeSliderRow(
                     label:  "Gamma",
                     value:  $settings.gamma,
-                    range:  0.2...3.0,
+                    range:  SceneLimits.gradeGammaRange,
                     format: "%.2f"
                 )
                 .disabled(settings.isLocked)

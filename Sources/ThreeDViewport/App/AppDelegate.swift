@@ -143,10 +143,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     func applicationDidFinishLaunching(_ notification: Notification) {
         print("[DEBUG] AppDelegate: applicationDidFinishLaunching")
 
-        // Opt-in performance logging: launch with `--perf-log` to print rolling
-        // CPU/GPU/FPS stats (default off, no rebuild needed to toggle).
+        // Apply the persisted diagnostic-logging toggle (AppLog + per-frame perf).
+        AppSettings.shared.applyLoggingFlags()
+
+        // Opt-in performance logging: launch with `--perf-log` to force the per-frame
+        // CPU/GPU/FPS stats on even when the persisted toggle is off.
         if CommandLine.arguments.contains("--perf-log") {
             Renderer.perfLoggingEnabled = true
+            AppLog.enabled = true
             print("[PERF] performance logging enabled via --perf-log")
         }
 
@@ -2819,10 +2823,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             let newT         = SIMD3<Float>(tCol.x + worldDelta.x,
                                             tCol.y + worldDelta.y,
                                             tCol.z + worldDelta.z)
-            // Match translateGroup's ±100 clamp on the group translation.
+            // Match translateGroup's ±positionBound clamp on the group translation.
             let clamped = simd_clamp(newT,
-                                     SIMD3<Float>(repeating: -100),
-                                     SIMD3<Float>(repeating:  100))
+                                     SIMD3<Float>(repeating: -SceneLimits.positionBound),
+                                     SIMD3<Float>(repeating:  SceneLimits.positionBound))
+            if clamped != newT { LimitReporter.report("Model position") }
             gt.columns.3 = SIMD4<Float>(clamped.x, clamped.y, clamped.z, tCol.w)
             sm.groupTransforms[gid] = gt
         }

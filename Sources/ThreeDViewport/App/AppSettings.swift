@@ -34,6 +34,11 @@ final class AppSettings: ObservableObject {
     @Published var dragSensitivity:  Double   // mouse-drag move scale
     @Published var arrowSensitivity: Double   // arrow-key / +- depth step scale
 
+    // Runtime diagnostic logging.  When on, AppLog.log(...) prints and per-frame
+    // Renderer perf logging is enabled — flip it from Settings to chase a bug
+    // without relaunching.  Apply via applyLoggingFlags().
+    @Published var loggingEnabled: Bool
+
     enum Defaults {
         static let projects  = "~/Documents/ThreeDViewport/Projects"
         static let movies    = "~/Documents/ThreeDViewport/Movies"
@@ -49,6 +54,7 @@ final class AppSettings: ObservableObject {
         static let autoKeyInsert = false
         static let dragSensitivity:  Double = 1.0
         static let arrowSensitivity: Double = 1.0
+        static let loggingEnabled = false
     }
 
     init(projectsPath:        String = Defaults.projects,
@@ -64,7 +70,8 @@ final class AppSettings: ObservableObject {
          autoKeyframeUpdateNearby:  Bool = Defaults.autoKeyUpdate,
          autoKeyframeInsertBetween: Bool = Defaults.autoKeyInsert,
          dragSensitivity:  Double = Defaults.dragSensitivity,
-         arrowSensitivity: Double = Defaults.arrowSensitivity) {
+         arrowSensitivity: Double = Defaults.arrowSensitivity,
+         loggingEnabled:   Bool   = Defaults.loggingEnabled) {
         self.projectsPath        = projectsPath
         self.moviesPath          = moviesPath
         self.modelsPathPrimary   = modelsPathPrimary
@@ -79,6 +86,14 @@ final class AppSettings: ObservableObject {
         self.autoKeyframeInsertBetween = autoKeyframeInsertBetween
         self.dragSensitivity  = dragSensitivity
         self.arrowSensitivity = arrowSensitivity
+        self.loggingEnabled   = loggingEnabled
+    }
+
+    /// Push the logging setting into the fast static mirrors.  Call on launch (after
+    /// load) and whenever the toggle changes.
+    func applyLoggingFlags() {
+        AppLog.enabled = loggingEnabled
+        Renderer.perfLoggingEnabled = loggingEnabled
     }
 
     // MARK: - Persistence
@@ -99,6 +114,7 @@ final class AppSettings: ObservableObject {
         var autoKeyframeInsertBetween: Bool?
         var dragSensitivity:  Double?   // optional: older files predate them
         var arrowSensitivity: Double?
+        var loggingEnabled:   Bool?     // optional: older files predate it
     }
 
     static func settingsURL() -> URL {
@@ -130,7 +146,8 @@ final class AppSettings: ObservableObject {
                            autoKeyframeUpdateNearby:  s.autoKeyframeUpdateNearby  ?? Defaults.autoKeyUpdate,
                            autoKeyframeInsertBetween: s.autoKeyframeInsertBetween ?? Defaults.autoKeyInsert,
                            dragSensitivity:  s.dragSensitivity  ?? Defaults.dragSensitivity,
-                           arrowSensitivity: s.arrowSensitivity ?? Defaults.arrowSensitivity)
+                           arrowSensitivity: s.arrowSensitivity ?? Defaults.arrowSensitivity,
+                           loggingEnabled:   s.loggingEnabled   ?? Defaults.loggingEnabled)
     }
 
     func save() {
@@ -147,7 +164,8 @@ final class AppSettings: ObservableObject {
                        autoKeyframeUpdateNearby:  autoKeyframeUpdateNearby,
                        autoKeyframeInsertBetween: autoKeyframeInsertBetween,
                        dragSensitivity:  dragSensitivity,
-                       arrowSensitivity: arrowSensitivity)
+                       arrowSensitivity: arrowSensitivity,
+                       loggingEnabled:   loggingEnabled)
         do {
             let enc = JSONEncoder()
             enc.outputFormatting = [.prettyPrinted, .sortedKeys]

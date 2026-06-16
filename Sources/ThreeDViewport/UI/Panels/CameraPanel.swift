@@ -187,11 +187,11 @@ struct CameraPanel: View {
                 let povEnabled = state.followTargetName != nil
                 Text("Follow POV").font(.headline).padding(.bottom, 4)
                 SliderRow(label: "Distance",  value: $state.povDistance,
-                          range: 0.05...5,   format: "%.2f")
+                          range: SceneLimits.povDistanceRange,  format: "%.2f")
                 SliderRow(label: "Azimuth",   value: $state.povAzimuth,
-                          range: -180...180, format: "%.1f")
+                          range: SceneLimits.povAzimuthRange,   format: "%.1f")
                 SliderRow(label: "Elevation", value: $state.povElevation,
-                          range:  -90...90,  format: "%.1f")
+                          range: SceneLimits.povElevationRange, format: "%.1f")
                 Button(action: {
                     guard let name = state.followTargetName else { return }
                     state.onPOVStamp?(name, state.povDistance,
@@ -226,11 +226,11 @@ struct CameraPanel: View {
                         onAutoStamp: { state.onAutoStamp?() })
                 }
                 .padding(.bottom, 4)
-                SliderRow(label: "X", value: $state.position.x, range: -100...100, format: "%.2f",
+                SliderRow(label: "X", value: $state.position.x, range: SceneLimits.positionRange, format: "%.2f",
                           onEditEnded: { state.onSliderEdited?() })
-                SliderRow(label: "Y", value: $state.position.y, range: -100...100, format: "%.2f",
+                SliderRow(label: "Y", value: $state.position.y, range: SceneLimits.positionRange, format: "%.2f",
                           onEditEnded: { state.onSliderEdited?() })
-                SliderRow(label: "Z", value: $state.position.z, range: -100...100, format: "%.2f",
+                SliderRow(label: "Z", value: $state.position.z, range: SceneLimits.positionRange, format: "%.2f",
                           onEditEnded: { state.onSliderEdited?() })
 
                 Divider().padding(.vertical, 14)
@@ -248,11 +248,11 @@ struct CameraPanel: View {
                         onAutoStamp: { state.onAutoStamp?() })
                 }
                 .padding(.bottom, 4)
-                SliderRow(label: "X", value: $state.target.x, range: -100...100, format: "%.2f",
+                SliderRow(label: "X", value: $state.target.x, range: SceneLimits.positionRange, format: "%.2f",
                           onEditEnded: { state.onSliderEdited?() })
-                SliderRow(label: "Y", value: $state.target.y, range: -100...100, format: "%.2f",
+                SliderRow(label: "Y", value: $state.target.y, range: SceneLimits.positionRange, format: "%.2f",
                           onEditEnded: { state.onSliderEdited?() })
-                SliderRow(label: "Z", value: $state.target.z, range: -100...100, format: "%.2f",
+                SliderRow(label: "Z", value: $state.target.z, range: SceneLimits.positionRange, format: "%.2f",
                           onEditEnded: { state.onSliderEdited?() })
 
                 Divider().padding(.vertical, 14)
@@ -261,7 +261,7 @@ struct CameraPanel: View {
                 Text("Focal Length").font(.headline)
                     .padding(.bottom, 4)
                 SliderRow(label: "mm", value: $state.focalLength,
-                          range: 12...140, format: "%.1f",
+                          range: SceneLimits.focalLengthRange, format: "%.1f",
                           onEditEnded: { state.onSliderEdited?() })
             }
             .padding(14)

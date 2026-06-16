@@ -81,7 +81,7 @@ struct LightsInspectorPanel: View {
                     value: Binding<Double>(
                         get: { Double(renderSettings.iblIntensity) },
                         set: { renderSettings.iblIntensity = Float($0) }),
-                    range: 0.0...2.0,
+                    range: SceneLimits.iblIntensityRange,
                     step: 0.01)
                 Text(String(format: "%.2f", renderSettings.iblIntensity))
                     .font(.system(.caption, design: .monospaced))
@@ -136,10 +136,10 @@ struct LightsInspectorPanel: View {
             case .environment:
                 SliderRow(label: "Intensity",
                           value: $backgroundConfig.environmentIntensity,
-                          range: 0...4, format: "%.2f")
+                          range: SceneLimits.envIntensityRange, format: "%.2f")
                 SliderRow(label: "Horizon",
                           value: $backgroundConfig.environmentHorizon,
-                          range: -1...1, format: "%.2f")
+                          range: SceneLimits.envHorizonRange, format: "%.2f")
                 Text("Uses the IBL environment as a backdrop. Horizon shifts it "
                     + "vertically (backdrop only, not the lighting).")
                     .font(.caption2).foregroundStyle(.secondary)
@@ -299,7 +299,7 @@ struct LightsInspectorPanel: View {
             // Intensity
             SliderRow(label: "Intensity",
                       value: lightBinding(i, \.intensity),
-                      range: 0...10,
+                      range: SceneLimits.lightIntensityRange,
                       format: "%.2f",
                       onEditEnded: { onAutoKeyframeLight(i) })
 
@@ -309,13 +309,13 @@ struct LightsInspectorPanel: View {
                 GroupBox {
                     VStack(spacing: 4) {
                         SliderRow(label: "X", value: lightBinding(i, \.position.x),
-                                  range: -100...100, format: "%.2f",
+                                  range: SceneLimits.positionRange, format: "%.2f",
                                   onEditEnded: { onAutoKeyframeLight(i) })
                         SliderRow(label: "Y", value: lightBinding(i, \.position.y),
-                                  range: -100...100, format: "%.2f",
+                                  range: SceneLimits.positionRange, format: "%.2f",
                                   onEditEnded: { onAutoKeyframeLight(i) })
                         SliderRow(label: "Z", value: lightBinding(i, \.position.z),
-                                  range: -100...100, format: "%.2f",
+                                  range: SceneLimits.positionRange, format: "%.2f",
                                   onEditEnded: { onAutoKeyframeLight(i) })
                     }
                 } label: {
@@ -339,13 +339,13 @@ struct LightsInspectorPanel: View {
                 GroupBox {
                     VStack(spacing: 4) {
                         SliderRow(label: "X", value: lightBinding(i, \.target.x),
-                                  range: -100...100, format: "%.2f",
+                                  range: SceneLimits.positionRange, format: "%.2f",
                                   onEditEnded: { onAutoKeyframeLight(i) })
                         SliderRow(label: "Y", value: lightBinding(i, \.target.y),
-                                  range: -100...100, format: "%.2f",
+                                  range: SceneLimits.positionRange, format: "%.2f",
                                   onEditEnded: { onAutoKeyframeLight(i) })
                         SliderRow(label: "Z", value: lightBinding(i, \.target.z),
-                                  range: -100...100, format: "%.2f",
+                                  range: SceneLimits.positionRange, format: "%.2f",
                                   onEditEnded: { onAutoKeyframeLight(i) })
                     }
                 } label: {
@@ -368,9 +368,9 @@ struct LightsInspectorPanel: View {
                 GroupBox("Cone (radians)") {
                     VStack(spacing: 4) {
                         SliderRow(label: "Inner", value: lightBinding(i, \.innerConeAngle),
-                                  range: 0...Float.pi / 2, format: "%.3f")
+                                  range: SceneLimits.coneAngleRange, format: "%.3f")
                         SliderRow(label: "Outer", value: lightBinding(i, \.outerConeAngle),
-                                  range: 0...Float.pi / 2, format: "%.3f")
+                                  range: SceneLimits.coneAngleRange, format: "%.3f")
                     }
                 }
             }
@@ -378,7 +378,7 @@ struct LightsInspectorPanel: View {
             // Range — point / spot / laser
             if light.type == .point || light.type == .spot || light.type == .laser {
                 SliderRow(label: "Range", value: lightBinding(i, \.range),
-                          range: 0...50, format: "%.1f",
+                          range: SceneLimits.lightAttenRange, format: "%.1f",
                           onEditEnded: { onAutoKeyframeLight(i) })
             }
 
@@ -388,7 +388,7 @@ struct LightsInspectorPanel: View {
                 GroupBox("Beam") {
                     VStack(spacing: 6) {
                         SliderRow(label: "Thickness", value: lightBinding(i, \.beamThickness),
-                                  range: 1...30, format: "%.0f",
+                                  range: SceneLimits.beamThicknessRange, format: "%.0f",
                                   onEditEnded: { onAutoKeyframeLight(i) })
                         Toggle("Exclude from feedback", isOn: lightBinding(i, \.excludeBeamFromFeedback))
                             .font(.caption)

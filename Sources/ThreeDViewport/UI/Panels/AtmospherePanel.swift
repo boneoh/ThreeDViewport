@@ -72,7 +72,7 @@ struct AtmospherePanel: View {
                                     supportsOpacity: false)
                             .font(.caption).padding(.bottom, 8)
 
-                        FogSliderRow(label: "Density", value: $fog.density, range: 0.0...1.0, format: "%.2f",
+                        FogSliderRow(label: "Density", value: $fog.density, range: SceneLimits.densityRange, format: "%.2f",
                                      onEditEnded: onAutoKeyframeFog)
                         KeyframeRow(count: fogKeyCount, onAdd: onStampFog, onClear: onClearFog)
                             .padding(.top, 6)
@@ -84,7 +84,7 @@ struct AtmospherePanel: View {
                                            onAutoStampPosition: onAutoStampFog,
                                            onEditEnded: onAutoKeyframeFog,
                                            locked: sections.fogLocked)
-                        FogSliderRow(label: "Quality", value: $fog.raymarchSteps, range: 8...96, format: "%.0f")
+                        FogSliderRow(label: "Quality", value: $fog.raymarchSteps, range: SceneLimits.fogQualityRange, format: "%.0f")
                     }
                     .padding(.top, 6)
                     .disabled(sections.fogLocked)   // freeze fog edits when the fog track is locked
@@ -210,7 +210,7 @@ private struct EmitterMainControls: View {
                         supportsOpacity: false)
                 .font(.caption).padding(.bottom, 8)
 
-            FogSliderRow(label: "Density", value: $emitter.density, range: 0.0...1.0, format: "%.2f",
+            FogSliderRow(label: "Density", value: $emitter.density, range: SceneLimits.densityRange, format: "%.2f",
                          onEditEnded: onAutoKeyframe)
             KeyframeRow(count: keyCount, onAdd: onStamp, onClear: onClear).padding(.top, 6)
         }
@@ -242,7 +242,7 @@ private struct AtmoDetailControls<Source: ObservableObject>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            FogSliderRow(label: "Variance", value: fbind(varianceKP), range: 0.0...1.0, format: "%.2f",
+            FogSliderRow(label: "Variance", value: fbind(varianceKP), range: SceneLimits.varianceRange, format: "%.2f",
                          onEditEnded: onEditEnded)
 
             Divider().padding(.vertical, 8)
@@ -257,11 +257,11 @@ private struct AtmoDetailControls<Source: ObservableObject>: View {
                     canZero:  !locked,
                     onAutoStamp: { onAutoStampPosition() })
             }
-            FogSliderRow(label: "X", value: fbind(positionKP).x, range: -100...100, format: "%.1f",
+            FogSliderRow(label: "X", value: fbind(positionKP).x, range: SceneLimits.positionRange, format: "%.1f",
                          onEditEnded: onEditEnded)
-            FogSliderRow(label: "Y", value: fbind(positionKP).y, range: -100...100, format: "%.1f",
+            FogSliderRow(label: "Y", value: fbind(positionKP).y, range: SceneLimits.positionRange, format: "%.1f",
                          onEditEnded: onEditEnded)
-            FogSliderRow(label: "Z", value: fbind(positionKP).z, range: -100...100, format: "%.1f",
+            FogSliderRow(label: "Z", value: fbind(positionKP).z, range: SceneLimits.positionRange, format: "%.1f",
                          onEditEnded: onEditEnded)
 
             Divider().padding(.vertical, 8)
@@ -273,11 +273,11 @@ private struct AtmoDetailControls<Source: ObservableObject>: View {
                     onPaste:  { if let s = clipboard.size { source[keyPath: sizeKP] = s } },
                     canPaste: clipboard.size != nil && !locked)
             }
-            FogSliderRow(label: "W", value: fbind(sizeKP).x, range: 0.5...40, format: "%.1f",
+            FogSliderRow(label: "W", value: fbind(sizeKP).x, range: SceneLimits.fogSizeRange, format: "%.1f",
                          onEditEnded: onEditEnded)
-            FogSliderRow(label: "H", value: fbind(sizeKP).y, range: 0.5...40, format: "%.1f",
+            FogSliderRow(label: "H", value: fbind(sizeKP).y, range: SceneLimits.fogSizeRange, format: "%.1f",
                          onEditEnded: onEditEnded)
-            FogSliderRow(label: "D", value: fbind(sizeKP).z, range: 0.5...40, format: "%.1f",
+            FogSliderRow(label: "D", value: fbind(sizeKP).z, range: SceneLimits.fogSizeRange, format: "%.1f",
                          onEditEnded: onEditEnded)
         }
     }
@@ -292,14 +292,14 @@ private struct EmitterAdvancedControls: View {
         VStack(alignment: .leading, spacing: 0) {
             Divider().padding(.vertical, 8)
             FogSliderRow(label: "Particle Size", value: $emitter.particleSize,
-                         range: 0.005...0.5, format: "%.3f")
+                         range: SceneLimits.emitterSizeRange, format: "%.3f")
             if emitter.type.isSmoke {
-                FogSliderRow(label: "Lifetime", value: $emitter.lifetime, range: 0.5...12,  format: "%.1f")
-                FogSliderRow(label: "Growth",   value: $emitter.growth,   range: 0.0...12,  format: "%.1f")
-                FogSliderRow(label: "Opacity",  value: $emitter.baseAlpha, range: 0.02...1.0, format: "%.2f")
+                FogSliderRow(label: "Lifetime", value: $emitter.lifetime, range: SceneLimits.emitterLifetimeRange, format: "%.1f")
+                FogSliderRow(label: "Growth",   value: $emitter.growth,   range: SceneLimits.emitterGrowthRange,   format: "%.1f")
+                FogSliderRow(label: "Opacity",  value: $emitter.baseAlpha, range: SceneLimits.emitterOpacityRange,  format: "%.2f")
             } else {
-                FogSliderRow(label: "Fall Speed", value: $emitter.fallSpeed, range: 0.0...20, format: "%.1f")
-                FogSliderRow(label: "Streak",     value: $emitter.streak,    range: 1.0...16, format: "%.1f")
+                FogSliderRow(label: "Fall Speed", value: $emitter.fallSpeed, range: SceneLimits.fallSpeedRange, format: "%.1f")
+                FogSliderRow(label: "Streak",     value: $emitter.streak,    range: SceneLimits.streakRange,    format: "%.1f")
             }
         }
     }

@@ -149,21 +149,21 @@ struct FeedbackPanel: View {
                         FloatSliderRow(
                             label:  "Decay",
                             value:  $settings.decay,
-                            range:  0.0...1.0,
+                            range:  SceneLimits.feedbackDecayRange,
                             format: "%.2f"
                         )
 
                         IntSliderRow(
                             label:  "Interval",
                             value:  $settings.interval,
-                            range:  1...60,
+                            range:  SceneLimits.feedbackFrameRange,
                             suffix: "fr"
                         )
 
                         IntSliderRow(
                             label:  "Length",
                             value:  $settings.length,
-                            range:  1...60,
+                            range:  SceneLimits.feedbackFrameRange,
                             suffix: "fr"
                         )
                     }

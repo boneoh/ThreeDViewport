@@ -15,8 +15,8 @@ final class CameraController {
     var target: SIMD3<Float> = SIMD3<Float>(0, 0, 0) {
         didSet {
             target = simd_clamp(target,
-                                SIMD3<Float>(repeating: -100),
-                                SIMD3<Float>(repeating:  100))
+                                SIMD3<Float>(repeating: -SceneLimits.positionBound),
+                                SIMD3<Float>(repeating:  SceneLimits.positionBound))
         }
     }
 
@@ -74,7 +74,7 @@ final class CameraController {
             d      = eye - target                  // = (0, 0, fallback)
             dist   = fallback
         }
-        distance = min(5000.0, max(0.05, dist))
+        distance = min(SceneLimits.orbitDistanceMax, max(SceneLimits.orbitDistanceMin, dist))
         var p    = asin(max(-1, min(1, d.y / dist)))
         p        = max(-Float.pi / 2 + 0.01, min(Float.pi / 2 - 0.01, p))
         pitch    = p
@@ -131,7 +131,7 @@ final class CameraController {
     func zoom(delta: Float) {
         let sensitivity: Float = 0.05
         distance -= delta * sensitivity
-        distance = max(0.05, min(5000.0, distance))
+        distance = max(SceneLimits.orbitDistanceMin, min(SceneLimits.orbitDistanceMax, distance))
     }
 
     /// Dolly: slide both eye and target along the current forward direction so the
@@ -146,13 +146,15 @@ final class CameraController {
 
     /// Lens zoom: change the field of view to simulate a zoom lens.
     /// Scroll up (positive delta) narrows the FOV (zoom in); scroll down widens it (zoom out).
-    /// Clamped to 10°–90° to avoid unusable extremes.
-    func lensZoom(delta: Float) {
+    /// Clamped to SceneLimits.fovMin…fovMax (10°–90°).  Returns true if the requested
+    /// change ran into a limit, so the caller can beep + log it.
+    @discardableResult
+    func lensZoom(delta: Float) -> Bool {
         let sensitivity: Float = 0.02   // radians per scroll unit
-        fovYRadians -= delta * sensitivity
-        let minFOV = Float.pi / 18.0    // 10°
-        let maxFOV = Float.pi / 2.0     // 90°
-        fovYRadians = max(minFOV, min(maxFOV, fovYRadians))
+        let desired = fovYRadians - delta * sensitivity
+        let clamped = max(SceneLimits.fovMinRadians, min(SceneLimits.fovMaxRadians, desired))
+        fovYRadians = clamped
+        return clamped != desired
     }
 
     // Pan in the plane perpendicular to the view direction

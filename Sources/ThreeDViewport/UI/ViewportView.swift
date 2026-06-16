@@ -300,11 +300,10 @@ final class ViewportView: MTKView {
         }
         cameraPanelState.onFocalLengthEdited = { [weak self] fl in
             guard let self else { return }
-            // fovY = 2·atan(12/fl); clamp to the existing lens-zoom range (10°–90°).
-            let raw   = 2 * atan(12.0 / max(fl, 1))
-            let minFv = Float.pi / 18.0
-            let maxFv = Float.pi / 2.0
-            self.camera.fovYRadians = max(minFv, min(maxFv, raw))
+            // fovY = 2·atan(12/fl); clamp to the lens-zoom range (10°–90°).
+            let raw = 2 * atan(12.0 / max(fl, 1))
+            self.camera.fovYRadians = max(SceneLimits.fovMinRadians,
+                                          min(SceneLimits.fovMaxRadians, raw))
             self.needsDisplay = true
             self.onCameraEdited?()
         }
@@ -812,8 +811,9 @@ final class ViewportView: MTKView {
     private func clampObjectPosition(_ obj: SceneObject) {
         let p = obj.transform.columns.3
         let c = simd_clamp(SIMD3<Float>(p.x, p.y, p.z),
-                           SIMD3<Float>(repeating: -100),
-                           SIMD3<Float>(repeating:  100))
+                           SIMD3<Float>(repeating: -SceneLimits.positionBound),
+                           SIMD3<Float>(repeating:  SceneLimits.positionBound))
+        if c.x != p.x || c.y != p.y || c.z != p.z { LimitReporter.report("Object position") }
         obj.transform.columns.3 = SIMD4<Float>(c.x, c.y, c.z, p.w)
     }
 
@@ -824,9 +824,11 @@ final class ViewportView: MTKView {
     private func moveProbe(by delta: SIMD3<Float>) {
         if probeConfig.isLocked { beepLocked(); return }   // locked probe — no viewport move
         let p = probeConfig.position + delta
-        probeConfig.position = simd_clamp(p,
-                                          SIMD3<Float>(repeating: -100),
-                                          SIMD3<Float>(repeating:  100))
+        let c = simd_clamp(p,
+                           SIMD3<Float>(repeating: -SceneLimits.positionBound),
+                           SIMD3<Float>(repeating:  SceneLimits.positionBound))
+        if c != p { LimitReporter.report("Probe position") }
+        probeConfig.position = c
         onProbeEdited?()
     }
 
@@ -851,8 +853,8 @@ final class ViewportView: MTKView {
         guard dist > 1e-4 else { return .zero }
         let dir  = toP / dist
 
-        // Farthest distance along +dir from the eye before any coordinate leaves ±100.
-        let bound: Float = 100
+        // Farthest distance along +dir from the eye before any coordinate leaves ±bound.
+        let bound = SceneLimits.positionBound
         var maxFar: Float = .greatestFiniteMagnitude
         for a in 0..<3 {
             let d = dir[a]
@@ -860,8 +862,13 @@ final class ViewportView: MTKView {
             let t = max((bound - eye[a]) / d, (-bound - eye[a]) / d)   // boundary ahead along +dir
             if t > 0 { maxFar = min(maxFar, t) }
         }
-        let minNear: Float = 0.5
-        let newDist = min(max(dist + move, minNear), max(minNear, maxFar))
+        let minNear = SceneLimits.dollyNearMin
+        let desired = dist + move
+        let newDist = min(max(desired, minNear), max(minNear, maxFar))
+        if move != 0 && newDist != desired {
+            LimitReporter.report(desired < minNear ? "Depth dolly (near limit)"
+                                                   : "Depth dolly (world bound)")
+        }
         return (eye + dir * newDist) - p
     }
 
@@ -1035,7 +1042,7 @@ final class ViewportView: MTKView {
         director.target   = center
         director.yaw      = yaw
         director.pitch    = pitch
-        director.distance = max(distance, 0.1)
+        director.distance = max(distance, SceneLimits.directorDistanceFloor)
 
         print("[DEBUG] ViewportView: director snapped to \(view)")
     }
@@ -1056,8 +1063,8 @@ final class ViewportView: MTKView {
     /// Reveals the gizmo; clamps to the Probe's ±100 range.  Most useful in Scene mode.
     func setProbeToDirectorEye() {
         let p = simd_clamp(director.eyePosition,
-                           SIMD3<Float>(repeating: -100),
-                           SIMD3<Float>(repeating:  100))
+                           SIMD3<Float>(repeating: -SceneLimits.positionBound),
+                           SIMD3<Float>(repeating:  SceneLimits.positionBound))
         probeConfig.position  = p
         probeConfig.isVisible = true
         onProbeEdited?()
@@ -1167,8 +1174,9 @@ final class ViewportView: MTKView {
         // as the Position sliders.
         let p = combined.columns.3
         let c = simd_clamp(SIMD3<Float>(p.x, p.y, p.z),
-                           SIMD3<Float>(repeating: -100),
-                           SIMD3<Float>(repeating:  100))
+                           SIMD3<Float>(repeating: -SceneLimits.positionBound),
+                           SIMD3<Float>(repeating:  SceneLimits.positionBound))
+        if c.x != p.x || c.y != p.y || c.z != p.z { LimitReporter.report("Model position") }
         combined.columns.3 = SIMD4<Float>(c.x, c.y, c.z, p.w)
         sceneManager.groupTransforms[gid] = combined
     }
@@ -1780,7 +1788,7 @@ final class ViewportView: MTKView {
             camera.keyframeTrack?.keyframes.removeAll { $0.time >= lo && $0.time <= hi }
             for s in samples {
                 let dir   = s.position - fixedAim                  // eye − target
-                let dist  = max(0.05, min(5000, simd_length(dir)))
+                let dist  = max(SceneLimits.orbitDistanceMin, min(SceneLimits.orbitDistanceMax, simd_length(dir)))
                 let pitch = asin(max(-1, min(1, dir.y / dist)))
                 let yaw   = atan2(dir.x, dir.z)
                 camera.keyframeTrack?.addKeyframe(CameraKeyframe(
@@ -2088,7 +2096,7 @@ final class ViewportView: MTKView {
             camera.keyframeTrack?.keyframes.removeAll { $0.time >= lo && $0.time <= hi }
             for s in samples {
                 let dir   = s.position - center
-                let dist  = max(0.05, min(5000, simd_length(dir)))
+                let dist  = max(SceneLimits.orbitDistanceMin, min(SceneLimits.orbitDistanceMax, simd_length(dir)))
                 let pitch = asin(max(-1, min(1, dir.y / dist)))
                 let yaw   = atan2(dir.x, dir.z)
                 camera.keyframeTrack?.addKeyframe(CameraKeyframe(
@@ -3343,11 +3351,12 @@ final class ViewportView: MTKView {
         switch controlMode {
         case .camera:
             // +/− changes focal length (FOV). Scroll wheel handles dolly.
-            camera.lensZoom(delta: sign * zoomStep / 0.05)
+            if camera.lensZoom(delta: sign * zoomStep / 0.05) { LimitReporter.report("Lens FOV") }
 
         case .director:
-            // Director POV (Scene mode only): +/− changes the Director's FOV.
-            director.lensZoom(delta: sign * zoomStep / 0.05)
+            // Director POV (Scene mode only): +/− dollies the viewpoint in / out,
+            // matching the scroll wheel ("get closer to the part").  FOV is on ⌘+/⌘−.
+            director.dolly(delta: sign * zoomStep / 0.05)
 
         case .light:
             let li = lightManager.selectedIndex
@@ -3812,18 +3821,20 @@ final class ViewportView: MTKView {
 
         // ── Plus / KP+ ────────────────────────────────────────────────────────
         case KC.kpPlus, KC.regEqual:
-            // ⌘+ in Scene mode dollies the Director in.  Otherwise standard +/− behaviour.
+            // ⌘+ in Scene mode narrows the Director's FOV (zoom-in lens).  Plain +
+            // dollies the Director in (see applyDepthKey .director).
             if sceneModeActive && event.modifierFlags.contains(.command) {
-                director.dolly(delta: zoomStep / 0.05)
+                if director.lensZoom(delta: zoomStep / 0.05) { LimitReporter.report("Director FOV") }
             } else {
                 applyDepthKey(positive: true, optionDown: event.modifierFlags.contains(.option))
             }
 
         // ── Minus / KP− ───────────────────────────────────────────────────────
         case KC.kpMinus, KC.regMinus:
-            // ⌘− in Scene mode dollies the Director out.  Otherwise standard +/− behaviour.
+            // ⌘− in Scene mode widens the Director's FOV (zoom-out lens).  Plain −
+            // dollies the Director out (see applyDepthKey .director).
             if sceneModeActive && event.modifierFlags.contains(.command) {
-                director.dolly(delta: -(zoomStep / 0.05))
+                if director.lensZoom(delta: -(zoomStep / 0.05)) { LimitReporter.report("Director FOV") }
             } else {
                 applyDepthKey(positive: false, optionDown: event.modifierFlags.contains(.option))
             }
