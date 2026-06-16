@@ -10,6 +10,20 @@ one object, any group of objects rides a shared parent.
 
 **Open:** Edit ▸ Glue Objects…
 
+## When to glue (two uses)
+
+1. **Consolidate for export** — glue the pieces, then **File ▸ Export Model…** bakes
+   the assembly into one reusable `.glb`. Glue is the step that lets the exporter
+   flatten everything into a single mesh.
+2. **Animate a sub-assembly as one object, in the project** — keyframe / move / rotate /
+   scale the **envelope** and every member follows, while each member can still have its
+   own motion that composes on top (e.g. the whole rig orbits while one part spins).
+
+> **Not needed for Import Project.** Reusing an animated scene in another project via
+> **[Import Project](Import-Project.md)** does **not** need glue — the animation rides on
+> the models themselves, and the envelope just adds a redundant wrapper. Glue (or
+> **Unglue** right after Export Model) is for the two cases above only.
+
 ## Create a glue
 
 1. Load the objects you want to bind.
