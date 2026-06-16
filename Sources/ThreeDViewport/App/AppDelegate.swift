@@ -5045,6 +5045,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // Spin — kind 2 (object), kind 3 (group).  Axis is local, so only the time
         // markers need the import's offset.
         for sd in data.spinRateSchedules where !sd.markers.isEmpty {
+            // Only re-apply a schedule the SOURCE actually has BAKED motion for.  A
+            // schedule whose target track is static (≤1 keyframe) is orphaned/stale
+            // (e.g. a group spin that was never baked into the source's group track) —
+            // re-baking it would ADD motion that wasn't active in the source.
+            let occ = max(0, sd.targetIndex)
+            let sourceBaked: Int
+            switch sd.targetKind {
+            case 3:
+                let key = "\(sd.targetName)#\(occ)"
+                sourceBaked = data.groupKeyframeTracks
+                    .first { "\($0.sourceFileName)#\($0.occurrence)" == key }?.keyframes.count ?? 0
+            case 2:
+                var c = 0; var found = 0
+                for o in data.objects where o.name == sd.targetName {
+                    if c == occ { found = o.keyframes.count; break }
+                    c += 1
+                }
+                sourceBaked = found
+            default:
+                sourceBaked = 0
+            }
+            guard sourceBaked > 1 else { continue }   // orphaned schedule — skip
+
             let markers = sd.markers.map { SpinRateMarker(time: $0.time + T, rate: $0.rate, axisIndex: $0.axisIndex, rate2: $0.rate2 ?? 0, axisIndex2: $0.axisIndex2 ?? 0) }
             switch sd.targetKind {
             case 2:
@@ -5147,19 +5170,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let roots = scene.rootObjectIndicesSorted.filter { !scene.objects[$0].isEnvelope }
         guard roots.count >= 2 else { return }
 
-        // Candidate display name = the Timeline's first-column name (group name for a
-        // model, else object name) — including the duplicate-instance suffix so two
-        // copies of the same file read as "name 1" / "name 2".
-        let candidates: [GlueOptions.Candidate] = roots
-            .map { GlueOptions.Candidate(id: $0, name: scene.glueListName(for: scene.objects[$0])) }
-            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        // Build candidates: ONE entry per multi-part model (group), named for the model
+        // (e.g. "2-buckys-cylinder"), plus one per ungrouped object.  Group candidates
+        // glue the WHOLE model as a kept-intact group member (see
+        // docs/Glue-Groups-Design.md) — never flattened.  `candidateGroup` maps a
+        // candidate's id → its gid.
+        var candidates: [GlueOptions.Candidate] = []
+        var candidateGroup: [Int: Int] = [:]
+        var seenGroups = Set<Int>()
+        for r in roots {
+            let o = scene.objects[r]
+            if let gid = o.groupID {
+                guard seenGroups.insert(gid).inserted else { continue }
+                candidates.append(GlueOptions.Candidate(id: r, name: scene.groupName(for: gid)))
+                candidateGroup[r] = gid
+            } else {
+                candidates.append(GlueOptions.Candidate(id: r, name: scene.glueListName(for: o)))
+            }
+        }
+        candidates.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        guard candidates.count >= 2 else { return }
 
-        // Pre-select the currently selected root (plus a sensible second one) so the
-        // common "select A, glue with B" flow needs minimal clicking.
+        // Pre-select the candidate that owns the current selection.
         let sel = scene.selectedIndex
         var preselected = Set<Int>()
-        if roots.contains(sel) { preselected.insert(sel) }
-        let anchor = preselected.first ?? roots[0]
+        if sel >= 0, sel < scene.objects.count {
+            let selGid = scene.objects[sel].groupID
+            if let owner = candidates.first(where: { c in
+                if let gid = candidateGroup[c.id] { return gid == selGid }
+                return c.id == sel
+            }) { preselected.insert(owner.id) }
+        }
+        let anchor = preselected.first ?? candidates[0].id
         let envCount = scene.objects.filter { $0.isEnvelope }.count
 
         let options = GlueOptions(
@@ -5186,19 +5228,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
-        let members = Array(options.selected)
-        guard members.count >= 2, options.selected.contains(options.anchor) else {
+        guard options.selected.count >= 2, options.selected.contains(options.anchor) else {
             let warn = NSAlert()
             warn.messageText = "Select at least two objects (including the anchor) to glue."
             warn.runModal()
             return
         }
+        // Split selected candidates into object members and group members (kept intact).
+        var objMembers: [Int] = []
+        var grpMembers: [Int] = []
+        for id in options.selected {
+            if let gid = candidateGroup[id] { grpMembers.append(gid) } else { objMembers.append(id) }
+        }
+        // Anchor (envelope origin): the chosen candidate — a group's first part if it's
+        // a group candidate, else the object itself.
+        let anchorIndex: Int
+        if let gid = candidateGroup[options.anchor] {
+            anchorIndex = scene.objects.firstIndex { $0.groupID == gid } ?? (objMembers.first ?? options.anchor)
+        } else {
+            anchorIndex = options.anchor
+        }
         let trimmed = options.name.trimmingCharacters(in: .whitespacesAndNewlines)
         let envName = trimmed.isEmpty ? "Envelope \(envCount + 1)" : trimmed
 
         if let envIndex = scene.makeEnvelope(name: envName,
-                                             anchorIndex: options.anchor,
-                                             memberIndices: members) {
+                                             anchorIndex: anchorIndex,
+                                             memberIndices: objMembers,
+                                             groupMembers: grpMembers) {
             scene.selectedIndex = envIndex
             // Select the new envelope as the active object so the Timeline highlights
             // its lane (and a stale member-lane selection — now collapsed — is replaced).
@@ -5210,7 +5266,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             // animation to re-evaluate so animated members show their keyframed pose
             // immediately (otherwise they snap to their rest pose until the next scrub).
             viewportView?.renderer?.invalidateAnimationCache()
-            print("[DEBUG] AppDelegate: glued \(members.count) objects into '\(envName)'")
+            print("[DEBUG] AppDelegate: glued \(objMembers.count) objects + \(grpMembers.count) groups into '\(envName)'")
         }
     }
 

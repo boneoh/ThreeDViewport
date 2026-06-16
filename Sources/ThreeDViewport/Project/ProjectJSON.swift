@@ -309,6 +309,16 @@ struct OrbitRateScheduleData: Codable {
 // object array — the same positional convention the loader already uses to
 // reattach per-object state (isVisible, objectClass, …).  Members re-derive their
 // localTransform from this origin on load, so nothing is stored per member.
+/// A multi-part model (group) glued into an envelope.  The group is NOT dissolved —
+/// it keeps its own modelPath/parts/keyframes and round-trips as a group; this just
+/// records that it belongs to an envelope and its local transform within it.  Keyed by
+/// (sourceFileName, occurrence) — the same key groups round-trip by.
+struct GroupMemberData: Codable {
+    var sourceFileName: String
+    var occurrence:     Int
+    var transform:      [Float] = []   // 16 floats, local relative to the envelope
+}
+
 struct EnvelopeData: Codable {
     var name:          String
     var transform:     [Float]        = []   // 16 floats, column-major
@@ -318,6 +328,8 @@ struct EnvelopeData: Codable {
     // Part B: display-only import-bundle tag.  Envelopes are saved here (not in
     // objectsData), so the tag must ride along or glued objects un-nest on reload.
     var importBundleID: Int?          = nil
+    // Group members glued into this envelope (multi-part models kept intact).
+    var memberGroups:  [GroupMemberData] = []
 
     init(from decoder: Decoder) throws {
         let c          = try decoder.container(keyedBy: CodingKeys.self)
@@ -327,16 +339,19 @@ struct EnvelopeData: Codable {
         easingMode     = (try? c.decode(Int.self,           forKey: .easingMode))    ?? 0
         memberIndices  = (try? c.decode([Int].self,         forKey: .memberIndices)) ?? []
         importBundleID =  try? c.decode(Int.self,           forKey: .importBundleID)
+        memberGroups   = (try? c.decode([GroupMemberData].self, forKey: .memberGroups)) ?? []
     }
 
     init(name: String, transform: [Float], keyframes: [KeyframeData],
-         easingMode: Int, memberIndices: [Int], importBundleID: Int? = nil) {
+         easingMode: Int, memberIndices: [Int], importBundleID: Int? = nil,
+         memberGroups: [GroupMemberData] = []) {
         self.name          = name
         self.transform     = transform
         self.keyframes     = keyframes
         self.easingMode    = easingMode
         self.memberIndices = memberIndices
         self.importBundleID = importBundleID
+        self.memberGroups  = memberGroups
     }
 }
 

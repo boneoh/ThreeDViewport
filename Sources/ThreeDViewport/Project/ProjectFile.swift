@@ -780,7 +780,16 @@ final class ProjectFile {
             let members: [Int] = allObjects.indices
                 .filter { allObjects[$0].parentIndex == envIdx }
                 .compactMap { nonEnvIndexOf[$0] }
-            guard !members.isEmpty else { return nil }
+            // Group members glued into this envelope (kept intact as groups), keyed by
+            // (filename, occurrence) + their local transform within the envelope.
+            let memberGroups: [GroupMemberData] = vp.sceneManager.groupEnvelopeParent.compactMap { (gid, link) in
+                guard link.env == envIdx,
+                      let fileName = allObjects.first(where: { $0.groupID == gid })?.sourceURL?.lastPathComponent
+                else { return nil }
+                return GroupMemberData(sourceFileName: fileName, occurrence: occByGid[gid] ?? 0,
+                                       transform: encodeMatrix(link.local))
+            }
+            guard !members.isEmpty || !memberGroups.isEmpty else { return nil }
             let kfData: [KeyframeData] = (env.keyframeTrack?.keyframes ?? []).map { kf in
                 KeyframeData(
                     time: kf.time,
@@ -797,7 +806,8 @@ final class ProjectFile {
                 keyframes:     kfData,
                 easingMode:    (env.keyframeTrack?.easingMode ?? .linear).rawValue,
                 memberIndices: members,
-                importBundleID: env.importBundleID
+                importBundleID: env.importBundleID,
+                memberGroups:  memberGroups
             )
         }
 
@@ -1491,6 +1501,15 @@ final class ProjectFile {
         // saved non-envelope list — so memberIndices index directly into it.
         let modelCount = sm.objects.count
 
+        // (filename, occurrence) → gid, for resolving glued GROUP members.  Same key
+        // convention the save uses, computed against the freshly-rebuilt groups.
+        let occByGid = groupOccurrences(sm.objects)
+        var gidForKey: [String: Int] = [:]
+        for o in sm.objects {
+            guard let gid = o.groupID, let fn = o.sourceURL?.lastPathComponent else { continue }
+            gidForKey["\(fn)#\(occByGid[gid] ?? 0)"] = gid
+        }
+
         for env in data {
             guard let m = decodeMatrix(env.transform) else {
                 print("[DEBUG] ProjectFile: envelope '\(env.name)' missing transform — skipped")
@@ -1532,8 +1551,19 @@ final class ProjectFile {
                 member.parentIndex    = envIndex
                 member.localTransform = member.baseTransform
             }
+            // Re-link glued GROUP members (kept intact as groups): resolve by
+            // (filename, occurrence) → gid and record the envelope link + local pose.
+            for g in env.memberGroups {
+                guard let gid = gidForKey["\(g.sourceFileName)#\(g.occurrence)"],
+                      let local = decodeMatrix(g.transform) else {
+                    print("[DEBUG] ProjectFile: envelope '\(env.name)' group member "
+                        + "\(g.sourceFileName)#\(g.occurrence) unresolved")
+                    continue
+                }
+                sm.groupEnvelopeParent[gid] = SceneManager.GroupEnvelopeLink(env: envIndex, local: local)
+            }
             print("[DEBUG] ProjectFile: restored envelope '\(env.name)' idx=\(envIndex)"
-                + " members=\(env.memberIndices)")
+                + " members=\(env.memberIndices) groups=\(env.memberGroups.count)")
         }
     }
 

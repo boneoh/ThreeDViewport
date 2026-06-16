@@ -1449,6 +1449,12 @@ final class VideoExporter {
             }
         }
 
+        // Glued (enveloped) groups — mirrors Renderer.composeEnvelopedGroups().
+        for (gid, link) in sceneManager.groupEnvelopeParent {
+            guard link.env >= 0, link.env < objects.count else { continue }
+            sceneManager.groupTransforms[gid] = objects[link.env].transform * link.local
+        }
+
         // ── Camera ────────────────────────────────────────────────────────────
         // Evaluated here so the gizmo and view/projection matrices track the
         // animation correctly.  CameraController is NOT ObservableObject, so

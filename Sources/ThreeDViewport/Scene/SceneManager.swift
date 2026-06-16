@@ -53,6 +53,15 @@ final class SceneManager {
     // system writes it by evaluating groupKeyframeTracks.
     var groupTransforms:     [Int: matrix_float4x4] = [:]
 
+    // ── Group ↔ Envelope (Glue of multi-part models) ─────────────────────────
+    // A group whose placement is driven by an envelope (Glue).  The group keeps its
+    // parts / keyframes / single modelPath; the renderer sets
+    // groupTransforms[gid] = objects[env].transform × local each frame (after the
+    // hierarchy pass).  Persisted on the owning envelope as memberGroups; restored
+    // after load.  See docs/Glue-Groups-Design.md.
+    struct GroupEnvelopeLink { var env: Int; var local: matrix_float4x4 }
+    var groupEnvelopeParent: [Int: GroupEnvelopeLink] = [:]
+
     // ── Import bundles (Phase 2 Part B — display-only) ───────────────────────
     // id → bundle name (the source project's filename at import time).  Objects /
     // lights from one File ▸ Import Project share a bundle ID so the Timeline Editor
@@ -225,6 +234,7 @@ final class SceneManager {
         objects.removeAll()
         groupKeyframeTracks.removeAll()
         groupTransforms.removeAll()
+        groupEnvelopeParent.removeAll()
         importBundles.removeAll()
         importBundleLoops.removeAll()
         importBundleSources.removeAll()
@@ -300,9 +310,16 @@ final class SceneManager {
             guard let p = o.parentIndex else { continue }
             o.parentIndex = del.contains(p) ? nil : shift(p)
         }
+        // Group↔envelope links: drop the link when the owning envelope is deleted
+        // (the group keeps its last placement), else shift the envelope index.
+        for (gid, link) in groupEnvelopeParent {
+            if del.contains(link.env) { groupEnvelopeParent.removeValue(forKey: gid) }
+            else { groupEnvelopeParent[gid] = GroupEnvelopeLink(env: shift(link.env), local: link.local) }
+        }
         for gid in affectedGroups where !objects.contains(where: { $0.groupID == gid }) {
             groupKeyframeTracks.removeValue(forKey: gid)
             groupTransforms.removeValue(forKey: gid)
+            groupEnvelopeParent.removeValue(forKey: gid)
         }
         if selectedIndex >= objects.count { selectedIndex = max(0, objects.count - 1) }
         print("[DEBUG] SceneManager: removed \(del.count) object(s), remaining = \(objects.count)")
@@ -316,13 +333,16 @@ final class SceneManager {
     /// world pose as a localTransform relative to that origin (so nothing moves).
     /// Returns the new envelope's index in `objects`, or nil on bad input.
     @discardableResult
-    func makeEnvelope(name: String, anchorIndex: Int, memberIndices: [Int]) -> Int? {
+    func makeEnvelope(name: String, anchorIndex: Int, memberIndices: [Int],
+                      groupMembers: [Int] = []) -> Int? {
         guard anchorIndex >= 0, anchorIndex < objects.count else {
             print("[DEBUG] SceneManager: makeEnvelope — anchorIndex out of range")
             return nil
         }
         let members = memberIndices.filter { $0 >= 0 && $0 < objects.count }
-        guard members.count >= 2 else {
+        // Group members keep their group intact; they're driven via groupEnvelopeParent.
+        let groups  = groupMembers.filter { gid in objects.contains { $0.groupID == gid } }
+        guard members.count + groups.count >= 2 else {
             print("[DEBUG] SceneManager: makeEnvelope — need at least two members")
             return nil
         }
@@ -337,9 +357,14 @@ final class SceneManager {
         func restPose(_ o: SceneObject) -> matrix_float4x4 {
             (o.keyframeTrack?.keyframes.isEmpty == false) ? o.baseTransform : o.transform
         }
+        // World transform of an object, folding in its group transform when grouped.
+        func worldPose(_ o: SceneObject) -> matrix_float4x4 {
+            if let gid = o.groupID { return (groupTransforms[gid] ?? matrix_identity_float4x4) * restPose(o) }
+            return restPose(o)
+        }
 
         // Envelope origin = anchor object's rest world origin (translation only).
-        let aPos = restPose(objects[anchorIndex]).columns.3
+        let aPos = worldPose(objects[anchorIndex]).columns.3
         let envT = TransformMath.translation(SIMD3<Float>(aPos.x, aPos.y, aPos.z))
 
         let env            = SceneObject(name: name)
@@ -350,7 +375,7 @@ final class SceneManager {
         objects.append(env)
         let envIndex = objects.count - 1
 
-        // Re-base each member's rest pose into the envelope's frame.
+        // Re-base each OBJECT member's rest pose into the envelope's frame.
         let invEnv = simd_inverse(envT)
         for mi in members {
             let m = objects[mi]
@@ -359,9 +384,16 @@ final class SceneManager {
             m.localTransform = local
             m.baseTransform  = local   // hierarchical parts store base = LOCAL
         }
+        // GROUP members keep their group; record the link + the group's current world
+        // pose relative to the envelope (so nothing moves).  The renderer recomposes
+        // groupTransforms[gid] = envelope.transform × local each frame.
+        for gid in groups {
+            let gw = groupTransforms[gid] ?? matrix_identity_float4x4
+            groupEnvelopeParent[gid] = GroupEnvelopeLink(env: envIndex, local: invEnv * gw)
+        }
 
         print("[DEBUG] SceneManager: makeEnvelope '\(name)' idx=\(envIndex)"
-            + " members=\(members) anchor=\(anchorIndex)")
+            + " members=\(members) groups=\(groups) anchor=\(anchorIndex)")
         return envIndex
     }
 
@@ -377,11 +409,22 @@ final class SceneManager {
         // delta and scatter animated parts).
         let envRest = restPose(objects[index])
         for m in objects where m.parentIndex == index { reRootMember(m, envRest: envRest) }
+        // Detach glued GROUP members: bake their current world placement back into the
+        // group's standalone transform (so nothing moves) and drop the envelope link.
+        let envTransform = objects[index].transform
+        for (gid, link) in groupEnvelopeParent where link.env == index {
+            groupTransforms[gid] = envTransform * link.local
+            groupEnvelopeParent.removeValue(forKey: gid)
+        }
         objects.remove(at: index)
         // Removal shifts every later index down by one — fix up any parentIndex that
         // pointed past the removed slot so other hierarchies stay valid.
         for o in objects {
             if let p = o.parentIndex, p > index { o.parentIndex = p - 1 }
+        }
+        // Shift any remaining group→envelope links past the removed slot.
+        for (gid, link) in groupEnvelopeParent where link.env > index {
+            groupEnvelopeParent[gid] = GroupEnvelopeLink(env: link.env - 1, local: link.local)
         }
         print("[DEBUG] SceneManager: removeEnvelope — removed idx=\(index), remaining=\(objects.count)")
     }

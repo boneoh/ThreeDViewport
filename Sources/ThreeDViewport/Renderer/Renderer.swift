@@ -674,6 +674,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         // of a parent (e.g. rotating an upper arm) propagates to children
         // immediately regardless of whether animation is playing.
         applyHierarchy()
+        composeEnvelopedGroups()
         // Camera follow is evaluated AFTER applyHierarchy so that sub-part world
         // transforms (e.g. a head bone) are fully up-to-date before worldOrbitAnchor
         // reads them.  Also runs every frame — not just when time changes — so the
@@ -1597,6 +1598,19 @@ final class Renderer: NSObject, MTKViewDelegate {
             guard let parentIdx = obj.parentIndex,
                   parentIdx >= 0, parentIdx < count else { continue }
             obj.transform = objects[parentIdx].transform * obj.localTransform
+        }
+    }
+
+    /// Drives glued (enveloped) groups: a multi-part model glued into an envelope keeps
+    /// its group, and its placement becomes relative to the envelope.  Runs AFTER
+    /// applyHierarchy() so the envelope's own world transform is resolved.
+    /// (Overrides the group's own static placement; group-level keyframe animation on an
+    /// enveloped group is not composed in Phase A.)
+    private func composeEnvelopedGroups() {
+        let objects = sceneManager.objects
+        for (gid, link) in sceneManager.groupEnvelopeParent {
+            guard link.env >= 0, link.env < objects.count else { continue }
+            sceneManager.groupTransforms[gid] = objects[link.env].transform * link.local
         }
     }
 
