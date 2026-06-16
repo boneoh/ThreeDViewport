@@ -231,14 +231,39 @@ struct LightsInspectorPanel: View {
 
     /// "Light N - <Type>" — mirrors the Timeline Editor's light lane label.
     private func lightName(at i: Int) -> String {
-        "Light \(i + 1) - \(lightManager.lights[i].type.displayName)"
+        guard i >= 0, i < lightManager.lights.count else { return "Light \(i + 1)" }
+        return "Light \(i + 1) - \(lightManager.lights[i].type.displayName)"
+    }
+
+    /// Bounds-safe two-way binding to a property of light `i`.  Rapid light deletion can
+    /// leave a SwiftUI binding holding a stale index between the delete and the rebuild;
+    /// the get clamps to a valid light (the view is being torn down anyway) and the set
+    /// no-ops when out of range — so neither traps with an index-out-of-range.
+    private func lightBinding<V>(_ i: Int, _ kp: WritableKeyPath<LightConfig, V>) -> Binding<V> {
+        Binding(
+            get: {
+                let lights = lightManager.lights
+                let idx = lights.isEmpty ? 0 : min(max(i, 0), lights.count - 1)
+                return lights[idx][keyPath: kp]
+            },
+            set: { v in
+                if i >= 0, i < lightManager.lights.count { lightManager.lights[i][keyPath: kp] = v }
+            })
+    }
+
+    /// The light at `i`, or nil if the index is stale (post-delete).
+    private func lightSafe(_ i: Int) -> LightConfig? {
+        (i >= 0 && i < lightManager.lights.count) ? lightManager.lights[i] : nil
     }
 
     // MARK: - Light detail editor
 
     @ViewBuilder
     private func lightDetailEditor(index i: Int) -> some View {
-        let light = lightManager.lights[i]
+        // Clamp for the read-only `light.type` branch checks below.  Every editable
+        // control uses lightBinding/lightSafe, which are individually bounds-safe — so a
+        // transient stale index during rapid deletes can't trap.
+        let light = lightManager.lights[min(max(i, 0), max(0, lightManager.lights.count - 1))]
 
         VStack(alignment: .leading, spacing: 8) {
 
@@ -248,20 +273,14 @@ struct LightsInspectorPanel: View {
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                 Spacer()
-                Toggle("Enabled", isOn: Binding<Bool>(
-                    get: { lightManager.lights[i].isEnabled },
-                    set: { lightManager.lights[i].isEnabled = $0 }
-                ))
+                Toggle("Enabled", isOn: lightBinding(i, \.isEnabled))
                 .toggleStyle(.checkbox)
                 .font(.subheadline)
                 .environment(\.controlActiveState, .active)
             }
 
             // Type picker
-            Picker("Type", selection: Binding<LightType>(
-                get: { lightManager.lights[i].type },
-                set: { lightManager.lights[i].type = $0 }
-            )) {
+            Picker("Type", selection: lightBinding(i, \.type)) {
                 ForEach(LightType.allCases, id: \.self) { t in
                     Label(t.displayName, systemImage: t.systemImage).tag(t)
                 }
@@ -272,16 +291,14 @@ struct LightsInspectorPanel: View {
             LabeledColorRow(
                 label: "Color",
                 binding: colorBinding(
-                    get: { lightManager.lights[i].color },
-                    set: { lightManager.lights[i].color = $0 }
+                    get: { lightSafe(i)?.color ?? .zero },
+                    set: { if i >= 0, i < lightManager.lights.count { lightManager.lights[i].color = $0 } }
                 )
             )
 
             // Intensity
             SliderRow(label: "Intensity",
-                      value: Binding<Float>(
-                          get: { lightManager.lights[i].intensity },
-                          set: { lightManager.lights[i].intensity = $0 }),
+                      value: lightBinding(i, \.intensity),
                       range: 0...10,
                       format: "%.2f",
                       onEditEnded: { onAutoKeyframeLight(i) })
@@ -291,22 +308,13 @@ struct LightsInspectorPanel: View {
             if light.type != .ambient {
                 GroupBox {
                     VStack(spacing: 4) {
-                        SliderRow(label: "X",
-                                  value: Binding<Float>(
-                                      get: { lightManager.lights[i].position.x },
-                                      set: { lightManager.lights[i].position.x = $0 }),
+                        SliderRow(label: "X", value: lightBinding(i, \.position.x),
                                   range: -100...100, format: "%.2f",
                                   onEditEnded: { onAutoKeyframeLight(i) })
-                        SliderRow(label: "Y",
-                                  value: Binding<Float>(
-                                      get: { lightManager.lights[i].position.y },
-                                      set: { lightManager.lights[i].position.y = $0 }),
+                        SliderRow(label: "Y", value: lightBinding(i, \.position.y),
                                   range: -100...100, format: "%.2f",
                                   onEditEnded: { onAutoKeyframeLight(i) })
-                        SliderRow(label: "Z",
-                                  value: Binding<Float>(
-                                      get: { lightManager.lights[i].position.z },
-                                      set: { lightManager.lights[i].position.z = $0 }),
+                        SliderRow(label: "Z", value: lightBinding(i, \.position.z),
                                   range: -100...100, format: "%.2f",
                                   onEditEnded: { onAutoKeyframeLight(i) })
                     }
@@ -315,10 +323,10 @@ struct LightsInspectorPanel: View {
                         Text("Position")
                         Spacer()
                         CoordCopyPasteButtons(
-                            onCopy:   { clipboard.position = lightManager.lights[i].position },
-                            onPaste:  { if let p = clipboard.position { lightManager.lights[i].position = p } },
+                            onCopy:   { if let l = lightSafe(i) { clipboard.position = l.position } },
+                            onPaste:  { if let p = clipboard.position, i < lightManager.lights.count { lightManager.lights[i].position = p } },
                             canPaste: clipboard.position != nil,
-                            onZero:   { lightManager.lights[i].position = .zero },
+                            onZero:   { if i < lightManager.lights.count { lightManager.lights[i].position = .zero } },
                             canZero:  true,
                             onAutoStamp: { onAutoStampLight(i) })
                     }
@@ -330,22 +338,13 @@ struct LightsInspectorPanel: View {
             if light.type == .directional || light.type == .spot || light.type == .laser {
                 GroupBox {
                     VStack(spacing: 4) {
-                        SliderRow(label: "X",
-                                  value: Binding<Float>(
-                                      get: { lightManager.lights[i].target.x },
-                                      set: { lightManager.lights[i].target.x = $0 }),
+                        SliderRow(label: "X", value: lightBinding(i, \.target.x),
                                   range: -100...100, format: "%.2f",
                                   onEditEnded: { onAutoKeyframeLight(i) })
-                        SliderRow(label: "Y",
-                                  value: Binding<Float>(
-                                      get: { lightManager.lights[i].target.y },
-                                      set: { lightManager.lights[i].target.y = $0 }),
+                        SliderRow(label: "Y", value: lightBinding(i, \.target.y),
                                   range: -100...100, format: "%.2f",
                                   onEditEnded: { onAutoKeyframeLight(i) })
-                        SliderRow(label: "Z",
-                                  value: Binding<Float>(
-                                      get: { lightManager.lights[i].target.z },
-                                      set: { lightManager.lights[i].target.z = $0 }),
+                        SliderRow(label: "Z", value: lightBinding(i, \.target.z),
                                   range: -100...100, format: "%.2f",
                                   onEditEnded: { onAutoKeyframeLight(i) })
                     }
@@ -354,10 +353,10 @@ struct LightsInspectorPanel: View {
                         Text("Target")
                         Spacer()
                         CoordCopyPasteButtons(
-                            onCopy:   { clipboard.position = lightManager.lights[i].target },
-                            onPaste:  { if let p = clipboard.position { lightManager.lights[i].target = p } },
+                            onCopy:   { if let l = lightSafe(i) { clipboard.position = l.target } },
+                            onPaste:  { if let p = clipboard.position, i < lightManager.lights.count { lightManager.lights[i].target = p } },
                             canPaste: clipboard.position != nil,
-                            onZero:   { lightManager.lights[i].target = .zero },
+                            onZero:   { if i < lightManager.lights.count { lightManager.lights[i].target = .zero } },
                             canZero:  true,
                             onAutoStamp: { onAutoStampLight(i) })
                     }
@@ -368,15 +367,9 @@ struct LightsInspectorPanel: View {
             if light.type == .spot || light.type == .laser {
                 GroupBox("Cone (radians)") {
                     VStack(spacing: 4) {
-                        SliderRow(label: "Inner",
-                                  value: Binding<Float>(
-                                      get: { lightManager.lights[i].innerConeAngle },
-                                      set: { lightManager.lights[i].innerConeAngle = $0 }),
+                        SliderRow(label: "Inner", value: lightBinding(i, \.innerConeAngle),
                                   range: 0...Float.pi / 2, format: "%.3f")
-                        SliderRow(label: "Outer",
-                                  value: Binding<Float>(
-                                      get: { lightManager.lights[i].outerConeAngle },
-                                      set: { lightManager.lights[i].outerConeAngle = $0 }),
+                        SliderRow(label: "Outer", value: lightBinding(i, \.outerConeAngle),
                                   range: 0...Float.pi / 2, format: "%.3f")
                     }
                 }
@@ -384,10 +377,7 @@ struct LightsInspectorPanel: View {
 
             // Range — point / spot / laser
             if light.type == .point || light.type == .spot || light.type == .laser {
-                SliderRow(label: "Range",
-                          value: Binding<Float>(
-                              get: { lightManager.lights[i].range },
-                              set: { lightManager.lights[i].range = $0 }),
+                SliderRow(label: "Range", value: lightBinding(i, \.range),
                           range: 0...50, format: "%.1f",
                           onEditEnded: { onAutoKeyframeLight(i) })
             }
@@ -397,16 +387,10 @@ struct LightsInspectorPanel: View {
                 Divider()
                 GroupBox("Beam") {
                     VStack(spacing: 6) {
-                        SliderRow(label: "Thickness",
-                                  value: Binding<Float>(
-                                      get: { lightManager.lights[i].beamThickness },
-                                      set: { lightManager.lights[i].beamThickness = $0 }),
+                        SliderRow(label: "Thickness", value: lightBinding(i, \.beamThickness),
                                   range: 1...30, format: "%.0f",
                                   onEditEnded: { onAutoKeyframeLight(i) })
-                        Toggle("Exclude from feedback",
-                               isOn: Binding<Bool>(
-                                   get: { lightManager.lights[i].excludeBeamFromFeedback },
-                                   set: { lightManager.lights[i].excludeBeamFromFeedback = $0 }))
+                        Toggle("Exclude from feedback", isOn: lightBinding(i, \.excludeBeamFromFeedback))
                             .font(.caption)
                             .toggleStyle(.checkbox)
                             .environment(\.controlActiveState, .active)
