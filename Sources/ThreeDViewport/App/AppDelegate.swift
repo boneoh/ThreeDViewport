@@ -3560,7 +3560,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let speed = Float(state.speed), speed > 0 else {
             state.validationAlert = "Speed must be a positive number."; return
         }
-        guard let stride = Float(state.stride), stride > 0 else {
+        // Manual stride only matters when auto-stride is off.
+        let stride = Float(state.stride) ?? 0
+        if !state.autoStride, !(stride > 0) {
             state.validationAlert = "Stride must be a positive number."; return
         }
         let start = state.startTime ?? 0
@@ -3573,7 +3575,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         let missing = viewport.generateGait(
             groupID: gid, gait: state.gait, params: params, markPositions: positions,
-            speed: speed, strideLength: stride, startTime: start, plantFeet: state.plantFeet)
+            speed: speed, strideLength: stride, autoStride: state.autoStride,
+            startTime: start, plantFeet: state.plantFeet)
 
         timelineEditorWC?.editorView.needsDisplay = true
         markDirty()

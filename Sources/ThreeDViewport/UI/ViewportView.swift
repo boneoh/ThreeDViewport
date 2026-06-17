@@ -1868,6 +1868,7 @@ final class ViewportView: MTKView {
                       markPositions: [SIMD3<Float>],
                       speed: Float,
                       strideLength: Float,
+                      autoStride: Bool,
                       startTime: Double,
                       plantFeet: Bool) -> [String] {
 
@@ -1880,19 +1881,22 @@ final class ViewportView: MTKView {
         }
         let groupScale = TransformMath.scale(of: sceneManager.groupTransforms[gid] ?? matrix_identity_float4x4)
 
+        // Rest-pose (group-local) world transform of a part — composes baseTransforms up
+        // the parentIndex chain.  Shared by ground-offset and auto-stride.
+        var restCache: [Int: matrix_float4x4] = [:]
+        func restWorld(_ i: Int) -> matrix_float4x4 {
+            if let m = restCache[i] { return m }
+            let o = sceneManager.objects[i]
+            let m = (o.parentIndex.map { restWorld($0) } ?? matrix_identity_float4x4) * o.baseTransform
+            restCache[i] = m
+            return m
+        }
+
         // Ground offset: lowest point of the model in its rest pose (group-local), so
         // setting the root translation to a mark plants the feet there instead of the
         // hips.  Scaled by the group's Y scale.
         var groundOffset: Float = 0
         if plantFeet {
-            var restCache: [Int: matrix_float4x4] = [:]
-            func restWorld(_ i: Int) -> matrix_float4x4 {
-                if let m = restCache[i] { return m }
-                let o = sceneManager.objects[i]
-                let m = (o.parentIndex.map { restWorld($0) } ?? matrix_identity_float4x4) * o.baseTransform
-                restCache[i] = m
-                return m
-            }
             var minY = Float.greatestFiniteMagnitude
             for i in groupPartIndices {
                 let o   = sceneManager.objects[i]
@@ -1906,9 +1910,24 @@ final class ViewportView: MTKView {
             if minY < Float.greatestFiniteMagnitude { groundOffset = -minY * groupScale.y }
         }
 
+        // Auto stride: the no-foot-skate stride ≈ 4·legLength·sin(hipSwing).  Cadence
+        // (cycles/sec = speed/stride) then follows the speed.  Falls back to the manual
+        // value when the leg joints aren't present.
+        var effectiveStride = strideLength
+        if autoStride {
+            let hipIdx  = partIndexByName["upper_leg_L"] ?? partIndexByName["upper_leg_R"]
+            let footIdx = partIndexByName["foot_L"]  ?? partIndexByName["ankle_L"]
+                       ?? partIndexByName["foot_R"]  ?? partIndexByName["ankle_R"]
+            if let h = hipIdx, let f = footIdx {
+                let hp = restWorld(h).columns.3, fp = restWorld(f).columns.3
+                let legLocal = simd_length(SIMD3<Float>(hp.x - fp.x, hp.y - fp.y, hp.z - fp.z))
+                effectiveStride = max(0.02, 4 * legLocal * groupScale.y * sin(params.hipSwing))
+            }
+        }
+
         let out = GaitGenerator.generate(
             gait: gait, params: params, marks: markPositions, speed: speed,
-            strideLength: strideLength, startTime: startTime, groundOffset: groundOffset,
+            strideLength: effectiveStride, startTime: startTime, groundOffset: groundOffset,
             groupScale: groupScale, availableJoints: Set(partIndexByName.keys))
         guard let firstRoot = out.rootKeys.first else { return out.missingJoints }
 

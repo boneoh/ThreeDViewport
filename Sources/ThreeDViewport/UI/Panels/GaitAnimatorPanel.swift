@@ -19,6 +19,9 @@ final class GaitAnimatorState: ObservableObject {
 
     @Published var speed:  String = "1.5"
     @Published var stride: String = "1.6"
+    /// Derive stride from the model's legs + swing so the feet don't skate; disables the
+    /// manual Stride field.  On by default.
+    @Published var autoStride: Bool = true
     @Published var startTime: Double? = 0
 
     // Tuning multipliers (1.0 = the gait's default amplitude).
@@ -117,11 +120,14 @@ struct GaitAnimatorPanel: View {
                         TextField("", text: $state.speed).textFieldStyle(.roundedBorder).frame(width: 80)
                         Text("units/s").font(.caption).foregroundColor(.secondary)
                     }
+                    Toggle("Auto stride (reduce foot slip)", isOn: $state.autoStride)
                     HStack {
                         Text("Stride").frame(width: 110, alignment: .leading)
                         TextField("", text: $state.stride).textFieldStyle(.roundedBorder).frame(width: 80)
+                            .disabled(state.autoStride)
                         Text("units/cycle").font(.caption).foregroundColor(.secondary)
                     }
+                    .opacity(state.autoStride ? 0.5 : 1)
                     HStack {
                         Button("Start at Playhead", action: captureStart)
                         Spacer()
