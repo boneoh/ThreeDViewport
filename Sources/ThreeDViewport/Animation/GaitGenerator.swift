@@ -57,6 +57,15 @@ struct GaitGenerator {
         let transitionDur: Float = min(1.0, totalTime * 0.5)   // seconds, each end
         func smoothstep(_ x: Float) -> Float { let c = max(0, min(1, x)); return c * c * (3 - 2 * c) }
 
+        // Turning lean: bank the body into curves ∝ speed²·curvature (a runner leaning
+        // into a corner).  Tunable; flip leanGain's sign if it banks the wrong way.
+        let leanGain: Float = -0.07
+        let maxLean:  Float = 25 * .pi / 180
+        let leanEps:  Float = max(0.02, total * 0.02)
+        func yawAt(_ d: Float) -> Float {
+            let t = spline.tangent(atDistance: min(max(d, 0), total)); return atan2(t.x, t.z)
+        }
+
         for k in 0..<count {
             let f    = Float(k) / Float(count - 1)
             let dist = f * total
@@ -81,7 +90,17 @@ struct GaitGenerator {
             let yaw      = atan2(tan.x, tan.z)
             let heading  = simd_quatf(angle: yaw, axis: SIMD3<Float>(0, 1, 0))
             let body     = simd_slerp(prone, identityQ, rest)     // prone=identity for non-swim
-            let rotation = heading * body
+            // Bank into the turn: roll about the travel axis (+Z), faded at the ends.
+            var leanQ = identityQ
+            if gait != .swim {
+                var dYaw = yawAt(dist + leanEps) - yawAt(dist - leanEps)
+                while dYaw >  .pi { dYaw -= 2 * .pi }
+                while dYaw < -.pi { dYaw += 2 * .pi }
+                let kappa = dYaw / (2 * leanEps)                  // signed curvature, rad/unit
+                let lean  = max(-maxLean, min(maxLean, leanGain * speed * speed * kappa)) * (1 - rest)
+                leanQ = simd_quatf(angle: lean, axis: SIMD3<Float>(0, 0, 1))
+            }
+            let rotation = heading * leanQ * body
             let yOffset  = (gait == .swim) ? groundOffset * rest : groundOffset
             let y        = pos.y + yOffset + GaitCycle.bob(gait, phase: phase, params) * (1 - rest)
             let bobbed   = SIMD3<Float>(pos.x, y, pos.z)
