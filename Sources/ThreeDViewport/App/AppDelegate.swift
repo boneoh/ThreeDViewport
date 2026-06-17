@@ -1870,7 +1870,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     /// Fix: for each affected group, fold the root's translation into every
     /// keyframe's translation (the rendered position at each existing keyframe
     /// stays identical — see the algebra in MODELS.md), then zero the root's
-    /// `obj.transform` and `baseTransform` translation columns.  Asks first.
+    /// `obj.transform` and `baseTransform` translation columns.  Applied automatically
+    /// (position-preserving + idempotent) and logged to Diagnostics; a later save cleans
+    /// the file.
     private func checkAndOfferGroupOffsetMigration(in vp: ViewportView) {
         struct Candidate {
             let name:   String
@@ -1915,30 +1917,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             return
         }
 
+        // Auto-apply silently: this bake is position-preserving (every keyframe renders
+        // identically — see MODELS.md) and idempotent, so correct it on load instead of
+        // nagging.  markDirty() below means a later save writes the cleaned file.
         let listText = candidates.map { c in
-            String(format: "• %@ — offset (%.2f, %.2f, %.2f) across %d keyframes",
-                   c.name, c.offset.x, c.offset.y, c.offset.z, c.track.keyframes.count)
-        }.joined(separator: "\n")
-
-        let alert = NSAlert()
-        alert.messageText = "Bake stale root translation into keyframes?"
-        alert.informativeText =
-            "This project has \(candidates.count) animated group(s) with a non-zero "
-            + "translation baked into the root part:\n\n"
-            + listText
-            + "\n\nThis is a leftover from old slider edits and causes the model to "
-            + "arc between keyframes instead of moving in a straight line. Baking "
-            + "the offset into each keyframe's translation fixes the interpolation; "
-            + "the rendered position at every existing keyframe stays identical."
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "Bake")
-        alert.addButton(withTitle: "Skip")
-
-        guard alert.runModal() == .alertFirstButtonReturn else {
-            print("[DEBUG] AppDelegate: user skipped group offset migration "
-                + "for \(candidates.count) group(s)")
-            return
-        }
+            String(format: "%@ (%.2f, %.2f, %.2f)×%d", c.name,
+                   c.offset.x, c.offset.y, c.offset.z, c.track.keyframes.count)
+        }.joined(separator: "; ")
+        AppLog.log("Auto-baked stale root translation for \(candidates.count) group(s): \(listText)")
 
         for c in candidates {
             for i in 0..<c.track.keyframes.count {
@@ -5578,7 +5564,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                            ? sel.baseTransform : sel.transform
         let before       = sm.objects.count
 
-        guard viewport.addModelToScene(url: url) == .added else { return }
+        // Duplicate drives its own placement below (source pose, centered on the Probe),
+        // so skip addModelToScene's probe placement.
+        guard viewport.addModelToScene(url: url, placeAtProbe: false) == .added else { return }
 
         let newObjects = Array(sm.objects[before...])
         guard !newObjects.isEmpty else { return }
@@ -5605,13 +5593,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             carry(from: sel.material, to: &n.material)
         }
 
-        // 2. Place the copy at the original's position + a small offset.
-        var offset = matrix_identity_float4x4
-        offset.columns.3 = SIMD4<Float>(0.5, 0, 0.5, 1)
+        // 2. Place the copy so its visual (bounding-box) center lands on the bake Probe,
+        //    keeping the source's scale/rotation as the base pose.
+        func worldCenter(of objs: [SceneObject], groupT: matrix_float4x4) -> SIMD3<Float> {
+            var lo = SIMD3<Float>(repeating:  Float.infinity)
+            var hi = SIMD3<Float>(repeating: -Float.infinity)
+            for o in objs {
+                let w = groupT * o.transform
+                for cx in [o.boundingMin.x, o.boundingMax.x] {
+                    for cy in [o.boundingMin.y, o.boundingMax.y] {
+                        for cz in [o.boundingMin.z, o.boundingMax.z] {
+                            let p = w * SIMD4<Float>(cx, cy, cz, 1)
+                            lo = simd_min(lo, SIMD3<Float>(p.x, p.y, p.z))
+                            hi = simd_max(hi, SIMD3<Float>(p.x, p.y, p.z))
+                        }
+                    }
+                }
+            }
+            return (lo + hi) * 0.5
+        }
+        func translation(_ d: SIMD3<Float>) -> matrix_float4x4 {
+            var m = matrix_identity_float4x4
+            m.columns.3 = SIMD4<Float>(d.x, d.y, d.z, 1)
+            return m
+        }
+        let probe = viewport.probeConfig.position
         if let newGid {
-            sm.groupTransforms[newGid] = offset * (sourceGroupT ?? matrix_identity_float4x4)
+            let baseGT = sourceGroupT ?? matrix_identity_float4x4
+            let center = worldCenter(of: newObjects, groupT: baseGT)
+            sm.groupTransforms[newGid] = translation(probe - center) * baseGT
         } else if let n = newObjects.first {
-            n.transform     = offset * sourceXform
+            n.transform     = sourceXform
+            let center      = worldCenter(of: [n], groupT: matrix_identity_float4x4)
+            n.transform     = translation(probe - center) * sourceXform
             n.baseTransform = n.transform
         }
 

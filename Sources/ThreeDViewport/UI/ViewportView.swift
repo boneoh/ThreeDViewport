@@ -458,7 +458,7 @@ final class ViewportView: MTKView {
     // instances stay distinct on save/load.  Returns `.failed` if the device is nil
     // or the file won't load.
     @discardableResult
-    func addModelToScene(url: URL) -> AddModelResult {
+    func addModelToScene(url: URL, placeAtProbe: Bool = true) -> AddModelResult {
         guard let dev = device else {
             print("[DEBUG] ViewportView: addModelToScene — device is nil")
             return .failed
@@ -469,7 +469,21 @@ final class ViewportView: MTKView {
         let loader = GLTFLoader(device: dev)
 
         if let objects = loader.load(url: url) {
-            let (center, radius) = autoNormalize(objects)
+            let (loadedCenter, radius) = autoNormalize(objects)
+            var center = loadedCenter
+
+            // Place the new model at the bake Probe: shift so its visual (bounding-box)
+            // center lands on the probe.  Children follow via the hierarchy; baseTransform
+            // is captured just below, so it picks up the shift too.
+            let delta = probeConfig.position - center
+            if placeAtProbe, simd_length(delta) > 1e-6 {
+                let d4 = SIMD4<Float>(delta.x, delta.y, delta.z, 0)
+                for obj in objects where obj.parentIndex == nil {
+                    obj.transform.columns.3      += d4
+                    obj.localTransform.columns.3 += d4
+                }
+                center = probeConfig.position   // keep the first-model camera fit correct
+            }
 
             let baseName = url.deletingPathExtension().lastPathComponent
             let gid = objects.count > 1 ? sceneManager.makeGroupID() : nil
