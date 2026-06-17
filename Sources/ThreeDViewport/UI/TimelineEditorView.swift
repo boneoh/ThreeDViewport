@@ -620,6 +620,20 @@ final class TimelineEditorView: NSView {
             }
         }
 
+        // Glued GROUP members: a multi-part model glued into an envelope keeps its
+        // group (driven via groupEnvelopeParent, not parentIndex).  Index them by
+        // envelope so they nest under the envelope rather than appearing top-level
+        // (or under their import bundle).
+        var envelopeGroups: [Int: [Int]] = [:]    // envelope index → [gid]
+        var gluedGroupGids = Set<Int>()
+        if let gep = sceneManager?.groupEnvelopeParent {
+            for (gid, link) in gep where link.env >= 0 && link.env < objects.count
+                                       && objects[link.env].isEnvelope {
+                envelopeGroups[link.env, default: []].append(gid)
+                gluedGroupGids.insert(gid)
+            }
+        }
+
         // One top-level entry per row, tagged with the name used to sort it and a
         // monotonic `order` used only as a stable tiebreaker for equal names.
         enum RowEntry {
@@ -656,6 +670,7 @@ final class TimelineEditorView: NSView {
                 add(sceneManager?.displayName(for: obj) ?? obj.name, .envelope(idx: i))
             } else if let gid = obj.groupID {
                 guard seenGroups.insert(gid).inserted else { continue }
+                if gluedGroupGids.contains(gid) { continue }   // nested under its envelope
                 add(sceneManager?.groupName(for: gid) ?? "Group", .group(gid: gid))
             } else if let p = obj.parentIndex, p < objects.count, objects[p].isEnvelope {
                 // Direct simple member of a glued envelope — nested under it, not top-level.
@@ -708,14 +723,21 @@ final class TimelineEditorView: NSView {
                 // triangle when it actually has nestable members.
                 let members = (envelopeMembers[idx] ?? [])
                     .sorted { $0.obj.name.localizedStandardCompare($1.obj.name) == .orderedAscending }
+                let gMembers = (envelopeGroups[idx] ?? []).sorted {
+                    (sceneManager?.groupName(for: $0) ?? "").localizedStandardCompare(
+                     sceneManager?.groupName(for: $1) ?? "") == .orderedAscending
+                }
                 let name = sceneManager?.displayName(for: objects[idx]) ?? objects[idx].name
+                let hasChildren = !members.isEmpty || !gMembers.isEmpty
                 result.append(TrackRow(name: name, ref: .object(idx),
-                                       isGroupHeader: !members.isEmpty, indentLevel: level))
-                if !members.isEmpty, expandedHeaders.contains(.object(idx)) {
+                                       isGroupHeader: hasChildren, indentLevel: level))
+                if hasChildren, expandedHeaders.contains(.object(idx)) {
                     for m in members {
                         result.append(TrackRow(name: sceneManager?.displayName(for: m.obj) ?? m.obj.name,
                                                ref: .object(m.idx), indentLevel: level + 1))
                     }
+                    // Glued multi-part models nest as their own (expandable) group rows.
+                    for gid in gMembers { emit(.group(gid: gid), level: level + 1) }
                 }
             }
         }
