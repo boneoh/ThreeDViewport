@@ -3576,7 +3576,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let missing = viewport.generateGait(
             groupID: gid, gait: state.gait, params: params, markPositions: positions,
             speed: speed, strideLength: stride, autoStride: state.autoStride,
-            startTime: start, plantFeet: state.plantFeet)
+            footLock: state.footLock, startTime: start, plantFeet: state.plantFeet)
 
         timelineEditorWC?.editorView.needsDisplay = true
         markDirty()

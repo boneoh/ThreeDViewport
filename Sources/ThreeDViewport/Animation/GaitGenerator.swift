@@ -14,6 +14,16 @@ struct GaitGenerator {
         var missingJoints: [String]
     }
 
+    /// Geometry for foot-IK (group-local units): leg-segment lengths and the rest hip
+    /// positions of each leg.  Present → solve the legs by planting feet; nil → the legs
+    /// swing open-loop.
+    struct LegRig {
+        var thigh: Float                 // |hip → knee|
+        var shin:  Float                 // |knee → foot/ankle|
+        var hipL:  SIMD3<Float>          // upper_leg_L rest position
+        var hipR:  SIMD3<Float>          // upper_leg_R rest position
+    }
+
     /// - marks:        path waypoints in order (world space), ≥ 2.
     /// - speed:        world units / second (> 0).
     /// - strideLength: distance covered by one full gait cycle (both feet step once).
@@ -27,6 +37,7 @@ struct GaitGenerator {
                          startTime: Double,
                          groundOffset: Float,
                          groupScale: SIMD3<Float>,
+                         legRig: LegRig? = nil,
                          availableJoints: Set<String>) -> Output {
 
         let spline = CatmullRom(points: marks)
@@ -64,6 +75,47 @@ struct GaitGenerator {
         let leanEps:  Float = max(0.02, total * 0.02)
         func yawAt(_ d: Float) -> Float {
             let t = spline.tangent(atDistance: min(max(d, 0), total)); return atan2(t.x, t.z)
+        }
+
+        // ── Foot-IK setup ──────────────────────────────────────────────────────────
+        // Each foot is planted at a fixed ground point through its stance, then arcs
+        // forward to the next plant during swing — the body rolls over the planted foot
+        // (no skating).  `duty` = fraction of the cycle a foot is planted; `rOffset` =
+        // the right leg's phase shift (½ cycle = alternating; 0 = both together, for hop).
+        let footIK = (legRig != nil && gait != .swim)
+        let duty:    Float
+        let rOffset: Float
+        switch gait {
+        case .run: duty = 0.40; rOffset = 0.5     // brief flight phase
+        case .hop: duty = 0.45; rOffset = 0.0     // both feet together
+        default:   duty = 0.62; rOffset = 0.5     // walk
+        }
+        let stepLift: Float = (legRig?.thigh ?? 0) * 0.45   // swing-foot lift, group-local
+
+        // World ground point where leg `offset`'s stance number `n` is planted, laterally
+        // offset by that leg's hip X so the foot lands under the hip.
+        func footfall(_ n: Float, offset: Float, hipX: Float) -> SIMD3<Float> {
+            let s  = min(max((n + offset + duty * 0.5) * strideLength, 0), total)
+            let p  = spline.point(atDistance: s)
+            let tg = spline.tangent(atDistance: s)
+            let perp = SIMD3<Float>(tg.z, 0, -tg.x)         // world "right" ≈ model local +X
+            return SIMD3<Float>(p.x, p.y, p.z) + perp * (hipX * groupScale.x)
+        }
+
+        // Analytic 2-bone IK in the leg's sagittal plane → (hip, knee) rotations about X,
+        // matching the rig's rest pose (foot straight down = both angles 0).  `tz`,`ty`
+        // are the foot target relative to the hip in group-local space.
+        func solve2Bone(a: Float, b: Float, tz: Float, ty: Float) -> (hip: Float, knee: Float) {
+            let qz = -tz, qy = -ty                          // measure from +Y (rest = down)
+            var d = (qz * qz + qy * qy).squareRoot()
+            d = max(abs(a - b) + 1e-3, min(a + b - 1e-3, d))
+            let gamma = atan2(qz, qy)
+            let cosB  = max(-1, min(1, (a * a + d * d - b * b) / (2 * a * d)))
+            let beta  = acos(cosB)
+            let phi   = gamma - beta                         // hip from down axis
+            let kz = a * sin(phi), ky = a * cos(phi)         // knee point
+            let psi = atan2(d * sin(gamma) - kz, d * cos(gamma) - ky)   // shin from down
+            return (phi, psi - phi)
         }
 
         for k in 0..<count {
@@ -107,10 +159,44 @@ struct GaitGenerator {
             rootKeys.append(TransformKeyframe(time: time, translation: bobbed,
                                               rotation: rotation, scale: groupScale))
 
+            // Foot-IK: solve each leg so its planted foot stays on the ground point and
+            // the body rolls over it.  Overrides the open-loop hip/knee for both legs.
+            var legAngles: [String: Float] = [:]
+            if footIK, let rig = legRig {
+                let mRoot = PathGenerator.makeTransform(translation: bobbed,
+                                                        rotation: rotation, scale: groupScale)
+                func legIK(offset: Float, hip: SIMD3<Float>) -> (Float, Float) {
+                    let legPhase = dist / strideLength - offset
+                    let n  = floor(legPhase)
+                    let fp = legPhase - n
+                    var target: SIMD3<Float>
+                    if fp < duty {                                  // stance: foot planted
+                        target = footfall(n, offset: offset, hipX: hip.x)
+                    } else {                                        // swing: arc to next plant
+                        let u = (fp - duty) / (1 - duty)
+                        let a3 = footfall(n,     offset: offset, hipX: hip.x)
+                        let b3 = footfall(n + 1, offset: offset, hipX: hip.x)
+                        let s  = smoothstep(u)
+                        target = a3 * (1 - s) + b3 * s
+                        target.y += stepLift * groupScale.y * sin(.pi * u)
+                    }
+                    // hip world → foot target relative to hip, back into group-local space.
+                    let hw  = mRoot * SIMD4<Float>(hip, 1)
+                    let rel = rotation.inverse.act(target - SIMD3<Float>(hw.x, hw.y, hw.z))
+                    let lz  = rel.z / groupScale.z, ly = rel.y / groupScale.y
+                    return solve2Bone(a: rig.thigh, b: rig.shin, tz: lz, ty: ly)
+                }
+                let (hL, kL) = legIK(offset: 0,       hip: rig.hipL)
+                let (hR, kR) = legIK(offset: rOffset, hip: rig.hipR)
+                legAngles = ["upper_leg_L": hL, "knee_L": kL,
+                             "upper_leg_R": hR, "knee_R": kR]
+            }
+
             // Limbs: local joint rotations, eased from/to the rest pose at the ends.
             let pose = GaitCycle.pose(gait, phase: phase, params)
             for j in present {
-                var q = pose[j] ?? identityQ
+                var q = legAngles[j].map { simd_quatf(angle: $0, axis: SIMD3<Float>(1, 0, 0)) }
+                        ?? (pose[j] ?? identityQ)
                 if rest > 0 { q = simd_slerp(q, identityQ, rest) }
                 limbKeys[j]?.append(TransformKeyframe(time: time, translation: .zero,
                                                       rotation: q, scale: SIMD3<Float>(1, 1, 1)))

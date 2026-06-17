@@ -31,6 +31,9 @@ final class GaitAnimatorState: ObservableObject {
     @Published var bobMul:   String = "1.0"
     /// Drop the model so its feet meet the marks (vs. its origin at the hips).
     @Published var plantFeet: Bool = true
+    /// Foot-IK: plant each foot on the ground and solve the legs so it doesn't skate
+    /// (the body rolls over the planted foot).  On by default; needs leg joints.
+    @Published var footLock: Bool = true
 
     /// Marks available to walk, plus which are selected (in this stored order).
     @Published var markList:      [ProbeMark] = []
@@ -146,6 +149,7 @@ struct GaitAnimatorPanel: View {
                     tuneRow("Arm",   $state.armMul)
                     tuneRow("Bob",   $state.bobMul)
                     Toggle("Plant feet on marks", isOn: $state.plantFeet)
+                    Toggle("Foot lock (IK)", isOn: $state.footLock)
                 }
                 .padding(4)
             }

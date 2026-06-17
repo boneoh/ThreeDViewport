@@ -1869,6 +1869,7 @@ final class ViewportView: MTKView {
                       speed: Float,
                       strideLength: Float,
                       autoStride: Bool,
+                      footLock: Bool,
                       startTime: Double,
                       plantFeet: Bool) -> [String] {
 
@@ -1896,7 +1897,7 @@ final class ViewportView: MTKView {
         // setting the root translation to a mark plants the feet there instead of the
         // hips.  Scaled by the group's Y scale.
         var groundOffset: Float = 0
-        if plantFeet {
+        if plantFeet || footLock {       // foot-IK needs the feet down on the ground marks
             var minY = Float.greatestFiniteMagnitude
             for i in groupPartIndices {
                 let o   = sceneManager.objects[i]
@@ -1925,10 +1926,30 @@ final class ViewportView: MTKView {
             }
         }
 
+        // Foot-IK rig: leg-segment lengths + rest hip positions (group-local), built only
+        // when foot-lock is on and the canonical leg joints are present (else legs swing
+        // open-loop).  Lengths from the left leg (assumed symmetric).
+        var legRig: GaitGenerator.LegRig? = nil
+        if footLock, gait != .swim,
+           let hL = partIndexByName["upper_leg_L"], let hR = partIndexByName["upper_leg_R"],
+           let kn = partIndexByName["knee_L"],
+           let ft = partIndexByName["foot_L"] ?? partIndexByName["ankle_L"] {
+            let hipLt = restWorld(hL).columns.3, hipRt = restWorld(hR).columns.3
+            let kneet = restWorld(kn).columns.3, foott = restWorld(ft).columns.3
+            let thigh = simd_length(SIMD3<Float>(hipLt.x - kneet.x, hipLt.y - kneet.y, hipLt.z - kneet.z))
+            let shin  = simd_length(SIMD3<Float>(kneet.x - foott.x, kneet.y - foott.y, kneet.z - foott.z))
+            if thigh > 1e-4, shin > 1e-4 {
+                legRig = GaitGenerator.LegRig(
+                    thigh: thigh, shin: shin,
+                    hipL: SIMD3<Float>(hipLt.x, hipLt.y, hipLt.z),
+                    hipR: SIMD3<Float>(hipRt.x, hipRt.y, hipRt.z))
+            }
+        }
+
         let out = GaitGenerator.generate(
             gait: gait, params: params, marks: markPositions, speed: speed,
             strideLength: effectiveStride, startTime: startTime, groundOffset: groundOffset,
-            groupScale: groupScale, availableJoints: Set(partIndexByName.keys))
+            groupScale: groupScale, legRig: legRig, availableJoints: Set(partIndexByName.keys))
         guard let firstRoot = out.rootKeys.first else { return out.missingJoints }
 
         let lo = firstRoot.time - 1e-6
