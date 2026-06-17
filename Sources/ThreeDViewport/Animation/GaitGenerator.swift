@@ -50,10 +50,12 @@ struct GaitGenerator {
 
         let identityQ = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
         let prone     = GaitCycle.bodyOrientation(gait)   // identity for non-swim
-        // Ease to a standing rest over a fixed TIME at the end (works for long and
-        // short paths alike), capped to the gait's own length.
-        let totalTime: Float = total / speed
-        let settleDur: Float = min(1.0, totalTime)        // seconds
+        // Ease INTO the gait from standing at the first mark, and back to standing at
+        // the last, over a fixed TIME window at each end (capped to half the gait so a
+        // short path still reaches a real middle).  `rest` = 1 at the ends → 0 mid-gait.
+        let totalTime:     Float = total / speed
+        let transitionDur: Float = min(1.0, totalTime * 0.5)   // seconds, each end
+        func smoothstep(_ x: Float) -> Float { let c = max(0, min(1, x)); return c * c * (3 - 2 * c) }
 
         for k in 0..<count {
             let f    = Float(k) / Float(count - 1)
@@ -63,33 +65,34 @@ struct GaitGenerator {
             let tan  = spline.tangent(atDistance: dist)
             let phase = (dist / strideLength).truncatingRemainder(dividingBy: 1)
 
-            // Every gait eases to a clean standing rest over the final `settleDur`
-            // seconds so it arrives upright and still on its feet at the last mark.
-            let remaining = (total - dist) / speed        // seconds left to the end
-            let u: Float  = (settleDur > 1e-4 && remaining < settleDur)
-                            ? (settleDur - remaining) / settleDur : 0
-            let settle = u * u * (3 - 2 * u)              // smoothstep 0→1
+            // Stand→walk at the start and walk→stand at the end.
+            let elapsed   = dist / speed                  // seconds since the first mark
+            let remaining = (total - dist) / speed        // seconds to the last mark
+            let easeIn = (transitionDur > 1e-4 && elapsed   < transitionDur)
+                         ? smoothstep((transitionDur - elapsed)   / transitionDur) : 0
+            let settle = (transitionDur > 1e-4 && remaining < transitionDur)
+                         ? smoothstep((transitionDur - remaining) / transitionDur) : 0
+            let rest = max(easeIn, settle)                // 1 = standing rest, 0 = full gait
 
             // Root: heading (yaw so +Z faces travel) composed with body orientation.
-            // Swim swims prone with its center at the mark (yOffset 0) then stands up
-            // (body → upright, yOffset → groundOffset) over the settle; upright gaits
-            // keep feet on the ground throughout.  The bob fades out so the body ends level.
+            // Swim swims prone with its center at the mark (yOffset 0) and stands at BOTH
+            // ends (body → upright, yOffset → groundOffset); upright gaits keep feet on
+            // the ground throughout.  The bob fades at the ends so the body stands level.
             let yaw      = atan2(tan.x, tan.z)
             let heading  = simd_quatf(angle: yaw, axis: SIMD3<Float>(0, 1, 0))
-            let body     = simd_slerp(prone, identityQ, settle)   // prone=identity for non-swim
+            let body     = simd_slerp(prone, identityQ, rest)     // prone=identity for non-swim
             let rotation = heading * body
-            let yOffset  = (gait == .swim) ? groundOffset * settle : groundOffset
-            let y        = pos.y + yOffset + GaitCycle.bob(gait, phase: phase, params) * (1 - settle)
+            let yOffset  = (gait == .swim) ? groundOffset * rest : groundOffset
+            let y        = pos.y + yOffset + GaitCycle.bob(gait, phase: phase, params) * (1 - rest)
             let bobbed   = SIMD3<Float>(pos.x, y, pos.z)
             rootKeys.append(TransformKeyframe(time: time, translation: bobbed,
                                               rotation: rotation, scale: groupScale))
 
-            // Limbs: local joint rotations (translation 0, scale 1 → pure joint swing),
-            // blended back to rest as the gait settles to standing.
+            // Limbs: local joint rotations, eased from/to the rest pose at the ends.
             let pose = GaitCycle.pose(gait, phase: phase, params)
             for j in present {
                 var q = pose[j] ?? identityQ
-                if settle > 0 { q = simd_slerp(q, identityQ, settle) }
+                if rest > 0 { q = simd_slerp(q, identityQ, rest) }
                 limbKeys[j]?.append(TransformKeyframe(time: time, translation: .zero,
                                                       rotation: q, scale: SIMD3<Float>(1, 1, 1)))
             }
