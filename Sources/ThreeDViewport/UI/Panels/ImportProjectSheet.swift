@@ -21,6 +21,9 @@ final class ImportProjectOptions: ObservableObject {
     /// objects so they stay EDITABLE (and run to the host timeline's end).  On by
     /// default so the imported motion is editable in the host project.
     @Published var makeSpinEditable: Bool = true
+    /// After importing, open the Glue dialog pre-filled with the imported items so they
+    /// can be bound into one envelope.  On by default.
+    @Published var glueImported: Bool = true
     /// When the source has both In/Out marks, import only that slice (remapped so
     /// the source In lands at `insertTime`).  Defaults on when a range is available.
     @Published var useSourceInOut: Bool
@@ -108,6 +111,7 @@ struct ImportProjectSheet: View {
             Toggle("Include lights", isOn: $options.includeLights)
             Toggle("Include fog & particles", isOn: $options.includeEffects)
             Toggle("Make spin/orbit editable (extends to end)", isOn: $options.makeSpinEditable)
+            Toggle("Glue imported items (opens the Glue dialog)", isOn: $options.glueImported)
 
             if let r = options.sourceInOut {
                 Toggle("Use source In/Out range", isOn: $options.useSourceInOut)

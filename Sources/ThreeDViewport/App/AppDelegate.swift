@@ -1686,6 +1686,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             self.timelineEditorWC?.updateWindowHeight()
             viewport.renderer?.invalidateAnimationCache()
             print("[DEBUG] AppDelegate: imported project " + url.lastPathComponent)
+
+            // Opt-in: open the Glue dialog pre-filled with the just-imported items so
+            // the user can bind them into one envelope (anchor + name editable; Cancel
+            // leaves them imported, ungrouped).
+            if options.glueImported {
+                let newBundles = Set(viewport.sceneManager.importBundleSources.keys)
+                    .subtracting(bundlesBefore)
+                if !newBundles.isEmpty {
+                    self.presentGlueDialog(preselectBundles: newBundles,
+                                           defaultName: url.deletingPathExtension().lastPathComponent)
+                }
+            }
         }
     }
 
@@ -5165,7 +5177,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     // MARK: - Glue (envelopes)
 
-    @objc private func glueObjects(_ sender: Any) {
+    @objc private func glueObjects(_ sender: Any) { presentGlueDialog() }
+
+    /// Opens the Glue Objects dialog.  When `preselectBundles` is non-empty, candidates
+    /// belonging to those import bundles are pre-checked and `defaultName` seeds the
+    /// envelope name field — used by Import Project's "Glue imported items" so the user
+    /// just confirms the anchor + name.
+    private func presentGlueDialog(preselectBundles: Set<Int> = [], defaultName: String? = nil) {
         guard let scene = viewportView?.sceneManager else { return }
         let roots = scene.rootObjectIndicesSorted.filter { !scene.objects[$0].isEnvelope }
         guard roots.count >= 2 else { return }
@@ -5191,15 +5209,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         candidates.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         guard candidates.count >= 2 else { return }
 
-        // Pre-select the candidate that owns the current selection.
-        let sel = scene.selectedIndex
         var preselected = Set<Int>()
-        if sel >= 0, sel < scene.objects.count {
-            let selGid = scene.objects[sel].groupID
-            if let owner = candidates.first(where: { c in
-                if let gid = candidateGroup[c.id] { return gid == selGid }
-                return c.id == sel
-            }) { preselected.insert(owner.id) }
+        if !preselectBundles.isEmpty {
+            // Import flow: pre-check candidates belonging to the just-imported bundle(s).
+            func bundleOf(_ c: GlueOptions.Candidate) -> Int? {
+                if let gid = candidateGroup[c.id] {
+                    return scene.objects.first { $0.groupID == gid }?.importBundleID
+                }
+                guard c.id >= 0, c.id < scene.objects.count else { return nil }
+                return scene.objects[c.id].importBundleID
+            }
+            for c in candidates where bundleOf(c).map({ preselectBundles.contains($0) }) ?? false {
+                preselected.insert(c.id)
+            }
+        } else {
+            // Menu flow: pre-select the candidate that owns the current selection.
+            let sel = scene.selectedIndex
+            if sel >= 0, sel < scene.objects.count {
+                let selGid = scene.objects[sel].groupID
+                if let owner = candidates.first(where: { c in
+                    if let gid = candidateGroup[c.id] { return gid == selGid }
+                    return c.id == sel
+                }) { preselected.insert(owner.id) }
+            }
         }
         let anchor = preselected.first ?? candidates[0].id
         let envCount = scene.objects.filter { $0.isEnvelope }.count
@@ -5208,7 +5240,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             candidates: candidates,
             selected:   preselected,
             anchor:     anchor,
-            name:       "Envelope \(envCount + 1)"
+            name:       defaultName ?? "Envelope \(envCount + 1)"
         )
 
         let alert = NSAlert()
