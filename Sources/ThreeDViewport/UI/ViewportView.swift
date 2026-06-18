@@ -342,6 +342,37 @@ final class ViewportView: MTKView {
                                                     elevationDeg: elDeg)
             self.onCameraEdited?()
         }
+        // ── Camera management (Phase 1b): select active / add / delete / capture ──
+        cameraPanelState.onSelectCamera = { [weak self] i in
+            guard let self else { return }
+            self.activateCamera(i)
+            self.syncCameraListToPanel()
+            self.refreshCameraPanelState()   // show the newly-active camera's pose
+            self.needsDisplay = true
+            self.onCameraEdited?()
+        }
+        cameraPanelState.onAddCamera = { [weak self] in
+            guard let self else { return }
+            self.addCamera()
+            self.syncCameraListToPanel()
+            self.needsDisplay = true
+            self.onCameraEdited?()
+        }
+        cameraPanelState.onDeleteCamera = { [weak self] in
+            guard let self else { return }
+            self.deleteCamera(at: self.activeCameraIndex)
+            self.syncCameraListToPanel()
+            self.refreshCameraPanelState()
+            self.needsDisplay = true
+            self.onCameraEdited?()
+        }
+        cameraPanelState.onCaptureDirector = { [weak self] in
+            guard let self else { return }
+            self.setActiveCameraToDirector()
+            self.refreshCameraPanelState()
+            self.needsDisplay = true
+            self.onCameraEdited?()
+        }
 
         // Sync renderSettings → renderer whenever toggles change
         colorModeCancellable = renderSettings.$colorMode.sink { [weak self] value in
@@ -783,12 +814,9 @@ final class ViewportView: MTKView {
         s.isLocked      = cameraLocked
     }
 
-    /// Makes camera `i` the active one: stashes the current live state into its slot,
-    /// then loads slot `i` into the live controller.  (Used by add/delete + cuts in 1b/1c.)
-    func activateCamera(_ i: Int) {
+    /// Loads camera slot `i` into the live controller (no capture of the current one).
+    private func loadCameraIntoController(_ i: Int) {
         guard cameras.indices.contains(i) else { return }
-        captureActiveCamera()
-        activeCameraIndex = i
         let s = cameras[i]
         camera.yaw           = s.yaw
         camera.pitch         = s.pitch
@@ -797,6 +825,70 @@ final class ViewportView: MTKView {
         camera.fovYRadians   = s.fovYRadians
         camera.keyframeTrack = s.keyframeTrack
         cameraLocked         = s.isLocked
+    }
+
+    /// Makes camera `i` the active one: stashes the current live state into its slot,
+    /// then loads slot `i` into the live controller.
+    func activateCamera(_ i: Int) {
+        guard cameras.indices.contains(i), i != activeCameraIndex else {
+            if cameras.indices.contains(i) { loadCameraIntoController(i) }   // re-sync same index
+            return
+        }
+        captureActiveCamera()
+        activeCameraIndex = i
+        loadCameraIntoController(i)
+    }
+
+    /// Adds a new camera starting from the current view, and makes it active.
+    func addCamera() {
+        captureActiveCamera()
+        let cam = SceneCamera(name: uniqueCameraName(),
+                              yaw: camera.yaw, pitch: camera.pitch, distance: camera.distance,
+                              target: camera.target, fovYRadians: camera.fovYRadians)
+        cameras.append(cam)
+        activeCameraIndex = cameras.count - 1
+        loadCameraIntoController(activeCameraIndex)   // same pose → no view jump
+    }
+
+    /// Deletes camera `i` (never the last one).  If the active camera is removed, the
+    /// nearest remaining one becomes active.
+    func deleteCamera(at i: Int) {
+        guard cameras.count > 1, cameras.indices.contains(i) else { return }
+        let wasActive = (i == activeCameraIndex)
+        cameras.remove(at: i)
+        if wasActive {
+            activeCameraIndex = min(i, cameras.count - 1)
+            loadCameraIntoController(activeCameraIndex)
+        } else if i < activeCameraIndex {
+            activeCameraIndex -= 1
+        }
+    }
+
+    /// Sets the active camera's framing to the Director free-view's current pose.
+    func setActiveCameraToDirector() {
+        camera.yaw         = director.yaw
+        camera.pitch       = director.pitch
+        camera.distance    = director.distance
+        camera.target      = director.target
+        camera.fovYRadians = director.fovYRadians
+        captureActiveCamera()
+    }
+
+    /// "Camera N" not already in use.
+    private func uniqueCameraName() -> String {
+        let used = Set(cameras.map { $0.name })
+        var n = cameras.count + 1
+        while used.contains("Camera \(n)") { n += 1 }
+        return "Camera \(n)"
+    }
+
+    /// Pushes the camera list + active index into the Camera panel (cheap, guarded).
+    func syncCameraListToPanel() {
+        let names = cameras.map { $0.name }
+        if cameraPanelState.cameraNames != names { cameraPanelState.cameraNames = names }
+        if cameraPanelState.activeCameraIndex != activeCameraIndex {
+            cameraPanelState.activeCameraIndex = activeCameraIndex
+        }
     }
 
     /// True when the active edit target (current control mode) is a locked track —
@@ -2652,6 +2744,7 @@ final class ViewportView: MTKView {
         // lessly and races that thread.
         // Lock state is cheap and must track the padlock even mid-play/export.
         if cameraPanelState.isLocked != cameraLocked { cameraPanelState.isLocked = cameraLocked }
+        syncCameraListToPanel()   // keep the camera selector current (cheap, guarded)
         guard !timeline.isPlaying, activeExporter == nil else { return }
         let fl = 12.0 / tan(camera.fovYRadians / 2)
         cameraPanelState.refresh(position:    camera.eyePosition,

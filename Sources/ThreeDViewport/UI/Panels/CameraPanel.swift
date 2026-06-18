@@ -43,6 +43,17 @@ final class CameraPanelState: ObservableObject {
     /// editing controls.
     @Published var isLocked: Bool = false
 
+    // ── Cameras (Phase 1b) ──────────────────────────────────────────────────────
+    /// Names of all scene cameras + which is active, mirrored from the ViewportView.
+    @Published var cameraNames:       [String] = ["Camera 1"]
+    @Published var activeCameraIndex: Int      = 0
+    /// Management callbacks (wired by ViewportView): pick active / add / delete /
+    /// set the active camera to the Director free-view's framing.
+    var onSelectCamera:    ((Int) -> Void)?
+    var onAddCamera:       (() -> Void)?
+    var onDeleteCamera:    (() -> Void)?
+    var onCaptureDirector: (() -> Void)?
+
     /// Propagate Position / Target / FOV edits back to the active camera (wired by ViewportView).
     var onPositionEdited:    ((SIMD3<Float>) -> Void)?
     var onTargetEdited:      ((SIMD3<Float>) -> Void)?
@@ -137,6 +148,31 @@ struct CameraPanel: View {
                     Spacer()
                 }
                 .padding(.bottom, 10)
+
+                Divider().padding(.bottom, 14)
+
+                // ── Cameras (select active / add / delete / capture) ──────────
+                HStack(spacing: 6) {
+                    Picker("", selection: Binding(
+                        get: { min(state.activeCameraIndex, max(0, state.cameraNames.count - 1)) },
+                        set: { state.onSelectCamera?($0) })) {
+                        ForEach(Array(state.cameraNames.enumerated()), id: \.offset) { idx, name in
+                            Text(name).tag(idx)
+                        }
+                    }
+                    .labelsHidden()
+                    Button { state.onAddCamera?() } label: { Image(systemName: "plus") }
+                        .help("Add a camera (starts from the current view)")
+                    Button { state.onDeleteCamera?() } label: { Image(systemName: "minus") }
+                        .help("Delete the selected camera")
+                        .disabled(state.cameraNames.count <= 1)
+                }
+                .padding(.bottom, 6)
+                Button { state.onCaptureDirector?() } label: {
+                    Label("Set to Director View", systemImage: "scope")
+                }
+                .help("Aim this camera at the Director free-view's current framing")
+                .padding(.bottom, 12)
 
                 Divider().padding(.bottom, 14)
 
