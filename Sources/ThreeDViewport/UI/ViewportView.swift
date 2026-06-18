@@ -3130,6 +3130,14 @@ final class ViewportView: MTKView {
     /// cycle and Timeline-row click use (so the dropdowns / HUD / grid all follow).
     private func selectByPick(objectIndex i: Int, isolatePart: Bool) {
         guard i >= 0, i < sceneManager.objects.count else { return }
+        // Plain click on a glued member selects the whole glued unit (its envelope), so
+        // the assembly moves as one; Option-click drills past it to the part/model under
+        // the cursor (the behavior below).
+        if !isolatePart, let env = envelopeFor(objectIndex: i) {
+            sceneManager.selectedIndex = env
+            setControlMode(.object)
+            return
+        }
         let obj = sceneManager.objects[i]
         if let gid = obj.groupID, !isolatePart {
             // Plain click on a multi-part model → select it as a unit in Model mode.
@@ -3143,6 +3151,23 @@ final class ViewportView: MTKView {
             sceneManager.selectedIndex = i
             setControlMode(.object)
         }
+    }
+
+    /// The envelope (glued unit) that object `i` belongs to, or nil if it isn't glued.
+    /// Handles glued GROUP members (via `groupEnvelopeParent`) and directly-parented
+    /// members (nearest `isEnvelope` ancestor up the `parentIndex` chain).
+    private func envelopeFor(objectIndex i: Int) -> Int? {
+        let objs = sceneManager.objects
+        guard i >= 0, i < objs.count else { return nil }
+        if let gid = objs[i].groupID, let link = sceneManager.groupEnvelopeParent[gid] {
+            return link.env
+        }
+        var p = objs[i].parentIndex
+        while let pp = p, pp >= 0, pp < objs.count {
+            if objs[pp].isEnvelope { return pp }
+            p = objs[pp].parentIndex
+        }
+        return nil
     }
 
     // MARK: - Right Mouse Input
