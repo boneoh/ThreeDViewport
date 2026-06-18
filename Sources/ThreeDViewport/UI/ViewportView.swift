@@ -33,6 +33,11 @@ final class ViewportView: MTKView {
     // Owned scene objects
     let sceneManager:     SceneManager
     let camera:           CameraController
+    /// All scene cameras (Phase 1).  The live `camera` controller above edits/renders the
+    /// ACTIVE one; the others hold their state until activated.  Phase 1a: exactly one
+    /// ("Camera 1"), identical to the single-camera app.
+    var cameras:           [SceneCamera] = [SceneCamera(name: "Camera 1")]
+    var activeCameraIndex: Int = 0
     /// Director's-POV camera used in Scene mode (read-only view of the whole
     /// scene from a fly-cam position above and behind the recording camera).
     /// Independent state — never animated, never saved with the project.
@@ -397,6 +402,8 @@ final class ViewportView: MTKView {
         camera.distance = 5.0
         camera.target   = SIMD3<Float>(0, 0, 0)
         camera.keyframeTrack = nil
+        cameras           = [SceneCamera(name: "Camera 1")]   // Phase 1: reset camera list
+        activeCameraIndex = 0
         feedbackProcessor.reset()
         syncOverlayState()
         print("[DEBUG] ViewportView: new project — scene cleared")
@@ -758,6 +765,38 @@ final class ViewportView: MTKView {
         for i in lightManager.lights.indices { lightManager.lights[i].isLocked = locked }
         particleManager.emitters.forEach { $0.isLocked = locked }
         sceneManager.objects.forEach { $0.isLocked = locked }
+    }
+
+    // MARK: - Cameras (Phase 1)
+
+    /// Copies the live camera controller's pose + track into the active camera slot.
+    /// Call before saving or switching cameras so the slot reflects current edits.
+    func captureActiveCamera() {
+        guard cameras.indices.contains(activeCameraIndex) else { return }
+        let s = cameras[activeCameraIndex]
+        s.yaw           = camera.yaw
+        s.pitch         = camera.pitch
+        s.distance      = camera.distance
+        s.target        = camera.target
+        s.fovYRadians   = camera.fovYRadians
+        s.keyframeTrack = camera.keyframeTrack
+        s.isLocked      = cameraLocked
+    }
+
+    /// Makes camera `i` the active one: stashes the current live state into its slot,
+    /// then loads slot `i` into the live controller.  (Used by add/delete + cuts in 1b/1c.)
+    func activateCamera(_ i: Int) {
+        guard cameras.indices.contains(i) else { return }
+        captureActiveCamera()
+        activeCameraIndex = i
+        let s = cameras[i]
+        camera.yaw           = s.yaw
+        camera.pitch         = s.pitch
+        camera.distance      = s.distance
+        camera.target        = s.target
+        camera.fovYRadians   = s.fovYRadians
+        camera.keyframeTrack = s.keyframeTrack
+        cameraLocked         = s.isLocked
     }
 
     /// True when the active edit target (current control mode) is a locked track —

@@ -264,6 +264,61 @@ final class ProjectFile {
         }
     }
 
+    // MARK: - Camera keyframe (de)serialization (shared by the legacy fields + slots)
+
+    static func encodeCameraKeyframes(_ track: CameraKeyframeTrack?) -> [CameraKeyframeData] {
+        (track?.keyframes ?? []).map { kf in
+            CameraKeyframeData(
+                time:               kf.time,
+                yaw:                kf.yaw,
+                pitch:              kf.pitch,
+                distance:           kf.distance,
+                targetX:            kf.target.x,
+                targetY:            kf.target.y,
+                targetZ:            kf.target.z,
+                fov:                kf.fov,
+                followTarget:       kf.followTargetName,
+                followYawOffset:    kf.followYawOffset,
+                followPitchOffset:  kf.followPitchOffset,
+                targetOffset:       [kf.targetOffset.x, kf.targetOffset.y, kf.targetOffset.z],
+                followForwardLocal: kf.followForwardLocal.map { [$0.x, $0.y, $0.z] },
+                followUpLocal:      kf.followUpLocal     .map { [$0.x, $0.y, $0.z] })
+        }
+    }
+
+    static func decodeCameraTrack(_ kfs: [CameraKeyframeData],
+                                  easingMode: Int, fallbackFov: Float) -> CameraKeyframeTrack? {
+        guard !kfs.isEmpty else { return nil }
+        let track = CameraKeyframeTrack()
+        for kfData in kfs {
+            let savedOffset = kfData.targetOffset ?? [0, 0, 0]
+            let targetOff   = SIMD3<Float>(savedOffset.count >= 3 ? savedOffset[0] : 0,
+                                           savedOffset.count >= 3 ? savedOffset[1] : 0,
+                                           savedOffset.count >= 3 ? savedOffset[2] : 0)
+            let fwdLocal: SIMD3<Float>? = kfData.followForwardLocal.flatMap {
+                $0.count >= 3 ? SIMD3<Float>($0[0], $0[1], $0[2]) : nil
+            }
+            let upLocal: SIMD3<Float>? = kfData.followUpLocal.flatMap {
+                $0.count >= 3 ? SIMD3<Float>($0[0], $0[1], $0[2]) : nil
+            }
+            track.addKeyframe(CameraKeyframe(
+                time:               kfData.time,
+                yaw:                kfData.yaw,
+                pitch:              kfData.pitch,
+                distance:           kfData.distance,
+                target:             SIMD3<Float>(kfData.targetX, kfData.targetY, kfData.targetZ),
+                fov:                kfData.fov ?? fallbackFov,
+                followTargetName:   kfData.followTarget,
+                followYawOffset:    kfData.followYawOffset,
+                followPitchOffset:  kfData.followPitchOffset,
+                targetOffset:       targetOff,
+                followForwardLocal: fwdLocal,
+                followUpLocal:      upLocal))
+        }
+        track.easingMode = EasingMode(rawValue: easingMode) ?? .linear
+        return track
+    }
+
     // MARK: - Ranged import (slice the source's [in, out])
 
     /// Rewrites every keyframe array in `data` to the `[lo, hi]` slice, boundary-
@@ -628,23 +683,20 @@ final class ProjectFile {
         }
 
         // ── Camera keyframes (Phase 5) ────────────────────────────────────────
-        let cameraKfData: [CameraKeyframeData] = (cam.keyframeTrack?.keyframes ?? []).map { kf in
-            CameraKeyframeData(
-                time:               kf.time,
-                yaw:                kf.yaw,
-                pitch:              kf.pitch,
-                distance:           kf.distance,
-                targetX:            kf.target.x,
-                targetY:            kf.target.y,
-                targetZ:            kf.target.z,
-                fov:                kf.fov,
-                followTarget:       kf.followTargetName,
-                followYawOffset:    kf.followYawOffset,
-                followPitchOffset:  kf.followPitchOffset,
-                targetOffset:       [kf.targetOffset.x, kf.targetOffset.y, kf.targetOffset.z],
-                followForwardLocal: kf.followForwardLocal.map { [$0.x, $0.y, $0.z] },
-                followUpLocal:      kf.followUpLocal     .map { [$0.x, $0.y, $0.z] }
-            )
+        let cameraKfData = encodeCameraKeyframes(cam.keyframeTrack)
+
+        // ── Cameras (Phase 1) — every scene camera + which is active.  Sync the live
+        //    controller into its slot first so the active camera is current. ──────────
+        vp.captureActiveCamera()
+        let cameraSlotData: [CameraSlotData] = vp.cameras.map { c in
+            CameraSlotData(
+                name:   c.name,
+                camera: CameraData(yaw: c.yaw, pitch: c.pitch, distance: c.distance,
+                                   targetX: c.target.x, targetY: c.target.y, targetZ: c.target.z,
+                                   fov: c.fovYRadians),
+                keyframes:  encodeCameraKeyframes(c.keyframeTrack),
+                easingMode: (c.keyframeTrack?.easingMode ?? .linear).rawValue,
+                isLocked:   c.isLocked)
         }
 
         // ── Feedback settings (v5) ────────────────────────────────────────────
@@ -929,7 +981,9 @@ final class ProjectFile {
                                   transform:    sp.map { encodeMatrix($0.transform) } ?? [])
             },
             cameraLocked:        vp.cameraLocked,
-            fogLocked:           vp.fogLocked
+            fogLocked:           vp.fogLocked,
+            cameraSlots:         cameraSlotData,
+            activeCameraIndex:   vp.activeCameraIndex
         )
     }
 
@@ -1027,42 +1081,11 @@ final class ProjectFile {
         let effectiveStaticFov: Float = data.camera.fov ?? defaultFovRadians
 
         // ── Camera keyframes (Phase 5) — restored before model load ───────────
-        if data.cameraKeyframes.isEmpty {
-            vp.camera.keyframeTrack = nil
-            print("[DEBUG] ProjectFile: no camera keyframes in project")
-        } else {
-            let camTrack = CameraKeyframeTrack()
-            for kfData in data.cameraKeyframes {
-                let savedOffset = kfData.targetOffset ?? [0, 0, 0]
-                let targetOff   = SIMD3<Float>(savedOffset.count >= 3 ? savedOffset[0] : 0,
-                                               savedOffset.count >= 3 ? savedOffset[1] : 0,
-                                               savedOffset.count >= 3 ? savedOffset[2] : 0)
-                let fwdLocal: SIMD3<Float>? = kfData.followForwardLocal.flatMap {
-                    $0.count >= 3 ? SIMD3<Float>($0[0], $0[1], $0[2]) : nil
-                }
-                let upLocal: SIMD3<Float>? = kfData.followUpLocal.flatMap {
-                    $0.count >= 3 ? SIMD3<Float>($0[0], $0[1], $0[2]) : nil
-                }
-                camTrack.addKeyframe(CameraKeyframe(
-                    time:               kfData.time,
-                    yaw:                kfData.yaw,
-                    pitch:              kfData.pitch,
-                    distance:           kfData.distance,
-                    target:             SIMD3<Float>(kfData.targetX, kfData.targetY, kfData.targetZ),
-                    fov:                kfData.fov ?? effectiveStaticFov,
-                    followTargetName:   kfData.followTarget,
-                    followYawOffset:    kfData.followYawOffset,
-                    followPitchOffset:  kfData.followPitchOffset,
-                    targetOffset:       targetOff,
-                    followForwardLocal: fwdLocal,
-                    followUpLocal:      upLocal
-                ))
-            }
-            camTrack.easingMode = EasingMode(rawValue: data.cameraEasingMode) ?? .linear
-            vp.camera.keyframeTrack = camTrack
-            print("[DEBUG] ProjectFile: restored " + String(data.cameraKeyframes.count)
-                + " camera keyframes")
-        }
+        vp.camera.keyframeTrack = decodeCameraTrack(data.cameraKeyframes,
+                                                    easingMode: data.cameraEasingMode,
+                                                    fallbackFov: effectiveStaticFov)
+        print("[DEBUG] ProjectFile: restored " + String(data.cameraKeyframes.count)
+            + " camera keyframes")
 
         // ── Models ────────────────────────────────────────────────────────────
         // v3: modelPaths array.  v1/v2 fallback: single modelPath string.
@@ -1273,6 +1296,31 @@ final class ProjectFile {
         // restore their own isLocked above).
         vp.cameraLocked = data.cameraLocked
         vp.fogLocked    = data.fogLocked
+
+        // ── Cameras (Phase 1) — rebuild the camera list.  New files carry cameraSlots;
+        //    older files migrate the single (legacy) camera just restored to "Camera 1".
+        if let slots = data.cameraSlots, !slots.isEmpty {
+            vp.cameras = slots.map { s in
+                let fov = s.camera.fov ?? defaultFovRadians
+                return SceneCamera(
+                    name:          s.name,
+                    yaw:           s.camera.yaw,
+                    pitch:         s.camera.pitch,
+                    distance:      s.camera.distance,
+                    target:        SIMD3<Float>(s.camera.targetX, s.camera.targetY, s.camera.targetZ),
+                    fovYRadians:   fov,
+                    keyframeTrack: decodeCameraTrack(s.keyframes, easingMode: s.easingMode, fallbackFov: fov),
+                    isLocked:      s.isLocked)
+            }
+            vp.activeCameraIndex = max(0, min(data.activeCameraIndex, vp.cameras.count - 1))
+        } else {
+            vp.cameras           = [SceneCamera(name: "Camera 1")]
+            vp.activeCameraIndex = 0
+        }
+        // Mirror the live (just-restored) camera into the active slot so the slot shares
+        // the live pose + track (the active slot == the legacy fields by construction).
+        vp.captureActiveCamera()
+
         vp.probeConfig.selectedMarkIndex = nil
         // v28: hot-reload the Lighting HDR from the saved path (bundled if missing).
         vp.renderSettings.lightingHDRPath = data.lightingHDRPath

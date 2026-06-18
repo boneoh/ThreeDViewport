@@ -86,6 +86,11 @@ struct ProjectData: Codable {
     /// their own isLocked).  Default false → older files load unlocked.
     var cameraLocked:           Bool = false
     var fogLocked:              Bool = false
+    /// Phase 1 multi-camera: every scene camera (name + pose + keyframes), plus which is
+    /// active.  Absent in older files → loader migrates the legacy single camera to one
+    /// "Camera 1" slot.
+    var cameraSlots:            [CameraSlotData]? = nil
+    var activeCameraIndex:      Int = 0
 
     // MARK: - Memberwise init (required because we define init(from:) below)
 
@@ -127,7 +132,9 @@ struct ProjectData: Codable {
          orbitRateSchedules:  [OrbitRateScheduleData] = [],
          importBundles:       [BundleData]            = [],
          cameraLocked:        Bool                    = false,
-         fogLocked:           Bool                    = false) {
+         fogLocked:           Bool                    = false,
+         cameraSlots:         [CameraSlotData]?       = nil,
+         activeCameraIndex:   Int                     = 0) {
         self.version             = version
         self.modelPath           = modelPath
         self.modelPaths          = modelPaths
@@ -167,6 +174,8 @@ struct ProjectData: Codable {
         self.importBundles       = importBundles
         self.cameraLocked        = cameraLocked
         self.fogLocked           = fogLocked
+        self.cameraSlots         = cameraSlots
+        self.activeCameraIndex   = activeCameraIndex
     }
 
     // MARK: - Custom decoder
@@ -220,6 +229,8 @@ struct ProjectData: Codable {
         importBundles       = (try? c.decode([BundleData].self,            forKey: .importBundles))      ?? []
         cameraLocked        = (try? c.decode(Bool.self,                     forKey: .cameraLocked))       ?? false
         fogLocked           = (try? c.decode(Bool.self,                     forKey: .fogLocked))          ?? false
+        cameraSlots         =  try? c.decode([CameraSlotData].self,         forKey: .cameraSlots)
+        activeCameraIndex   = (try? c.decode(Int.self,                      forKey: .activeCameraIndex))  ?? 0
     }
 }
 
@@ -732,6 +743,16 @@ struct CameraData: Codable {
         self.targetZ  = targetZ
         self.fov      = fov
     }
+}
+
+/// One camera's persisted state (Phase 1 multi-camera).  `ProjectData.cameraSlots` holds
+/// every camera; the active one also mirrors the legacy single-camera fields for back-compat.
+struct CameraSlotData: Codable {
+    var name:       String
+    var camera:     CameraData
+    var keyframes:  [CameraKeyframeData] = []
+    var easingMode: Int  = 0
+    var isLocked:   Bool = false
 }
 
 struct ObjectData: Codable {
