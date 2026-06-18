@@ -5686,14 +5686,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             dst.emissiveFactor   = src.emissiveFactor
             dst.emissiveStrength = src.emissiveStrength
         }
+        // Carry the source's per-object Inspector state.  Display mode (smooth/flat) needs
+        // applyNormalMode to rebuild the normals, not just the flag.  `isLocked` is left at
+        // its default so a fresh duplicate stays editable.
+        func copyState(from src: SceneObject, to dst: SceneObject) {
+            if src.normalMode != .auto { viewport.applyNormalMode(src.normalMode, toTargets: [dst]) }
+            dst.normalMode        = src.normalMode
+            dst.objectClass       = src.objectClass
+            dst.feedbackEnabled   = src.feedbackEnabled
+            dst.occludeWhenHidden = src.occludeWhenHidden
+            dst.isVisible         = src.isVisible
+        }
         if sourceGid != nil {
             var srcByName: [String: SceneObject] = [:]
             for p in sourceParts { srcByName[p.name] = p }
-            for n in newObjects where srcByName[n.name] != nil {
-                carry(from: srcByName[n.name]!.material, to: &n.material)
+            for n in newObjects {
+                guard let src = srcByName[n.name] else { continue }
+                carry(from: src.material, to: &n.material)
+                copyState(from: src, to: n)
             }
         } else if let n = newObjects.first {
             carry(from: sel.material, to: &n.material)
+            copyState(from: sel, to: n)
         }
 
         // 2. Place the copy so its visual (bounding-box) center lands on the bake Probe,
