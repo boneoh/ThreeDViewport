@@ -62,6 +62,8 @@ final class ModelInspectorState: ObservableObject {
     var onRevealInFinder: (() -> Void)?
     /// Creates a Favorite Models alias for the current selection (wired by AppDelegate).
     var onAddToFavorites: (() -> Void)?
+    /// Opens the Add Position Mark dialog at the current probe position (wired by AppDelegate).
+    var onAddMark: (() -> Void)?
     /// Returns whether the given selection is eligible for "Add to Favorites".
     /// Wired by AppDelegate; consulted in update() to set `canAddToFavorites`.
     var favoritesEligible: (([SceneObject]) -> Bool)?

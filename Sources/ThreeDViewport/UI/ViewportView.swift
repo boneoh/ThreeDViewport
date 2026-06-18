@@ -1099,6 +1099,12 @@ final class ViewportView: MTKView {
         return SIMD3<Float>(w.columns.3.x, w.columns.3.y, w.columns.3.z)
     }
 
+    /// World-space origin of the currently selected object (folding its group transform),
+    /// or nil if nothing is selected.  Used by the Model Inspector's "Add Mark".
+    func selectedObjectWorldPosition() -> SIMD3<Float>? {
+        sceneManager.selectedObject.map { objectWorldOrigin($0) }
+    }
+
     /// World-space delta for a depth dolly of a target at world `p` by `move` (signed)
     /// along the eye→target ray — clamped so the target can't reach the eye (a NEAR
     /// limit; crossing it flips behind the camera and "jumps") nor run past the ±100

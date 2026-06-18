@@ -160,6 +160,16 @@ struct ModelInspectorPanel: View {
             .help("Create an alias to this model in your Favorite Models folder and "
                 + "point the project at it.")
 
+            Button {
+                state.onAddMark?()
+            } label: {
+                Label("Add Mark", systemImage: "mappin.and.ellipse")
+                    .font(.caption)
+            }
+            .buttonStyle(.bordered)
+            .disabled(!state.hasSelection)
+            .help("Add a position mark at the selected object's current position.")
+
             if state.partCount > 1 {
                 HStack(spacing: 6) {
                     Text("Parts")

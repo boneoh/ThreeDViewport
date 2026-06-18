@@ -3023,6 +3023,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             self?.favoritesEligibility(for: targets) ?? false
         }
         state.onAddToFavorites = { [weak self] in self?.addSelectedToFavorites() }
+        state.onAddMark        = { [weak self] in
+            guard let pos = self?.viewportView?.selectedObjectWorldPosition() else { return }
+            self?.promptForMark(at: pos)
+        }
 
         let panel = KeyForwardingPanel(
             contentRect: NSRect(x: 0, y: 0, width: 352, height: 440),
@@ -3123,14 +3127,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     // MARK: - Probe marks
 
-    /// Prompts for a name + colour, then saves the current probe position as a mark.
-    private func promptForMark() {
+    /// Prompts for a name + colour, then saves a mark at `markPosition` — defaults to the
+    /// probe's current position; the Model Inspector passes the selected object's position.
+    private func promptForMark(at markPosition: SIMD3<Float>? = nil) {
         guard let viewport = viewportView else { return }
         let probe = viewport.probeConfig
+        let pos   = markPosition ?? probe.position
 
         let alert = NSAlert()
         alert.messageText     = "Mark Position"
-        alert.informativeText = "Name this mark and choose a colour. It's saved at the probe's current position."
+        alert.informativeText = "Name this mark and choose a colour. It's saved at "
+            + (markPosition == nil ? "the probe's current position." : "the object's current position.")
         alert.addButton(withTitle: "Add")
         alert.addButton(withTitle: "Cancel")
 
@@ -3159,12 +3166,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let trimmed = nameField.stringValue.trimmingCharacters(in: .whitespaces)
         let name    = trimmed.isEmpty ? "Mark \(probe.marks.count + 1)" : trimmed
 
-        probe.marks.append(ProbeMark(name: name, position: probe.position, color: color))
+        probe.marks.append(ProbeMark(name: name, position: pos, color: color))
         probe.selectedMarkIndex = probe.marks.count - 1
         probe.marksVisible = true   // reveal so the new mark is visible immediately
         markDirty()
         syncGaitPanelToProject()    // keep the Gait panel's mark list current
-        print("[DEBUG] AppDelegate: added mark '\(name)' at \(probe.position)")
+        print("[DEBUG] AppDelegate: added mark '\(name)' at \(pos)")
     }
 
     /// Toggles visibility of all marks (K key / menu).
