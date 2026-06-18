@@ -85,6 +85,7 @@ Each panel has its own page under [`docs/`](docs/) with full controls, keystroke
 | Path Animator — Linear | Window → Path Animator → Linear… | [Linear-Path-Animator](docs/Linear-Path-Animator.md) |
 | Path Animator — Curve | Window → Path Animator → Curve… | [Curve-Path-Animator](docs/Curve-Path-Animator.md) |
 | Path Animator — Spin | Window → Path Animator → Spin… | [Spin-Path-Animator](docs/Spin-Path-Animator.md) |
+| Path Animator — Gait | Window → Path Animator → Gait… | [Gait-Animator](docs/Gait-Animator.md) |
 | Glue (Envelopes) | Edit → Glue Objects… | [Glue](docs/Glue.md) |
 | Import Project | File → Import Project… | [Import-Project](docs/Import-Project.md) |
 | Export / Export All Passes | File → Export… · ⌘E / ⌘⇧E | [Export](docs/Export.md) |

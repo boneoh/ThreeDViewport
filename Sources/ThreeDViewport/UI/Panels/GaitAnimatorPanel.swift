@@ -35,9 +35,10 @@ final class GaitAnimatorState: ObservableObject {
     /// (the body rolls over the planted foot).  On by default; needs leg joints.
     @Published var footLock: Bool = true
 
-    /// Marks available to walk, plus which are selected (in this stored order).
-    @Published var markList:      [ProbeMark] = []
-    @Published var selectedMarks: Set<UUID> = []
+    /// All marks available to walk (scene order), and the ordered subset forming the
+    /// path — `pathMarks` is the walk sequence (membership = inclusion, order = order walked).
+    @Published var markList:  [ProbeMark] = []
+    @Published var pathMarks: [UUID] = []
 
     @Published var status: String = ""
     @Published var validationAlert: String? = nil
@@ -52,6 +53,25 @@ struct GaitAnimatorPanel: View {
     private func timeText(_ t: Double?) -> String {
         guard let t = t else { return "—" }
         return String(format: "%.3f s", t)
+    }
+
+    /// Marks not yet in the path, in scene order (for the "Add" menu).
+    private var unusedMarks: [ProbeMark] {
+        state.markList.filter { m in !state.pathMarks.contains(m.id) }
+    }
+
+    private func markName(_ id: UUID) -> String {
+        state.markList.first { $0.id == id }?.name ?? "—"
+    }
+
+    private func moveUp(_ i: Int) {
+        guard i > 0, i < state.pathMarks.count else { return }
+        state.pathMarks.swapAt(i, i - 1)
+    }
+
+    private func moveDown(_ i: Int) {
+        guard i >= 0, i + 1 < state.pathMarks.count else { return }
+        state.pathMarks.swapAt(i, i + 1)
     }
 
     @ViewBuilder
@@ -87,26 +107,42 @@ struct GaitAnimatorPanel: View {
                             .font(.caption).foregroundColor(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     } else {
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 2) {
-                                ForEach(state.markList) { mark in
-                                    Toggle(isOn: Binding(
-                                        get: { state.selectedMarks.contains(mark.id) },
-                                        set: { on in
-                                            if on { state.selectedMarks.insert(mark.id) }
-                                            else  { state.selectedMarks.remove(mark.id) }
-                                        })) {
-                                        Text(mark.name).font(.caption)
+                        if state.pathMarks.isEmpty {
+                            Text("No marks in the path. Add marks below.")
+                                .font(.caption).foregroundColor(.secondary)
+                        } else {
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    ForEach(Array(state.pathMarks.enumerated()), id: \.element) { idx, id in
+                                        HStack(spacing: 4) {
+                                            Text("\(idx + 1).").font(.caption).foregroundColor(.secondary)
+                                                .frame(width: 22, alignment: .trailing)
+                                            Text(markName(id)).font(.caption)
+                                            Spacer()
+                                            Button { moveUp(idx) } label: { Image(systemName: "chevron.up") }
+                                                .buttonStyle(.borderless).disabled(idx == 0)
+                                            Button { moveDown(idx) } label: { Image(systemName: "chevron.down") }
+                                                .buttonStyle(.borderless).disabled(idx == state.pathMarks.count - 1)
+                                            Button { state.pathMarks.remove(at: idx) } label: { Image(systemName: "xmark") }
+                                                .buttonStyle(.borderless)
+                                        }
                                     }
                                 }
                             }
+                            .frame(maxHeight: 140)
                         }
-                        .frame(maxHeight: 120)
                         HStack {
-                            Button("All")  { state.selectedMarks = Set(state.markList.map { $0.id }) }
-                            Button("None") { state.selectedMarks = [] }
+                            Menu("Add") {
+                                ForEach(unusedMarks) { m in
+                                    Button(m.name) { state.pathMarks.append(m.id) }
+                                }
+                            }
+                            .frame(width: 70)
+                            .disabled(unusedMarks.isEmpty)
+                            Button("All")  { state.pathMarks = state.markList.map { $0.id } }
+                            Button("None") { state.pathMarks = [] }
                             Spacer()
-                            Text("\(state.selectedMarks.count) of \(state.markList.count)")
+                            Text("\(state.pathMarks.count) of \(state.markList.count)")
                                 .font(.caption).foregroundColor(.secondary)
                         }
                     }

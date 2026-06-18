@@ -3476,9 +3476,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // Drop marks that no longer exist; default to all when nothing valid remains.
         let marks = viewport.probeConfig.marks
         state.markList = marks
+        // Keep the user's path order, drop marks that are gone, and append any new ones
+        // (so a fresh project defaults to all marks in scene order).
         let valid = Set(marks.map { $0.id })
-        state.selectedMarks = state.selectedMarks.intersection(valid)
-        if state.selectedMarks.isEmpty { state.selectedMarks = valid }
+        state.pathMarks = state.pathMarks.filter { valid.contains($0) }
+        state.pathMarks += marks.map { $0.id }.filter { !state.pathMarks.contains($0) }
     }
 
     @objc private func showGaitAnimator(_ sender: Any) {
@@ -3536,10 +3538,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard case .group(let gid)? = state.capturedRef else {
             state.validationAlert = "Pick a model (group) to walk."; return
         }
-        // Selected marks, in their stored order, as the path waypoints.
-        let positions = viewport.probeConfig.marks
-            .filter { state.selectedMarks.contains($0.id) }
-            .map { $0.position }
+        // Path waypoints, in the user's chosen order.
+        var posByID: [UUID: SIMD3<Float>] = [:]
+        for m in viewport.probeConfig.marks { posByID[m.id] = m.position }
+        let positions = state.pathMarks.compactMap { posByID[$0] }
         guard positions.count >= 2 else {
             state.validationAlert = "Select at least two path marks."; return
         }
