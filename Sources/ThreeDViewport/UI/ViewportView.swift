@@ -720,11 +720,35 @@ final class ViewportView: MTKView {
         case .particles(let i):
             if i >= 0, i < particleManager.emitters.count { particleManager.emitters[i].isLocked = locked }
         case .object(let i):
-            if i >= 0, i < sceneManager.objects.count { sceneManager.objects[i].isLocked = locked }
+            guard i >= 0, i < sceneManager.objects.count else { break }
+            sceneManager.objects[i].isLocked = locked
+            // Locking a parent cascades DOWN to every child/grandchild (and the members of
+            // any glued group parented to it); unlocking affects ONLY this object, so a
+            // single part can be freed without unlocking the whole rig.
+            if locked {
+                for j in objectDescendants(of: i) { sceneManager.objects[j].isLocked = true }
+                for (gid, link) in sceneManager.groupEnvelopeParent where link.env == i {
+                    for obj in sceneManager.objects where obj.groupID == gid { obj.isLocked = true }
+                }
+            }
         case .group(let gid):
             for obj in sceneManager.objects where obj.groupID == gid { obj.isLocked = locked }
         case .importBundle: break
         }
+    }
+
+    /// All objects whose `parentIndex` chain leads back to `i` (children, grandchildren, …).
+    private func objectDescendants(of i: Int) -> [Int] {
+        let objs = sceneManager.objects
+        var result: [Int] = []
+        for j in objs.indices where j != i {
+            var p = objs[j].parentIndex
+            while let pp = p, pp >= 0, pp < objs.count {
+                if pp == i { result.append(j); break }
+                p = objs[pp].parentIndex
+            }
+        }
+        return result
     }
 
     /// Locks or unlocks every track (Lock All / Unlock All).

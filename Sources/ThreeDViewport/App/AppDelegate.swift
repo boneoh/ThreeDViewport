@@ -5745,13 +5745,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let scene = viewportView?.sceneManager,
               !scene.objects.isEmpty else { return }
 
-        // Don't wipe the scene while anything is locked — beep and bail.  The user
-        // can Unlock All in the Timeline Editor first, then Remove All.
-        if scene.objects.contains(where: { $0.isLocked }) { NSSound.beep(); return }
+        // Locked objects would be deleted too — warn (with the count) and let the user
+        // proceed or cancel, rather than silently refusing.
+        let lockedCount = scene.objects.filter { $0.isLocked }.count
 
         let alert = NSAlert()
         alert.messageText     = "Remove All Objects?"
-        alert.informativeText = "This will remove all \(scene.objects.count) object(s) from the scene."
+        var info = "This will remove all \(scene.objects.count) object(s) from the scene."
+        if lockedCount > 0 {
+            info += "\n\n⚠️ \(lockedCount) of them \(lockedCount == 1 ? "is" : "are") locked "
+                  + "and will also be removed."
+        }
+        alert.informativeText = info
         alert.alertStyle      = .warning
         alert.addButton(withTitle: "Remove All")
         alert.addButton(withTitle: "Cancel")
