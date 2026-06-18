@@ -2737,6 +2737,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 viewport.cameraPanelState.followTargetName = nil
             }
         }
+
+        // The Gait panel's target dropdown tracks the same object/group set, so refresh
+        // it on every change that refreshes the follow targets (open/import project,
+        // open/remove/duplicate object).
+        syncGaitPanelToProject()
     }
 
     @objc private func showCameraPanel(_ sender: Any) {
@@ -3129,6 +3134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         probe.selectedMarkIndex = probe.marks.count - 1
         probe.marksVisible = true   // reveal so the new mark is visible immediately
         markDirty()
+        syncGaitPanelToProject()    // keep the Gait panel's mark list current
         print("[DEBUG] AppDelegate: added mark '\(name)' at \(probe.position)")
     }
 
@@ -3198,6 +3204,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         probe.selectedMarkIndex = probe.marks.isEmpty ? nil : min(idx, probe.marks.count - 1)
         viewport.overlayState.markName = nil
         markDirty()
+        syncGaitPanelToProject()    // keep the Gait panel's mark list current
         print("[DEBUG] AppDelegate: deleted mark '\(removed.name)'")
     }
 
@@ -3242,6 +3249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
         viewport.overlayState.markName = nil
         markDirty()
+        syncGaitPanelToProject()    // keep the Gait panel's mark list current
         print("[DEBUG] AppDelegate: deleted mark '\(removed.name)'")
     }
 

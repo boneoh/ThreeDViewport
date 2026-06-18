@@ -1894,6 +1894,17 @@ final class ViewportView: MTKView {
             partIndexByName[obj.name] = i
             groupPartIndices.append(i)
         }
+
+        // A gait owns the whole model's tracks (it rebakes the group path + every part),
+        // so drop any spin/orbit rate schedule on the group or its parts first.  A stale
+        // schedule left registered would otherwise re-bake over the walk on a later edit
+        // (and leaves a stray keyframe behind) — the cause of a model tumbling instead of
+        // walking when it carried a leftover group spin.
+        for ref in [TrackRef.group(gid)] + groupPartIndices.map({ TrackRef.object($0) }) {
+            if spinRateSchedules[ref]  != nil { setSpinSchedule(ref: ref, markers: [], keyframesPerRevolution: 12) }
+            if orbitRateSchedules[ref] != nil { setOrbitSchedule(ref: ref, schedule: nil, keyframesPerRevolution: 12) }
+        }
+
         let groupScale = TransformMath.scale(of: sceneManager.groupTransforms[gid] ?? matrix_identity_float4x4)
 
         // Rest-pose (group-local) world transform of a part — composes baseTransforms up
