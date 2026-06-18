@@ -525,6 +525,9 @@ final class TimelineEditorView: NSView {
     private var lockToggles:     [LockToggleBinding] = []
     private var lastObjectCount: Int             = -1
     private var lastBounds:      NSRect          = .zero
+    /// Signature of which Fog / emitter lanes are in use (#6) — when it changes, the lane
+    /// set changed even though the object count didn't, so the rows must rebuild.
+    private var lastEffectsSig:  Int             = -1
 
     // MARK: - Init
 
@@ -652,13 +655,21 @@ final class TimelineEditorView: NSView {
         }
 
         add("Camera", .camera)
-        add("Fog", .fog)
-        // One lane per emitter, named by type ("Rain", "Smoke", …).  Disambiguate
-        // duplicate types with a trailing number ("Rain 1", "Rain 2").
+        // Fog / emitters only get a lane once they're actually used (enabled or animated),
+        // so an untouched scene stays clean.  Enable them in the Atmosphere panel.
+        let fogInUse = (fogSettings?.isEnabled ?? false)
+            || !(fogSettings?.keyframeTrack?.keyframes.isEmpty ?? true)
+        if fogInUse { add("Fog", .fog) }
+        // One lane per in-use emitter, named by type ("Rain", "Smoke", …).  Disambiguate
+        // duplicate types with a trailing number ("Rain 1", "Rain 2"); the original index
+        // is kept for the TrackRef.
+        let usedEmitters = emitters.enumerated().filter { (_, e) in
+            e.isEnabled || !(e.keyframeTrack?.keyframes.isEmpty ?? true)
+        }
         var typeTotals: [ParticleType: Int] = [:]
-        for e in emitters { typeTotals[e.type, default: 0] += 1 }
+        for (_, e) in usedEmitters { typeTotals[e.type, default: 0] += 1 }
         var typeSeen: [ParticleType: Int] = [:]
-        for (i, e) in emitters.enumerated() {
+        for (i, e) in usedEmitters {
             typeSeen[e.type, default: 0] += 1
             let base = e.type.displayName
             let name = (typeTotals[e.type] ?? 0) > 1 ? "\(base) \(typeSeen[e.type]!)" : base
@@ -3031,12 +3042,23 @@ final class TimelineEditorView: NSView {
     private func syncEasingPopupsIfNeeded() {
         guard let sm = sceneManager else { return }
         let objCount     = sm.objects.count
+        // Which Fog/emitter lanes are currently in use (#6) — fog enabled/animated, plus
+        // the count of in-use emitters — so enabling/disabling one rebuilds the lanes.
+        let fogInUse = (fogSettings?.isEnabled ?? false)
+            || !(fogSettings?.keyframeTrack?.keyframes.isEmpty ?? true)
+        let emittersInUse = (particleManager?.emitters ?? []).reduce(into: 0) { acc, e in
+            if e.isEnabled || !(e.keyframeTrack?.keyframes.isEmpty ?? true) { acc += 1 }
+        }
+        let effectsSig   = (fogInUse ? 1 : 0) &+ (emittersInUse &* 2)
         let needsRebuild = objCount != lastObjectCount
                         || bounds   != lastBounds
                         || expandedHeaders != lastExpandedHeaders
+                        || effectsSig != lastEffectsSig
+        if effectsSig != lastEffectsSig { invalidateTrackCache() }
         lastObjectCount     = objCount
         lastBounds          = bounds
         lastExpandedHeaders = expandedHeaders
+        lastEffectsSig      = effectsSig
 
         if needsRebuild {
             rebuildEasingPopups()

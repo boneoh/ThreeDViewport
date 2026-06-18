@@ -657,6 +657,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 self?.markDirty()
             }
             .store(in: &settingsCancellables)
+        // Fog gets a Timeline lane only while it's in use (#6) — refresh the lanes when
+        // it's enabled/disabled (async so the committed value is read).
+        viewport.fogSettings.$isEnabled
+            .sink { [weak self] _ in
+                DispatchQueue.main.async { [weak self] in self?.timelineEditorWC?.updateWindowHeight() }
+            }
+            .store(in: &settingsCancellables)
 
         // ParticleManager (weather): add/remove/select.  Also resize the timeline
         // when the emitter count changes (one lane per emitter).
@@ -691,6 +698,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 .sink { [weak self] in
                     guard emitter.suppressDirty != true else { return }
                     self?.markDirty()
+                }
+                .store(in: &particleEmitterCancellables)
+            // An emitter gets a Timeline lane only while it's in use (#6) — refresh the
+            // lanes when it's enabled/disabled.
+            emitter.$isEnabled
+                .sink { [weak self] _ in
+                    DispatchQueue.main.async { [weak self] in self?.timelineEditorWC?.updateWindowHeight() }
                 }
                 .store(in: &particleEmitterCancellables)
         }

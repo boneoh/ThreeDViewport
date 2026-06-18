@@ -263,47 +263,26 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
 
     // MARK: - Resize
 
-    /// Recalculates the required content height from the current visible track count
-    /// (accounts for collapsed/expanded groups) and updates:
-    ///   • the document view height so all rows are reachable by scrolling,
-    ///   • the panel height up to maxPanelContentH (anchoring the top edge).
+    /// Recalculates the document height from the current visible track count (accounts
+    /// for collapsed/expanded groups) so the rows are reachable by scrolling and empty
+    /// lanes don't show as blank rows.  Deliberately DOES NOT resize the panel — the
+    /// user's manual size + position is theirs to keep (and is persisted with the project,
+    /// alongside the other panels); content just scrolls within it.
     func updateWindowHeight() {
-        guard let panel = window else { return }
+        guard window != nil else { return }
 
         // Called after every structural scene change (model/light/emitter add·remove,
         // delete, import, glue…) — so the cached lane model must be rebuilt.
         editorView.invalidateTrackCache()
 
-        let numTracks     = editorView.visibleTrackCount
-        let newContentH   = Self.contentHeight(for: numTracks)
-
-        // Update document view height.
+        let newContentH = Self.contentHeight(for: editorView.visibleTrackCount)
         var docFrame = editorView.frame
         if abs(docFrame.height - newContentH) > 1 {
             docFrame.size.height = newContentH
             editorView.frame     = docFrame
         }
-
         // Keep the document width in step with the (possibly new) duration.
         editorView.updateDocumentWidth()
-
-        // Resize panel up to maxPanelContentH (+ footer), anchoring the top edge.
-        // Never decrease the panel height — the user may have manually resized
-        // the window taller and we don't want to undo that on collapse.
-        let newPanelContentH = min(newContentH, Self.maxPanelContentH) + Self.footerHeight
-        let sampleRect  = NSRect(x: 0, y: 0, width: panel.frame.width, height: newPanelContentH)
-        let newFrameH   = panel.frameRect(forContentRect: sampleRect).height
-        let currentH    = panel.frame.height
-        guard newFrameH > currentH + 1 else { return }   // grow only, never shrink
-
-        var f  = panel.frame
-        let dy = newFrameH - currentH
-        f.origin.y    -= dy
-        f.size.height += dy
-        panel.setFrame(f, display: true)
-
-        print("[DEBUG] TimelineEditorWindowController: resized — "
-            + "tracks=\(numTracks) contentH=\(newContentH) panelH=\(newPanelContentH)")
     }
 
     // MARK: - Helpers
@@ -311,7 +290,8 @@ final class TimelineEditorWindowController: NSWindowController, NSWindowDelegate
     private static func contentHeight(for numTracks: Int) -> CGFloat {
         let rulerHeight: CGFloat = 24
         let laneHeight:  CGFloat = 28
-        return rulerHeight + CGFloat(max(3, numTracks)) * laneHeight
+        // Fit the actual track count (floor 1) so empty lanes don't show as blank rows.
+        return rulerHeight + CGFloat(max(1, numTracks)) * laneHeight
     }
 }
 
