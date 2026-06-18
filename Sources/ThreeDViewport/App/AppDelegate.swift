@@ -4240,6 +4240,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             viewport.timeline.seek(to: kfTime)
 
             switch ref {
+            case .cameraCuts:
+                return
             case .camera:
                 // Evaluate the camera track at kfTime to get the exact saved values.
                 // Also look up the RAW keyframe to preserve followTargetName —
@@ -4521,7 +4523,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         wc.editorView.onLaneSelected = { [weak viewport] ref in
             guard let viewport = viewport else { return }
             switch ref {
-            case .camera:
+            case .camera, .cameraCuts:
                 viewport.setControlMode(.camera)
             case .object(let i):
                 viewport.sceneManager.selectedIndex = i
@@ -5056,6 +5058,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let perform: () -> Void
 
         switch ref {
+        case .cameraCuts:
+            return
         case .group(let gid):
             title   = "Delete \"\(sm.groupName(for: gid))\"?"
             let set = Set(sm.objects.indices.filter { sm.objects[$0].groupID == gid })

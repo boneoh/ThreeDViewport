@@ -766,6 +766,7 @@ final class ViewportView: MTKView {
     func isLocked(_ ref: TrackRef) -> Bool {
         switch ref {
         case .camera: return cameraLocked
+        case .cameraCuts: return false
         case .fog:    return fogLocked
         case .light(let i):
             return i >= 0 && i < lightManager.lights.count && lightManager.lights[i].isLocked
@@ -784,6 +785,7 @@ final class ViewportView: MTKView {
     func setLocked(_ ref: TrackRef, _ locked: Bool) {
         switch ref {
         case .camera: cameraLocked = locked
+        case .cameraCuts: break
         case .fog:    fogLocked = locked
         case .light(let i):
             if i >= 0, i < lightManager.lights.count { lightManager.lights[i].isLocked = locked }
@@ -920,6 +922,20 @@ final class ViewportView: MTKView {
     }
 
     func deleteCameraCut(id: UUID) { cameraCuts.removeAll { $0.id == id } }
+
+    /// Retimes a cut (keeps the list sorted).
+    func moveCameraCut(id: UUID, to time: Double) {
+        guard let i = cameraCuts.firstIndex(where: { $0.id == id }) else { return }
+        cameraCuts[i].time = max(0, time)
+        cameraCuts.sort { $0.time < $1.time }
+    }
+
+    /// Reassigns which camera a cut switches to.
+    func setCameraCut(id: UUID, cameraIndex: Int) {
+        guard cameras.indices.contains(cameraIndex),
+              let i = cameraCuts.firstIndex(where: { $0.id == id }) else { return }
+        cameraCuts[i].cameraIndex = cameraIndex
+    }
 
     /// Sets the active camera's framing to the Director free-view's current pose.
     func setActiveCameraToDirector() {
@@ -1843,6 +1859,7 @@ final class ViewportView: MTKView {
     /// Keyframe times on the entity's track (empty when it has none).
     private func autoKeyframeTrackTimes(_ ref: TrackRef) -> [Double] {
         switch ref {
+        case .cameraCuts: return []
         case .object(let i):
             guard i >= 0, i < sceneManager.objects.count else { return [] }
             return sceneManager.objects[i].keyframeTrack?.keyframes.map { $0.time } ?? []
@@ -1873,6 +1890,7 @@ final class ViewportView: MTKView {
         case .camera:           addCameraKeyframeFromPanel()
         case .fog:              addFogKeyframeAtCurrentTime()
         case .particles(let i): addParticleKeyframeAtCurrentTime(forEmitterAt: i)
+        case .cameraCuts:       break
         case .importBundle:     break
         }
     }
