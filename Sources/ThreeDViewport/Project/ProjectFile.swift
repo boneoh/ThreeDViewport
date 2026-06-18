@@ -983,7 +983,8 @@ final class ProjectFile {
             cameraLocked:        vp.cameraLocked,
             fogLocked:           vp.fogLocked,
             cameraSlots:         cameraSlotData,
-            activeCameraIndex:   vp.activeCameraIndex
+            activeCameraIndex:   vp.activeCameraIndex,
+            cameraCuts:          vp.cameraCuts.map { CameraCutData(time: $0.time, cameraIndex: $0.cameraIndex) }
         )
     }
 
@@ -1320,6 +1321,8 @@ final class ProjectFile {
         // Mirror the live (just-restored) camera into the active slot so the slot shares
         // the live pose + track (the active slot == the legacy fields by construction).
         vp.captureActiveCamera()
+        // Phase 1c: scheduled camera cuts.
+        vp.cameraCuts = data.cameraCuts.map { CameraCut(time: $0.time, cameraIndex: $0.cameraIndex) }
 
         vp.probeConfig.selectedMarkIndex = nil
         // v28: hot-reload the Lighting HDR from the saved path (bundled if missing).

@@ -38,6 +38,9 @@ final class ViewportView: MTKView {
     /// ("Camera 1"), identical to the single-camera app.
     var cameras:           [SceneCamera] = [SceneCamera(name: "Camera 1")]
     var activeCameraIndex: Int = 0
+    /// Scheduled hard cuts (Phase 1c): which camera is the "program" over time during
+    /// playback + export.  Empty = always the active camera (1b behavior).
+    var cameraCuts:        [CameraCut] = []
     /// Director's-POV camera used in Scene mode (read-only view of the whole
     /// scene from a fly-cam position above and behind the recording camera).
     /// Independent state — never animated, never saved with the project.
@@ -283,6 +286,12 @@ final class ViewportView: MTKView {
 
         delegate = renderer
 
+        // Phase 1c: during playback, render the program camera the cut schedule selects.
+        renderer?.programCameraProvider = { [weak self] t in
+            guard let self, self.timeline.isPlaying, !self.cameraCuts.isEmpty else { return nil }
+            return self.cameras[self.programCameraIndex(at: t)]
+        }
+
         // Wire feedback processor + settings into renderer
         renderer?.feedbackProcessor   = feedbackProcessor
         renderer?.feedbackSettings    = feedbackSettings
@@ -373,6 +382,19 @@ final class ViewportView: MTKView {
             self.needsDisplay = true
             self.onCameraEdited?()
         }
+        cameraPanelState.onAddCut = { [weak self] in
+            guard let self else { return }
+            self.captureActiveCamera()
+            self.addCameraCut(at: self.timeline.currentTime, cameraIndex: self.activeCameraIndex)
+            self.syncCameraListToPanel()
+            self.onCameraEdited?()
+        }
+        cameraPanelState.onDeleteCut = { [weak self] id in
+            guard let self else { return }
+            self.deleteCameraCut(id: id)
+            self.syncCameraListToPanel()
+            self.onCameraEdited?()
+        }
 
         // Sync renderSettings → renderer whenever toggles change
         colorModeCancellable = renderSettings.$colorMode.sink { [weak self] value in
@@ -388,11 +410,20 @@ final class ViewportView: MTKView {
             self?.needsDisplay = true
         }
 
-        // Reset feedback queue whenever playback starts so old frames don't contaminate new runs
+        // On play: reset feedback + snapshot the edit camera (cuts take over the live
+        // camera during playback).  On pause: restore the edit camera so authoring
+        // continues on the selected camera (Phase 1c).
         playbackCancellable = timeline.$isPlaying
-            .filter { $0 }
-            .sink { [weak self] _ in
-                self?.feedbackProcessor.reset()
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] playing in
+                guard let self else { return }
+                if playing {
+                    self.feedbackProcessor.reset()
+                    self.captureActiveCamera()
+                } else {
+                    self.loadCameraIntoController(self.activeCameraIndex)
+                }
             }
 
         // Clear feedback buffer each time the loop wraps so end-of-loop content
@@ -435,6 +466,7 @@ final class ViewportView: MTKView {
         camera.keyframeTrack = nil
         cameras           = [SceneCamera(name: "Camera 1")]   // Phase 1: reset camera list
         activeCameraIndex = 0
+        cameraCuts        = []
         feedbackProcessor.reset()
         syncOverlayState()
         print("[DEBUG] ViewportView: new project — scene cleared")
@@ -851,11 +883,14 @@ final class ViewportView: MTKView {
     }
 
     /// Deletes camera `i` (never the last one).  If the active camera is removed, the
-    /// nearest remaining one becomes active.
+    /// nearest remaining one becomes active.  Cuts pointing at it are dropped; higher
+    /// camera indices shift down.
     func deleteCamera(at i: Int) {
         guard cameras.count > 1, cameras.indices.contains(i) else { return }
         let wasActive = (i == activeCameraIndex)
         cameras.remove(at: i)
+        cameraCuts.removeAll { $0.cameraIndex == i }
+        for k in cameraCuts.indices where cameraCuts[k].cameraIndex > i { cameraCuts[k].cameraIndex -= 1 }
         if wasActive {
             activeCameraIndex = min(i, cameras.count - 1)
             loadCameraIntoController(activeCameraIndex)
@@ -863,6 +898,28 @@ final class ViewportView: MTKView {
             activeCameraIndex -= 1
         }
     }
+
+    // MARK: - Camera cuts (Phase 1c)
+
+    /// The camera index the cut schedule selects at time `t` (the "program" camera).
+    /// Empty cuts → the active camera.
+    func programCameraIndex(at t: Double) -> Int {
+        guard !cameraCuts.isEmpty else { return activeCameraIndex }
+        let sorted = cameraCuts.sorted { $0.time < $1.time }
+        var idx = sorted[0].cameraIndex                       // before the first cut, hold it
+        for c in sorted where c.time <= t + 1e-9 { idx = c.cameraIndex }
+        return min(max(0, idx), cameras.count - 1)
+    }
+
+    /// Adds (or replaces) a cut at `time` to camera `i`, keeping the list time-sorted.
+    func addCameraCut(at time: Double, cameraIndex i: Int) {
+        guard cameras.indices.contains(i) else { return }
+        cameraCuts.removeAll { abs($0.time - time) < 1e-4 }
+        cameraCuts.append(CameraCut(time: time, cameraIndex: i))
+        cameraCuts.sort { $0.time < $1.time }
+    }
+
+    func deleteCameraCut(id: UUID) { cameraCuts.removeAll { $0.id == id } }
 
     /// Sets the active camera's framing to the Director free-view's current pose.
     func setActiveCameraToDirector() {
@@ -889,6 +946,12 @@ final class ViewportView: MTKView {
         if cameraPanelState.activeCameraIndex != activeCameraIndex {
             cameraPanelState.activeCameraIndex = activeCameraIndex
         }
+        let rows = cameraCuts.sorted { $0.time < $1.time }.map { c in
+            CameraPanelState.CutRow(
+                id: c.id, time: c.time,
+                cameraName: cameras.indices.contains(c.cameraIndex) ? cameras[c.cameraIndex].name : "—")
+        }
+        if cameraPanelState.cuts != rows { cameraPanelState.cuts = rows }
     }
 
     /// True when the active edit target (current control mode) is a locked track —
@@ -2809,6 +2872,12 @@ final class ViewportView: MTKView {
         exporter.includeLaserFX     = includeFX
         exporter.ibl                = renderer?.ibl   // share IBL so exports match preview
         exporter.backgroundEquirect = renderer?.backgroundEquirect   // dedicated bg HDR (if any)
+        // Phase 1c: scheduled camera cuts drive the exported camera.  Sync the active
+        // camera into its slot first so the program selection is current.
+        captureActiveCamera()
+        exporter.cameras            = cameras
+        exporter.cameraCuts         = cameraCuts
+        exporter.activeCameraIndex  = activeCameraIndex
         feedbackProcessor.reset()   // clear live queue; exporter has its own processor
         timeline.pause()
         isPaused = true
@@ -2824,6 +2893,8 @@ final class ViewportView: MTKView {
             exportState?.progress = p
         }, completion: { [weak self, weak exportState] error in
             self?.activeExporter = nil
+            // Export mutated the shared live camera (cuts/animation); restore the edit camera.
+            if let self { self.loadCameraIntoController(self.activeCameraIndex) }
             self?.isPaused = false
             exportState?.isExporting = false
             if let error = error {

@@ -1,4 +1,13 @@
 import simd
+import Foundation
+
+/// A scheduled hard cut: from `time` onward (until the next cut) the program camera is
+/// `cameraIndex` (an index into ViewportView.cameras).  Drives playback + export.
+struct CameraCut: Identifiable {
+    let id = UUID()
+    var time: Double
+    var cameraIndex: Int
+}
 
 /// One scene camera's authored state.  The ACTIVE camera is edited and rendered through
 /// the live `CameraController`; every camera (active or not) keeps a copy of its state

@@ -86,6 +86,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     private var viewCamera: CameraController {
         return sceneModeActive ? director : camera
     }
+    /// Phase 1c: during playback the renderer asks for the "program" camera (cut schedule)
+    /// at the current time; nil → use the live (edit-active) camera.  Set by ViewportView.
+    var programCameraProvider: ((Double) -> SceneCamera?)?
     let lightManager:     LightManager
     let backgroundConfig: BackgroundConfig
     let timeline:         Timeline
@@ -1514,7 +1517,20 @@ final class Renderer: NSObject, MTKViewDelegate {
         // ── Camera (base evaluation) ──────────────────────────────────────────
         // The follow override is applied separately in applyCameraFollow(), called
         // after applyHierarchy() so sub-part world transforms are fully up-to-date.
-        if let camTrack = camera.keyframeTrack, !camTrack.keyframes.isEmpty {
+        if let pc = programCameraProvider?(timeline.renderTime) {
+            // Cut schedule (during playback): the live camera adopts the program camera's
+            // track + pose so animation AND follow (applyCameraFollow reads keyframeTrack)
+            // come from it.  ViewportView restores the edit camera when playback stops.
+            camera.keyframeTrack = pc.keyframeTrack
+            if let track = pc.keyframeTrack, !track.keyframes.isEmpty,
+               let state = track.evaluate(at: timeline.renderTime, cutoff: timeline.duration) {
+                camera.yaw = state.yaw; camera.pitch = state.pitch; camera.distance = state.distance
+                camera.target = state.target; camera.fovYRadians = state.fov
+            } else {
+                camera.yaw = pc.yaw; camera.pitch = pc.pitch; camera.distance = pc.distance
+                camera.target = pc.target; camera.fovYRadians = pc.fovYRadians
+            }
+        } else if let camTrack = camera.keyframeTrack, !camTrack.keyframes.isEmpty {
             if let state = camTrack.evaluate(at: timeline.renderTime, cutoff: timeline.duration) {
                 camera.yaw         = state.yaw
                 camera.pitch       = state.pitch

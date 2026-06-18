@@ -91,6 +91,8 @@ struct ProjectData: Codable {
     /// "Camera 1" slot.
     var cameraSlots:            [CameraSlotData]? = nil
     var activeCameraIndex:      Int = 0
+    /// Phase 1c: scheduled camera cuts (empty in older files / single-camera projects).
+    var cameraCuts:             [CameraCutData] = []
 
     // MARK: - Memberwise init (required because we define init(from:) below)
 
@@ -134,7 +136,8 @@ struct ProjectData: Codable {
          cameraLocked:        Bool                    = false,
          fogLocked:           Bool                    = false,
          cameraSlots:         [CameraSlotData]?       = nil,
-         activeCameraIndex:   Int                     = 0) {
+         activeCameraIndex:   Int                     = 0,
+         cameraCuts:          [CameraCutData]         = []) {
         self.version             = version
         self.modelPath           = modelPath
         self.modelPaths          = modelPaths
@@ -176,6 +179,7 @@ struct ProjectData: Codable {
         self.fogLocked           = fogLocked
         self.cameraSlots         = cameraSlots
         self.activeCameraIndex   = activeCameraIndex
+        self.cameraCuts          = cameraCuts
     }
 
     // MARK: - Custom decoder
@@ -231,6 +235,7 @@ struct ProjectData: Codable {
         fogLocked           = (try? c.decode(Bool.self,                     forKey: .fogLocked))          ?? false
         cameraSlots         =  try? c.decode([CameraSlotData].self,         forKey: .cameraSlots)
         activeCameraIndex   = (try? c.decode(Int.self,                      forKey: .activeCameraIndex))  ?? 0
+        cameraCuts          = (try? c.decode([CameraCutData].self,          forKey: .cameraCuts))         ?? []
     }
 }
 
@@ -753,6 +758,12 @@ struct CameraSlotData: Codable {
     var keyframes:  [CameraKeyframeData] = []
     var easingMode: Int  = 0
     var isLocked:   Bool = false
+}
+
+/// A scheduled camera cut (Phase 1c): from `time` the program camera is `cameraIndex`.
+struct CameraCutData: Codable {
+    var time:        Double
+    var cameraIndex: Int
 }
 
 struct ObjectData: Codable {

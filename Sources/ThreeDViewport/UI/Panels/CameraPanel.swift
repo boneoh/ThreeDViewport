@@ -54,6 +54,18 @@ final class CameraPanelState: ObservableObject {
     var onDeleteCamera:    (() -> Void)?
     var onCaptureDirector: (() -> Void)?
 
+    // ── Camera cuts (Phase 1c) ──────────────────────────────────────────────────
+    struct CutRow: Identifiable, Equatable {
+        let id: UUID
+        let time: Double
+        let cameraName: String
+    }
+    /// Scheduled cuts (time-sorted), mirrored from the ViewportView for display.
+    @Published var cuts: [CutRow] = []
+    /// Add a cut at the playhead to the active camera / delete a cut by id.
+    var onAddCut:    (() -> Void)?
+    var onDeleteCut: ((UUID) -> Void)?
+
     /// Propagate Position / Target / FOV edits back to the active camera (wired by ViewportView).
     var onPositionEdited:    ((SIMD3<Float>) -> Void)?
     var onTargetEdited:      ((SIMD3<Float>) -> Void)?
@@ -173,6 +185,38 @@ struct CameraPanel: View {
                 }
                 .help("Aim this camera at the Director free-view's current framing")
                 .padding(.bottom, 12)
+
+                // ── Camera cuts (scheduled; drive Play + Export) ──────────────
+                HStack {
+                    Text("Cuts").font(.caption).foregroundColor(.secondary)
+                    Spacer()
+                    Button { state.onAddCut?() } label: {
+                        Label("Cut at Playhead", systemImage: "scissors")
+                    }
+                    .controlSize(.small)
+                    .help("Cut to the selected camera at the current time")
+                }
+                .padding(.bottom, 4)
+                if state.cuts.isEmpty {
+                    Text("No cuts — Play and Export use the selected camera.")
+                        .font(.caption2).foregroundColor(.secondary)
+                        .padding(.bottom, 12)
+                } else {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(state.cuts) { cut in
+                            HStack(spacing: 6) {
+                                Text(String(format: "%.2fs", cut.time))
+                                    .font(.caption.monospacedDigit())
+                                    .frame(width: 52, alignment: .trailing)
+                                Text("→ \(cut.cameraName)").font(.caption)
+                                Spacer()
+                                Button { state.onDeleteCut?(cut.id) } label: { Image(systemName: "xmark") }
+                                    .buttonStyle(.borderless)
+                            }
+                        }
+                    }
+                    .padding(.bottom, 12)
+                }
 
                 Divider().padding(.bottom, 14)
 

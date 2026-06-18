@@ -163,6 +163,21 @@ final class VideoExporter {
     var isWireframe:   Bool = false
     var showAxesGizmo: Bool = false
 
+    // Phase 1c: scheduled camera cuts.  When non-empty, each frame renders the program
+    // camera the schedule selects (instead of the single live camera).  Set by startExport.
+    var cameras:           [SceneCamera] = []
+    var cameraCuts:        [CameraCut]   = []
+    var activeCameraIndex: Int           = 0
+
+    /// Program camera index at time `t` (mirrors ViewportView.programCameraIndex).
+    private func programCameraIndex(at t: Double) -> Int {
+        guard !cameraCuts.isEmpty else { return activeCameraIndex }
+        let sorted = cameraCuts.sorted { $0.time < $1.time }
+        var idx = sorted[0].cameraIndex
+        for c in sorted where c.time <= t + 1e-9 { idx = c.cameraIndex }
+        return min(max(0, idx), cameras.count - 1)
+    }
+
     // Probe marks rendered into the export when `marksVisible` is on (mirrors the
     // live viewport's drawMarks).  Set by ViewportView.startExport.
     var marks:        [ProbeMark] = []
@@ -1459,6 +1474,16 @@ final class VideoExporter {
         // Evaluated here so the gizmo and view/projection matrices track the
         // animation correctly.  CameraController is NOT ObservableObject, so
         // writing its properties from the export background queue is safe.
+        // Cut schedule: point the live camera at the program camera's track (so the
+        // evaluation + follow below come from it) and seed a static program pose.
+        if !cameraCuts.isEmpty, !cameras.isEmpty {
+            let pc = cameras[programCameraIndex(at: time)]
+            camera.keyframeTrack = pc.keyframeTrack
+            if pc.keyframeTrack?.keyframes.isEmpty ?? true {
+                camera.yaw = pc.yaw; camera.pitch = pc.pitch; camera.distance = pc.distance
+                camera.target = pc.target; camera.fovYRadians = pc.fovYRadians
+            }
+        }
         if let camTrack = camera.keyframeTrack, !camTrack.keyframes.isEmpty {
             if let state = camTrack.evaluate(at: time, cutoff: timelineDuration) {
                 camera.yaw         = state.yaw
