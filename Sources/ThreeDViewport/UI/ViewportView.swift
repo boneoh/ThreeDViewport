@@ -521,7 +521,7 @@ final class ViewportView: MTKView {
     enum AddModelResult { case added, failed }
 
     // Phase 6: Adds a model to the existing scene without clearing it.
-    // Camera is only repositioned when this is the very first object.
+    // The camera is left where it is — Open Model never moves the view.
     //
     // The SAME file may be loaded more than once (e.g. repeated character parts);
     // group animation / base transforms are keyed by (filename, occurrence) so the
@@ -539,20 +539,18 @@ final class ViewportView: MTKView {
         let loader = GLTFLoader(device: dev)
 
         if let objects = loader.load(url: url) {
-            let (loadedCenter, radius) = autoNormalize(objects)
-            var center = loadedCenter
+            let (loadedCenter, _) = autoNormalize(objects)
 
             // Place the new model at the bake Probe: shift so its visual (bounding-box)
             // center lands on the probe.  Children follow via the hierarchy; baseTransform
             // is captured just below, so it picks up the shift too.
-            let delta = probeConfig.position - center
+            let delta = probeConfig.position - loadedCenter
             if placeAtProbe, simd_length(delta) > 1e-6 {
                 let d4 = SIMD4<Float>(delta.x, delta.y, delta.z, 0)
                 for obj in objects where obj.parentIndex == nil {
                     obj.transform.columns.3      += d4
                     obj.localTransform.columns.3 += d4
                 }
-                center = probeConfig.position   // keep the first-model camera fit correct
             }
 
             let baseName = url.deletingPathExtension().lastPathComponent
@@ -568,7 +566,6 @@ final class ViewportView: MTKView {
             // part's real glTF node name (the group header already shows the file).
             if objects.count == 1 { objects.first?.name = baseName }
 
-            let isFirst = sceneManager.objects.isEmpty
             // Offset every parentIndex in the new batch by the number of objects
             // already in the scene.  GLTFLoader sets parentIndex relative to the
             // local (per-file) array starting at 0; after appending they must refer
@@ -581,10 +578,6 @@ final class ViewportView: MTKView {
             // Select the root of the newly added model (first object with parentIndex == nil).
             let firstRootLocal = objects.firstIndex(where: { $0.parentIndex == nil }) ?? 0
             sceneManager.selectedIndex = offset + firstRootLocal
-
-            if isFirst {
-                camera.fitToScene(boundingRadius: radius, center: center)
-            }
 
             // Switch to a mode that manipulates the new model as the user expects:
             // a multi-part model → Model mode (the whole model moves as one); a
