@@ -1353,6 +1353,28 @@ final class ViewportView: MTKView {
         return false
     }
 
+    /// Removes every keyframe past the timeline end across all tracks — stale keys left
+    /// behind when the duration was shortened with "Keep Times", or carried in from older
+    /// files.  Returns the number removed.  (Spin/orbit-baked tracks end at the duration,
+    /// so nothing live is cut.)
+    @discardableResult
+    func clipKeyframesPastDuration() -> Int {
+        let end = timeline.duration + 1e-6
+        var removed = 0
+        func clip<K>(_ arr: inout [K], _ time: (K) -> Double) {
+            let before = arr.count
+            arr.removeAll { time($0) > end }
+            removed += before - arr.count
+        }
+        if let tr = camera.keyframeTrack            { clip(&tr.keyframes) { $0.time } }
+        for o in sceneManager.objects               { if let tr = o.keyframeTrack { clip(&tr.keyframes) { $0.time } } }
+        for tr in sceneManager.groupKeyframeTracks.values { clip(&tr.keyframes) { $0.time } }
+        for case let tr? in lightManager.keyframeTracks   { clip(&tr.keyframes) { $0.time } }
+        if let tr = fogSettings.keyframeTrack       { clip(&tr.keyframes) { $0.time } }
+        for e in particleManager.emitters           { if let tr = e.keyframeTrack { clip(&tr.keyframes) { $0.time } } }
+        return removed
+    }
+
     /// Sets the timeline duration.  When `rescaleKeyframes` is true, every keyframe
     /// across all tracks is repositioned proportionally (time × new/old), snapped to
     /// the frame grid and clamped to the new range, so an animation built at one

@@ -1063,6 +1063,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         loopInOutItem.target = self
         timelineMenu.addItem(loopInOutItem)
 
+        timelineMenu.addItem(.separator())
+
+        let cleanUpItem = NSMenuItem(title: "Clean Up Keyframes…",
+                                     action: #selector(cleanUpKeyframes(_:)), keyEquivalent: "")
+        cleanUpItem.target = self
+        timelineMenu.addItem(cleanUpItem)
+
         // ── Window menu — panels + macOS-standard items ────────────────────────
         let windowItem = NSMenuItem()
         mainMenu.addItem(windowItem)
@@ -1755,6 +1762,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             syncGaitPanelToProject()
             checkMissingHDRs(in: viewport)
             checkAndOfferGroupOffsetMigration(in: viewport)
+            // Silently drop any keyframes left past the timeline end (old files / stale
+            // "Keep Times" tails); a later save writes the cleaned project.
+            let clipped = viewport.clipKeyframesPastDuration()
+            if clipped > 0 {
+                AppLog.log("Removed \(clipped) keyframe(s) past the timeline end on load")
+                viewport.renderer?.invalidateAnimationCache()
+                timelineEditorWC?.editorView.needsDisplay = true
+            }
             print("[DEBUG] AppDelegate: project loaded from " + url.lastPathComponent)
         } catch {
             showErrorAlert(message: "Could not open project", detail: error.localizedDescription)
@@ -3255,6 +3270,84 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     @objc private func goToMarkMenuItem(_ sender: NSMenuItem)   { goToMark(index: sender.tag) }
     @objc private func deleteMarkMenuItem(_ sender: NSMenuItem) { deleteMark(index: sender.tag) }
+
+    // MARK: - Clean Up Keyframes (Timeline ▸ Clean Up Keyframes…)
+
+    /// Clips past-duration keyframes everywhere (unambiguous), silently drops no-op
+    /// transform tracks (all-identity → invisible), and offers to remove tracks holding
+    /// a single static pose (no animation, but removing reverts to base).
+    @objc private func cleanUpKeyframes(_ sender: Any) {
+        guard let viewport = viewportView else { return }
+        let sm = viewport.sceneManager
+
+        let clipped = viewport.clipKeyframesPastDuration()
+
+        func isIdentity(_ k: TransformKeyframe) -> Bool {
+            simd_length(k.translation) < 1e-4 &&
+            simd_length(k.scale - SIMD3<Float>(1, 1, 1)) < 1e-4 &&
+            simd_length(k.rotation.imag) < 1e-4 &&
+            abs(k.opacity - 1) < 1e-3
+        }
+        func equalKF(_ a: TransformKeyframe, _ b: TransformKeyframe) -> Bool {
+            simd_length(a.translation - b.translation) < 1e-4 &&
+            simd_length(a.scale - b.scale) < 1e-4 &&
+            simd_length((a.rotation.inverse * b.rotation).imag) < 1e-3 &&
+            abs(a.opacity - b.opacity) < 1e-3
+        }
+
+        struct Candidate { let label: String; let remove: () -> Void }
+        var emptied = 0
+        var statics: [Candidate] = []
+        func classify(_ track: KeyframeTrack, label: String, remove: @escaping () -> Void) {
+            guard let first = track.keyframes.first else { return }
+            if track.keyframes.allSatisfy(isIdentity) { remove(); emptied += 1 }          // no-op
+            else if track.keyframes.allSatisfy({ equalKF($0, first) }) {                  // one static pose
+                statics.append(Candidate(label: label, remove: remove))
+            }
+        }
+
+        for (i, o) in sm.objects.enumerated() {
+            if let tr = o.keyframeTrack {
+                classify(tr, label: sm.displayName(for: o)) { sm.objects[i].keyframeTrack = nil }
+            }
+        }
+        for (gid, tr) in Array(sm.groupKeyframeTracks) {     // snapshot — classify may remove during loop
+            classify(tr, label: sm.groupName(for: gid)) { sm.groupKeyframeTracks.removeValue(forKey: gid) }
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "Clean Up Keyframes"
+        var removedStatics = 0
+        if statics.isEmpty {
+            if clipped == 0 && emptied == 0 {
+                alert.informativeText = "No stale or orphaned keyframes were found."
+            } else {
+                alert.informativeText = "Removed \(clipped) keyframe(s) past the timeline end "
+                    + "and \(emptied) empty track(s)."
+            }
+            alert.runModal()
+        } else {
+            let names = statics.map { "• " + $0.label }.joined(separator: "\n")
+            alert.informativeText =
+                "Removed \(clipped) keyframe(s) past the timeline end and \(emptied) empty track(s).\n\n"
+                + "\(statics.count) track(s) hold a single static pose (no animation):\n\(names)\n\n"
+                + "Remove these too? They'll revert to their base pose."
+            alert.addButton(withTitle: "Remove")
+            alert.addButton(withTitle: "Keep")
+            if alert.runModal() == .alertFirstButtonReturn {
+                statics.forEach { $0.remove() }
+                removedStatics = statics.count
+            }
+        }
+
+        if clipped > 0 || emptied > 0 || removedStatics > 0 {
+            markDirty()
+            viewport.renderer?.invalidateAnimationCache()
+            viewport.needsDisplay = true
+            timelineEditorWC?.editorView.needsDisplay = true
+            timelineEditorWC?.updateWindowHeight()
+        }
+    }
 
     // MARK: - Linear Path Animator
 
