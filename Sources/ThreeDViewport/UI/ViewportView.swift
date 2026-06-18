@@ -2125,11 +2125,25 @@ final class ViewportView: MTKView {
                 obj.keyframeTrack = KeyframeTrack()
             }
             obj.keyframeTrack?.easingMode = .linear
+            // The static pose normally lives in the object's transform.  But an IMPORTED
+            // object can carry its pose ONLY in its baked keyframes (its transform was
+            // reset to baseTransform on import) — capture that pose at the first marker
+            // before clearing so the rebake doesn't drop its translation/scale/orientation.
+            let preMat = sorted.first.flatMap { obj.keyframeTrack?.evaluate(at: $0.time) }
             obj.keyframeTrack?.keyframes.removeAll { $0.time >= clearFrom - 1e-6 && $0.time <= end + 1e-6 }
 
             let baseInv = simd_inverse(obj.baseTransform)
             let current = (obj.parentIndex != nil) ? obj.localTransform : obj.transform
-            let (baseT, baseR, baseS) = PathGenerator.decompose(baseInv * current)
+            var (baseT, baseR, baseS) = PathGenerator.decompose(baseInv * current)
+            // transform carries no pose offset (current == base) but the keyframes do →
+            // take the static pose from the keyframes (the import case; in-project spins,
+            // whose pose is in the transform, have a non-identity delta and are unaffected).
+            if let preMat,
+               simd_length(baseT) < 1e-5,
+               simd_length(baseS - SIMD3<Float>(1, 1, 1)) < 1e-4 {
+                let d = PathGenerator.decompose(preMat)
+                baseT = d.translation; baseR = d.rotation; baseS = d.scale
+            }
             let opacity = obj.material.opacity
 
             var accum = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
