@@ -866,6 +866,10 @@ final class ViewportView: MTKView {
         loadCameraIntoController(i)
     }
 
+    /// Reloads the live controller from the active camera slot (e.g. after its pose/track
+    /// was replaced in place by an import).
+    func reloadActiveCameraFromSlot() { loadCameraIntoController(activeCameraIndex) }
+
     /// Adds a new camera starting from the current view, and makes it active.
     func addCamera() {
         captureActiveCamera()

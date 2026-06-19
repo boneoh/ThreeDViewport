@@ -1647,6 +1647,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             // slice from an ambiguous file.
             var sourceInOut: (in: Double, out: Double)? = nil
             var sourceHalfMarked = false
+            var sourceCameraNames: [String] = []
             if let json = try? Data(contentsOf: url),
                let data = try? JSONDecoder().decode(ProjectData.self, from: json) {
                 // Refuse up front if any referenced model file is missing — the import's
@@ -1670,13 +1671,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     // Exactly one mark, or an inverted pair — slicing unavailable; warn.
                     sourceHalfMarked = true
                 }
+                // Source cameras (for the import-cameras checkbox list).
+                if let slots = data.cameraSlots, !slots.isEmpty {
+                    sourceCameraNames = slots.map { $0.name }
+                } else {
+                    sourceCameraNames = ["Camera 1"]
+                }
             }
 
             // Placement / timing dialog (position defaults to the Probe).
             let options = ImportProjectOptions(insertTime: viewport.timeline.currentTime,
                                                probe: viewport.probeConfig.position,
                                                sourceInOut: sourceInOut,
-                                               sourceHalfMarked: sourceHalfMarked)
+                                               sourceHalfMarked: sourceHalfMarked,
+                                               cameraNames: sourceCameraNames)
             let alert = NSAlert()
             alert.messageText     = "Import \"\(url.deletingPathExtension().lastPathComponent)\""
             alert.informativeText = "Append its models, animation, and materials to the current scene."
@@ -1694,7 +1702,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 transform:      options.transformMatrix(),
                 includeLights:  options.includeLights,
                 includeEffects: options.includeEffects,
-                sliceRange:     options.effectiveSlice)
+                sliceRange:     options.effectiveSlice,
+                importCameraIndices: Array(options.selectedCameras).sorted(),
+                replaceExistingCameras: options.replaceExistingCameras,
+                importCameraCuts: options.importCameraCuts)
             let bundlesBefore = Set(viewport.sceneManager.importBundleSources.keys)
             guard ProjectFile.importProject(from: url, into: viewport, options: opts) else {
                 self.showErrorAlert(message: "Import failed",

@@ -27,7 +27,17 @@ final class ImportProjectOptions: ObservableObject {
     /// When the source has both In/Out marks, import only that slice (remapped so
     /// the source In lands at `insertTime`).  Defaults on when a range is available.
     @Published var useSourceInOut: Bool
+    /// Which of the source's cameras to import (by index) — checkbox list; empty = none.
+    @Published var selectedCameras: Set<Int> = []
+    /// When on, an imported camera REPLACES an existing host camera of the same name
+    /// (pose + keyframes) instead of appending a duplicate — re-import updates in place.
+    @Published var replaceExistingCameras: Bool = false
+    /// When on, also import the source's camera cuts (remapped to the imported cameras,
+    /// times shifted to the insert point).  Only cuts for imported cameras come in.
+    @Published var importCameraCuts: Bool = false
 
+    /// Names of the source project's cameras (for the import-cameras checkbox list).
+    let cameraNames: [String]
     let probe: SIMD3<Float>
     /// The source project's saved In/Out range (seconds), or nil when it isn't a
     /// clean both-marks-set state (no marks, or only one mark — slicing unavailable).
@@ -39,8 +49,10 @@ final class ImportProjectOptions: ObservableObject {
 
     init(insertTime: Double, probe: SIMD3<Float>,
          sourceInOut: (in: Double, out: Double)? = nil,
-         sourceHalfMarked: Bool = false) {
+         sourceHalfMarked: Bool = false,
+         cameraNames: [String] = []) {
         self.insertTime = String(format: "%.3f", insertTime)
+        self.cameraNames = cameraNames
         self.probe = probe
         self.posX  = String(format: "%.3f", probe.x)
         self.posY  = String(format: "%.3f", probe.y)
@@ -112,6 +124,27 @@ struct ImportProjectSheet: View {
             Toggle("Include fog & particles", isOn: $options.includeEffects)
             Toggle("Make spin/orbit editable (extends to end)", isOn: $options.makeSpinEditable)
             Toggle("Glue imported items (opens the Glue dialog)", isOn: $options.glueImported)
+
+            if !options.cameraNames.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Import cameras").font(.caption).foregroundStyle(.secondary)
+                    ForEach(Array(options.cameraNames.enumerated()), id: \.offset) { idx, name in
+                        Toggle(name, isOn: Binding(
+                            get: { options.selectedCameras.contains(idx) },
+                            set: { on in
+                                if on { options.selectedCameras.insert(idx) }
+                                else  { options.selectedCameras.remove(idx) }
+                            }))
+                    }
+                    Toggle("Replace existing camera of the same name", isOn: $options.replaceExistingCameras)
+                        .font(.caption)
+                        .disabled(options.selectedCameras.isEmpty)
+                    Toggle("Import camera cuts", isOn: $options.importCameraCuts)
+                        .font(.caption)
+                        .disabled(options.selectedCameras.isEmpty)
+                }
+                .padding(.leading, 8)
+            }
 
             if let r = options.sourceInOut {
                 Toggle("Use source In/Out range", isOn: $options.useSourceInOut)

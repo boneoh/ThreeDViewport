@@ -96,6 +96,13 @@ final class ProjectFile {
         /// the range are dropped, the boundaries are resampled, and the slice is
         /// remapped so source `in` lands at `insertTime`.  nil = import the full clip.
         var sliceRange:    (in: Double, out: Double)? = nil
+        /// Source-camera indices to import as new cameras (pose + animation, placed by M).
+        var importCameraIndices: [Int] = []
+        /// When true, an imported camera replaces a host camera of the same name (in place)
+        /// rather than appending a duplicate.
+        var replaceExistingCameras: Bool = false
+        /// When true, import the source's camera cuts (remapped to the imported cameras).
+        var importCameraCuts: Bool = false
     }
 
     /// Imports another `.3dvp`'s models, animation, materials, and envelopes INTO the
@@ -210,6 +217,13 @@ final class ProjectFile {
         // 6. Lights (opt-in).
         if options.includeLights { appendImportedLights(data, by: M, timeOffset: T, bundleID: bundleID, vp: vp) }
         if options.includeEffects { appendImportedEffects(data, by: M, timeOffset: T, bundleID: bundleID, vp: vp) }
+        if !options.importCameraIndices.isEmpty {
+            appendImportedCameras(data, by: M, timeOffset: T,
+                                  replaceExisting: options.replaceExistingCameras,
+                                  importCuts: options.importCameraCuts,
+                                  indices: options.importCameraIndices,
+                                  projectName: url.deletingPathExtension().lastPathComponent, vp: vp)
+        }
 
         // 7. Extend the timeline to fit the imported clip.  In HOST time the clip
         //    spans [insertTime, insertTime + length], where length is the slice span
@@ -463,6 +477,111 @@ final class ProjectFile {
 
     /// Appends the import's light fixtures + keyframe tracks, with positions/targets
     /// transformed by M and times shifted by T.
+    /// Imports the selected source cameras as new SceneCameras, placing each by the import
+    /// transform `M` so they frame the placed content, AND importing their keyframe
+    /// animation (each keyframe's pose M-placed, times shifted by `T`, follow metadata
+    /// preserved — follow targets resolve to the host object of the same name).  A
+    /// temporary CameraController does the exact eye↔yaw/pitch round-trip.
+    private static func appendImportedCameras(_ data: ProjectData, by M: matrix_float4x4,
+                                              timeOffset T: Double, replaceExisting: Bool,
+                                              importCuts: Bool,
+                                              indices: [Int], projectName: String, vp: ViewportView) {
+        // Source cameras: prefer cameraSlots; fall back to the legacy single camera.
+        let slots: [CameraSlotData]
+        if let s = data.cameraSlots, !s.isEmpty { slots = s }
+        else { slots = [CameraSlotData(name: "Camera 1", camera: data.camera,
+                                       keyframes: data.cameraKeyframes,
+                                       easingMode: data.cameraEasingMode)] }
+
+        let defaultFov: Float = 27.0 * Float.pi / 180.0
+
+        // Places a (yaw,pitch,distance,target,fov) pose by M via a temp controller.
+        func placed(yaw: Float, pitch: Float, distance: Float, target: SIMD3<Float>, fov: Float)
+            -> (yaw: Float, pitch: Float, distance: Float, target: SIMD3<Float>, fov: Float) {
+            let t = CameraController()
+            t.yaw = yaw; t.pitch = pitch; t.distance = distance; t.target = target; t.fovYRadians = fov
+            let eye    = t.eyePosition
+            let newEye = M * SIMD4<Float>(eye, 1)
+            let newTgt = M * SIMD4<Float>(t.target, 1)
+            t.target = SIMD3<Float>(newTgt.x, newTgt.y, newTgt.z)
+            t.setEyePosition(SIMD3<Float>(newEye.x, newEye.y, newEye.z))
+            return (t.yaw, t.pitch, t.distance, t.target, t.fovYRadians)
+        }
+
+        var used = Set(vp.cameras.map { $0.name })
+        var replacedActive = false
+        var srcToHost: [Int: Int] = [:]   // source camera index → host camera index
+        for idx in indices where slots.indices.contains(idx) {
+            let slot = slots[idx]
+            let fov  = slot.camera.fov ?? defaultFov
+            let p = placed(yaw: slot.camera.yaw, pitch: slot.camera.pitch, distance: slot.camera.distance,
+                           target: SIMD3<Float>(slot.camera.targetX, slot.camera.targetY, slot.camera.targetZ),
+                           fov: fov)
+
+            // Keyframe animation: M-place each keyframe's pose, shift time by T, preserve follow.
+            var track: CameraKeyframeTrack? = nil
+            if !slot.keyframes.isEmpty {
+                let tr = CameraKeyframeTrack()
+                for kf in slot.keyframes {
+                    let kp = placed(yaw: kf.yaw, pitch: kf.pitch, distance: kf.distance,
+                                    target: SIMD3<Float>(kf.targetX, kf.targetY, kf.targetZ),
+                                    fov: kf.fov ?? fov)
+                    let off = kf.targetOffset ?? [0, 0, 0]
+                    let targetOff = SIMD3<Float>(off.count >= 3 ? off[0] : 0,
+                                                 off.count >= 3 ? off[1] : 0,
+                                                 off.count >= 3 ? off[2] : 0)
+                    let fwd = kf.followForwardLocal.flatMap { $0.count >= 3 ? SIMD3<Float>($0[0], $0[1], $0[2]) : nil }
+                    let up  = kf.followUpLocal.flatMap     { $0.count >= 3 ? SIMD3<Float>($0[0], $0[1], $0[2]) : nil }
+                    tr.addKeyframe(CameraKeyframe(
+                        time: kf.time + T, yaw: kp.yaw, pitch: kp.pitch, distance: kp.distance,
+                        target: kp.target, fov: kp.fov,
+                        followTargetName:  kf.followTarget,
+                        followYawOffset:   kf.followYawOffset,
+                        followPitchOffset: kf.followPitchOffset,
+                        targetOffset:      targetOff,
+                        followForwardLocal: fwd, followUpLocal: up))
+                }
+                tr.easingMode = EasingMode(rawValue: slot.easingMode) ?? .linear
+                track = tr
+            }
+
+            let baseName = slots.count > 1 ? "\(projectName): \(slot.name)" : projectName
+
+            // Replace a same-named host camera in place (pose + animation), else append.
+            if replaceExisting,
+               let existing = vp.cameras.firstIndex(where: { $0.name == baseName }) {
+                let cam = vp.cameras[existing]
+                cam.yaw = p.yaw; cam.pitch = p.pitch; cam.distance = p.distance
+                cam.target = p.target; cam.fovYRadians = p.fov
+                cam.keyframeTrack = track
+                if existing == vp.activeCameraIndex { replacedActive = true }
+                srcToHost[idx] = existing
+            } else {
+                var name = baseName
+                if !replaceExisting {
+                    var n = 2
+                    while used.contains(name) { name = "\(projectName) \(n)"; n += 1 }
+                }
+                used.insert(name)
+                vp.cameras.append(SceneCamera(name: name, yaw: p.yaw, pitch: p.pitch,
+                                              distance: p.distance, target: p.target,
+                                              fovYRadians: p.fov, keyframeTrack: track))
+                srcToHost[idx] = vp.cameras.count - 1
+            }
+        }
+        if replacedActive { vp.reloadActiveCameraFromSlot() }   // refresh the live camera
+
+        // Camera cuts: remap each source cut to the imported camera's host index, shift
+        // by T.  Cuts for non-imported cameras are skipped.
+        if importCuts {
+            for cut in data.cameraCuts {
+                guard let host = srcToHost[cut.cameraIndex] else { continue }
+                vp.addCameraCut(at: cut.time + T, cameraIndex: host)
+            }
+        }
+        print("[DEBUG] ProjectFile: imported \(indices.count) camera(s) from \(projectName)")
+    }
+
     private static func appendImportedLights(_ data: ProjectData,
                                              by M: matrix_float4x4,
                                              timeOffset: Double,
