@@ -222,15 +222,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             guard let self, let viewport else { return }
             let selected = viewport.sceneManager.selectedObject
             let targets: [SceneObject]
-            if let gid = selected?.groupID {
-                targets = viewport.sceneManager.objects(inGroup: gid)
-            } else if let obj = selected {
-                targets = [obj]
+            // A model ROOT (parentIndex == nil + groupID) shows the whole model; a selected
+            // CHILD PART (parentIndex != nil) shows just that part, so the inspector matches
+            // the HUD when a part is isolated (Option-click in the viewport / Timeline row).
+            if let obj = selected {
+                if obj.parentIndex == nil, let gid = obj.groupID {
+                    targets = viewport.sceneManager.objects(inGroup: gid)
+                } else {
+                    targets = [obj]
+                }
             } else {
                 targets = []
             }
             self.modelInspectorState?.update(targets: targets,
-                                             displayName: self.timelineDisplayName(for: targets))
+                                             displayName: self.inspectorDisplayName(for: targets))
             // Refresh the Effects grid's rows + highlight (fires on object-array
             // changes too, so add/remove/load all keep the grid current).
             self.effectsGridState?.sync()
@@ -243,6 +248,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         viewport.onControlModeChanged = { [weak self] ref in
             self?.timelineEditorWC?.editorView.selectTrack(ref)
             self?.syncPathAnimatorPanelsToSelection(ref)
+            // Authoritative inspector targets: .object → that single part; .group → the
+            // whole model.  Fires AFTER selection (setControlMode), so it corrects the
+            // stale-mode result from onSelectionChanged — works for flat/baked models too.
+            self?.refreshModelInspector(for: ref)
         }
 
         if viewport.device == nil {
@@ -2734,6 +2743,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         return first.groupID.map { sm.groupName(for: $0) } ?? sm.displayName(for: first)
     }
 
+    /// Name for the Model Inspector header: a SINGLE selected object shows its own name
+    /// (the part name for a grouped part — not the model's), while a whole-model (multi-
+    /// part) selection shows the model/group name.
+    private func inspectorDisplayName(for targets: [SceneObject]) -> String {
+        guard let first = targets.first, let sm = viewportView?.sceneManager else { return "" }
+        if targets.count == 1 {
+            return first.groupID != nil ? sm.partName(for: first) : sm.displayName(for: first)
+        }
+        return first.groupID.map { sm.groupName(for: $0) } ?? sm.displayName(for: first)
+    }
+
     private func refreshCameraFollowTargets() {
         guard let viewport = viewportView else { return }
         // Sort alphabetically (natural order so `head10` follows `head2`,
@@ -2839,6 +2859,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     // MARK: - Model Inspector
+
+    /// Sets the Model Inspector's targets from the active selection ref: a single
+    /// `.object` shows just that part; a `.group` shows the whole model.  Other refs
+    /// (camera/light/…) leave the inspector unchanged.
+    private func refreshModelInspector(for ref: TrackRef) {
+        guard let viewport = viewportView else { return }
+        let targets: [SceneObject]
+        switch ref {
+        case .group(let gid):
+            targets = viewport.sceneManager.objects(inGroup: gid)
+        case .object(let i):
+            guard i >= 0, i < viewport.sceneManager.objects.count else { return }
+            targets = [viewport.sceneManager.objects[i]]
+        default:
+            return
+        }
+        modelInspectorState?.update(targets: targets, displayName: inspectorDisplayName(for: targets))
+    }
 
     @objc private func showModelInspector(_ sender: Any) {
         if let panel = modelInspectorPanel {
