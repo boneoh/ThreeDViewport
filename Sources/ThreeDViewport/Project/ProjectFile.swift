@@ -1011,9 +1011,10 @@ final class ProjectFile {
             let aS = [sched.axisStart.x, sched.axisStart.y, sched.axisStart.z]
             let aE = [sched.axisEnd.x,   sched.axisEnd.y,   sched.axisEnd.z]
             switch ref {
-            case .camera:
+            case .camera(let ci):
+                // targetIndex carries the camera slot index (legacy files used -1 → camera 0).
                 orbitSchedData.append(OrbitRateScheduleData(
-                    targetKind: 0, targetName: "", targetIndex: -1,
+                    targetKind: 0, targetName: "", targetIndex: ci,
                     axisStart: aS, axisEnd: aE, radius: sched.radius, markers: md))
             case .light(let i):
                 orbitSchedData.append(OrbitRateScheduleData(
@@ -1819,7 +1820,7 @@ final class ProjectFile {
                 radius:    od.radius, markers: markers)
             switch od.targetKind {
             case 0:
-                vp.orbitRateSchedules[.camera] = sched
+                vp.orbitRateSchedules[.camera(max(0, od.targetIndex))] = sched
             case 1:
                 vp.orbitRateSchedules[.light(od.targetIndex)] = sched
             case 2:

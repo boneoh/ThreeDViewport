@@ -35,9 +35,22 @@ private final class CutDeleteRequest:   NSObject { let id: UUID; init(id: UUID) 
 private final class CutReassignRequest: NSObject { let id: UUID; let cam: Int; init(id: UUID, cam: Int) { self.id = id; self.cam = cam } }
 private final class CutAddRequest:      NSObject { let time: Double; let cam: Int; init(time: Double, cam: Int) { self.time = time; self.cam = cam } }
 
+/// Phase 4: display-only category groups in the Timeline (collapsible headers).
+enum TimelineCategory: Hashable {
+    case cameras, lights, effects
+    var title: String {
+        switch self {
+        case .cameras: return "Cameras"
+        case .lights:  return "Lights"
+        case .effects: return "Effects"
+        }
+    }
+}
+
 enum TrackRef: Equatable, Hashable {
-    case camera
+    case camera(Int)   // index into ViewportView.cameras (one lane per scene camera)
     case cameraCuts    // Phase 1c-2: the scheduled camera-cut marker lane
+    case category(TimelineCategory)   // Phase 4: Cameras / Lights / Effects header
     case object(Int)   // index into sceneManager.objects
     case light(Int)    // index into LightManager.lights
     case group(Int)    // groupID — multi-part model header row
@@ -537,6 +550,8 @@ final class TimelineEditorView: NSView {
     /// Signature of which Fog / emitter lanes are in use (#6) — when it changes, the lane
     /// set changed even though the object count didn't, so the rows must rebuild.
     private var lastEffectsSig:  Int             = -1
+    /// Categories seeded into expandedHeaders once (so Cameras/Lights/Effects start expanded).
+    private var seenCategories:  Set<TimelineCategory> = []
 
     // MARK: - Init
 
@@ -595,6 +610,32 @@ final class TimelineEditorView: NSView {
         return "Light \(i + 1) - \(type)"
     }
 
+    /// Display name for camera lane `i` (matches the Camera panel / inspector).
+    private func cameraName(_ i: Int) -> String {
+        viewport?.cameras[safe: i]?.name ?? "Camera \(i + 1)"
+    }
+
+    /// The keyframe track backing camera lane `i`.  The ACTIVE camera's track lives on
+    /// the live controller (where edits land before being captured into the slot), so
+    /// read it there; every other camera reads its slot's track.
+    private func cameraTrack(_ i: Int) -> CameraKeyframeTrack? {
+        if let vp = viewport, i == vp.activeCameraIndex { return camera?.keyframeTrack }
+        return viewport?.cameras[safe: i]?.keyframeTrack
+    }
+
+    /// Ensures camera lane `i` has a track to write into, creating one on the right
+    /// owner (live controller for the active camera, else the slot).
+    private func ensureCameraTrack(_ i: Int) -> CameraKeyframeTrack? {
+        guard let vp = viewport else { return nil }
+        if i == vp.activeCameraIndex {
+            if camera?.keyframeTrack == nil { camera?.keyframeTrack = CameraKeyframeTrack() }
+            return camera?.keyframeTrack
+        }
+        guard let slot = vp.cameras[safe: i] else { return nil }
+        if slot.keyframeTrack == nil { slot.keyframeTrack = CameraKeyframeTrack() }
+        return slot.keyframeTrack
+    }
+
     /// Track list sorted alphabetically (natural order) by display name across
     /// every row type — Camera, standalone objects, multi-part model groups, and
     /// lights are all folded into one A→Z list.  Multi-part models appear as a
@@ -649,7 +690,7 @@ final class TimelineEditorView: NSView {
         // One top-level entry per row, tagged with the name used to sort it and a
         // monotonic `order` used only as a stable tiebreaker for equal names.
         enum RowEntry {
-            case camera
+            case camera(idx: Int)
             case cameraCuts
             case standalone(idx: Int, obj: SceneObject)
             case group(gid: Int)
@@ -664,14 +705,19 @@ final class TimelineEditorView: NSView {
             entries.append((name, order, entry)); order += 1
         }
 
-        add("Camera", .camera)
+        // ── Category-group children (Phase 4): collected, then emitted under headers ──
+        // One lane per scene camera (named by the camera), then the Camera Cuts lane.
+        let cameraCount = max(1, viewport?.cameras.count ?? 1)
+        var cameraChildren: [RowEntry] = (0..<cameraCount).map { .camera(idx: $0) }
         // Camera Cuts lane appears once there are multiple cameras to cut between (#1c-2).
-        if (viewport?.cameras.count ?? 1) >= 2 { add("Camera Cuts", .cameraCuts) }
+        if cameraCount >= 2 { cameraChildren.append(.cameraCuts) }
+
         // Fog / emitters only get a lane once they're actually used (enabled or animated),
         // so an untouched scene stays clean.  Enable them in the Atmosphere panel.
+        var effectChildren: [RowEntry] = []
         let fogInUse = (fogSettings?.isEnabled ?? false)
             || !(fogSettings?.keyframeTrack?.keyframes.isEmpty ?? true)
-        if fogInUse { add("Fog", .fog) }
+        if fogInUse { effectChildren.append(.fog) }
         // One lane per in-use emitter, named by type ("Rain", "Smoke", …).  Disambiguate
         // duplicate types with a trailing number ("Rain 1", "Rain 2"); the original index
         // is kept for the TrackRef.
@@ -685,8 +731,12 @@ final class TimelineEditorView: NSView {
             typeSeen[e.type, default: 0] += 1
             let base = e.type.displayName
             let name = (typeTotals[e.type] ?? 0) > 1 ? "\(base) \(typeSeen[e.type]!)" : base
-            add(name, .particles(idx: i, name: name))
+            effectChildren.append(.particles(idx: i, name: name))
         }
+
+        var lightChildren: [RowEntry] = []
+        for i in 0..<lightCount { lightChildren.append(.light(idx: i)) }
+
         var seenGroups = Set<Int>()
         for (i, obj) in objects.enumerated() {
             if obj.isEnvelope {
@@ -702,10 +752,6 @@ final class TimelineEditorView: NSView {
                 add(sceneManager?.displayName(for: obj) ?? obj.name, .standalone(idx: i, obj: obj))
             }
         }
-        for i in 0..<lightCount {
-            add(lightLaneName(i), .light(idx: i))
-        }
-
         entries.sort {
             let c = $0.sortName.localizedStandardCompare($1.sortName)
             return c == .orderedSame ? ($0.order < $1.order) : (c == .orderedAscending)
@@ -716,8 +762,8 @@ final class TimelineEditorView: NSView {
         // Emits one top-level entry (and its nested parts) at the given indent level.
         func emit(_ entry: RowEntry, level: Int) {
             switch entry {
-            case .camera:
-                result.append(TrackRow(name: "Camera", ref: .camera, indentLevel: level))
+            case .camera(let idx):
+                result.append(TrackRow(name: cameraName(idx), ref: .camera(idx), indentLevel: level))
             case .cameraCuts:
                 result.append(TrackRow(name: "Camera Cuts", ref: .cameraCuts, indentLevel: level))
             case .fog:
@@ -766,6 +812,19 @@ final class TimelineEditorView: NSView {
                 }
             }
         }
+
+        // ── Category groups (Phase 4): Cameras / Lights / Effects at the top ──
+        func emitCategory(_ cat: TimelineCategory, _ children: [RowEntry]) {
+            let ref = TrackRef.category(cat)
+            if !seenCategories.contains(cat) { seenCategories.insert(cat); expandedHeaders.insert(ref) }
+            result.append(TrackRow(name: cat.title, ref: ref, isGroupHeader: true, indentLevel: 0))
+            if expandedHeaders.contains(ref) {
+                for c in children { emit(c, level: 1) }
+            }
+        }
+        emitCategory(.cameras, cameraChildren)
+        if !lightChildren.isEmpty  { emitCategory(.lights,  lightChildren) }
+        if !effectChildren.isEmpty { emitCategory(.effects, effectChildren) }
 
         // ── Import bundles (Part B) ───────────────────────────────────────────
         // Partition the alphabetical top-level entries into bundles (display-only
@@ -825,8 +884,8 @@ final class TimelineEditorView: NSView {
     /// Sorted keyframe times for a given track.
     private func keyframeTimes(for ref: TrackRef) -> [Double] {
         switch ref {
-        case .camera:
-            return camera?.keyframeTrack?.keyframes.map { $0.time } ?? []
+        case .camera(let i):
+            return cameraTrack(i)?.keyframes.map { $0.time } ?? []
         case .cameraCuts:
             return []                                  // cut markers, not keyframes
         case .object(let i):
@@ -842,6 +901,8 @@ final class TimelineEditorView: NSView {
             return particleManager?.emitters[safe: i]?.keyframeTrack?.keyframes.map { $0.time } ?? []
         case .importBundle:
             return []   // display-only header — no track of its own
+        case .category:
+            return []   // category header — no track of its own
         }
     }
 
@@ -2024,6 +2085,7 @@ final class TimelineEditorView: NSView {
     private func deleteMenuTitle(for ref: TrackRef) -> String? {
         switch ref {
         case .importBundle:  return "Delete Import"
+        case .category:      return nil
         case .cameraCuts:    return nil
         case .group:         return "Delete Model"
         case .object(let i):
@@ -2408,8 +2470,8 @@ final class TimelineEditorView: NSView {
 
     private func applyRetime(ref: TrackRef, fromTime: Double, toTime: Double) {
         switch ref {
-        case .camera:
-            guard let track = camera?.keyframeTrack,
+        case .camera(let ci):
+            guard let track = cameraTrack(ci),
                   let idx   = track.keyframes.firstIndex(where: { abs($0.time - fromTime) < 0.0005 })
             else { return }
             track.retimeKeyframe(at: idx, to: toTime)
@@ -2450,7 +2512,7 @@ final class TimelineEditorView: NSView {
             else { return }
             track.retimeKeyframe(at: idx, to: toTime)
 
-        case .importBundle:
+        case .importBundle, .category:
             return   // display-only header — no track
         }
     }
@@ -2469,8 +2531,8 @@ final class TimelineEditorView: NSView {
             let to    = group.map { $0.newTime }
             switch ref {
             case .cameraCuts: break
-            case .camera:
-                camera?.keyframeTrack?.moveKeyframes(from: from, to: to)
+            case .camera(let ci):
+                cameraTrack(ci)?.moveKeyframes(from: from, to: to)
             case .object(let i):
                 sceneManager?.objects[safe: i]?.keyframeTrack?.moveKeyframes(from: from, to: to)
             case .light(let i):
@@ -2483,7 +2545,7 @@ final class TimelineEditorView: NSView {
                 fogSettings?.keyframeTrack?.moveKeyframes(from: from, to: to)
             case .particles(let i):
                 particleManager?.emitters[safe: i]?.keyframeTrack?.moveKeyframes(from: from, to: to)
-            case .importBundle:
+            case .importBundle, .category:
                 break   // display-only header — no track
             }
         }
@@ -2518,8 +2580,8 @@ final class TimelineEditorView: NSView {
         if locked(ref) { beepLocked(); return }   // locked track — no keyframe delete
         switch ref {
         case .cameraCuts: break
-        case .camera:
-            camera?.keyframeTrack?.removeKeyframe(at: ki)
+        case .camera(let ci):
+            cameraTrack(ci)?.removeKeyframe(at: ki)
         case .object(let i):
             sceneManager?.objects[safe: i]?.keyframeTrack?.removeKeyframe(at: ki)
         case .light(let i):
@@ -2532,7 +2594,7 @@ final class TimelineEditorView: NSView {
             fogSettings?.keyframeTrack?.removeKeyframe(at: ki)
         case .particles(let i):
             particleManager?.emitters[safe: i]?.keyframeTrack?.removeKeyframe(at: ki)
-        case .importBundle:
+        case .importBundle, .category:
             break   // display-only header — no track
         }
         selectedKFIndex = nil
@@ -2548,8 +2610,8 @@ final class TimelineEditorView: NSView {
         let eps: Double = 0.0005
         switch ref {
         case .cameraCuts: return
-        case .camera:
-            guard let track = camera?.keyframeTrack,
+        case .camera(let ci):
+            guard let track = cameraTrack(ci),
                   let idx   = track.keyframes.firstIndex(where: { abs($0.time - time) < eps })
             else { return }
             track.removeKeyframe(at: idx)
@@ -2580,7 +2642,7 @@ final class TimelineEditorView: NSView {
                   let idx   = track.keyframes.firstIndex(where: { abs($0.time - time) < eps })
             else { return }
             track.removeKeyframe(at: idx)
-        case .importBundle:
+        case .importBundle, .category:
             return   // display-only header — no track
         }
     }
@@ -2590,13 +2652,13 @@ final class TimelineEditorView: NSView {
         let ref = tracks[ti].ref
         if locked(ref) { beepLocked(); return }   // locked track — no keyframe stamp
         switch ref {
-        case .camera:         onInsertCameraKeyframe?()
+        case .camera(let ci): viewport?.activateCamera(ci); onInsertCameraKeyframe?()
         case .object(let i):  onInsertObjectKeyframe?(i)
         case .light(let i):   onInsertLightKeyframe?(i)
         case .group(let gid): onInsertGroupKeyframe?(gid)
         case .fog:            onInsertFogKeyframe?()
         case .particles(let i): onInsertParticleKeyframe?(i)
-        case .importBundle:   return   // display-only header — no track
+        case .importBundle, .category: return   // display-only header — no track
         case .cameraCuts:     return   // cuts are added via the lane / Camera panel
         }
         // The stamp call above triggers ViewportView.onKeyframeStamped, which
@@ -2763,12 +2825,13 @@ final class TimelineEditorView: NSView {
     /// are Save-As descendants and share names/indices.)
     private func keyframeDescriptor(for ref: TrackRef) -> (name: String?, index: Int?) {
         switch ref {
-        case .camera, .fog, .cameraCuts: return (nil, nil)
+        case .camera(let i):    return (nil, i)
+        case .fog, .cameraCuts: return (nil, nil)
         case .object(let i):    return (sceneManager?.objects[safe: i]?.name, nil)
         case .group(let gid):   return (sceneManager?.groupName(for: gid), nil)
         case .light(let i):     return (nil, i)
         case .particles(let i): return (nil, i)
-        case .importBundle:     return (nil, nil)   // display-only header — not copyable
+        case .importBundle, .category: return (nil, nil)   // display-only header — not copyable
         }
     }
 
@@ -2776,7 +2839,9 @@ final class TimelineEditorView: NSView {
     /// no matching track in this scene.
     private func resolveTrackRef(kind: KFClipKind, name: String?, index: Int?) -> TrackRef? {
         switch kind {
-        case .camera: return .camera
+        case .camera:
+            let i = index ?? viewport?.activeCameraIndex ?? 0
+            return (viewport?.cameras.indices.contains(i) ?? false) ? .camera(i) : nil
         case .fog:    return .fog
         case .object:
             guard let name, let i = sceneManager?.objects.firstIndex(where: { $0.name == name }) else { return nil }
@@ -2918,8 +2983,8 @@ final class TimelineEditorView: NSView {
                 let t = times[d.kfIndex]
                 switch ref {
                 case .cameraCuts: continue
-                case .camera:
-                    guard let kf = camera?.keyframeTrack?.keyframes[safe: d.kfIndex] else { continue }
+                case .camera(let ci):
+                    guard let kf = cameraTrack(ci)?.keyframes[safe: d.kfIndex] else { continue }
                     entries.append((.camera(kf), t, ref))
                 case .object(let i):
                     guard let kf = sceneManager?.objects[safe: i]?
@@ -2939,7 +3004,7 @@ final class TimelineEditorView: NSView {
                 case .particles(let i):
                     guard let kf = particleManager?.emitters[safe: i]?.keyframeTrack?.keyframes[safe: d.kfIndex] else { continue }
                     entries.append((.particles(kf), t, ref))
-                case .importBundle:
+                case .importBundle, .category:
                     continue   // display-only header — no track
                 }
             }
@@ -2964,8 +3029,8 @@ final class TimelineEditorView: NSView {
         let ref = tracks[ti].ref
         switch ref {
         case .cameraCuts: return
-        case .camera:
-            guard let kf = camera?.keyframeTrack?.keyframes[safe: ki] else { return }
+        case .camera(let ci):
+            guard let kf = cameraTrack(ci)?.keyframes[safe: ki] else { return }
             clipboardKeyframe = .camera(kf)
         case .object(let i):
             guard let kf = sceneManager?.objects[safe: i]?
@@ -2991,7 +3056,7 @@ final class TimelineEditorView: NSView {
             clipboardKeyframe = .particles(kf)
             coordinateClipboard?.position = kf.position
             coordinateClipboard?.size     = kf.size
-        case .importBundle:
+        case .importBundle, .category:
             return   // display-only header — no track
         }
         if let clip = clipboardKeyframe {
@@ -3044,11 +3109,10 @@ final class TimelineEditorView: NSView {
         switch (clip, ref) {
 
         // ── Camera ────────────────────────────────────────────────────────────
-        case (.camera(let src), .camera):
-            if camera?.keyframeTrack == nil { camera?.keyframeTrack = CameraKeyframeTrack() }
+        case (.camera(let src), .camera(let ci)):
             // Preserve follow metadata so a copied follow keyframe pastes as a
             // follow keyframe, not a free camera keyframe.
-            camera?.keyframeTrack?.addKeyframe(CameraKeyframe(
+            ensureCameraTrack(ci)?.addKeyframe(CameraKeyframe(
                 time:               t,
                 yaw:                src.yaw,
                 pitch:              src.pitch,
@@ -3130,11 +3194,10 @@ final class TimelineEditorView: NSView {
     private func pasteClip(_ clip: ClipboardKeyframe, to ref: TrackRef, at t: Double) {
         if locked(ref) { return }   // locked track — no keyframe paste
         switch (clip, ref) {
-        case (.camera(let src), .camera):
-            if camera?.keyframeTrack == nil { camera?.keyframeTrack = CameraKeyframeTrack() }
+        case (.camera(let src), .camera(let ci)):
             // Preserve follow metadata so a copied follow keyframe pastes as a
             // follow keyframe, not a free camera keyframe.
-            camera?.keyframeTrack?.addKeyframe(CameraKeyframe(
+            ensureCameraTrack(ci)?.addKeyframe(CameraKeyframe(
                 time:               t,
                 yaw:                src.yaw,
                 pitch:              src.pitch,
@@ -3296,7 +3359,7 @@ final class TimelineEditorView: NSView {
                 action  = #selector(easingPopupTrackChanged(_:))
                 tag     = 0
                 current = mode
-            case .importBundle:
+            case .importBundle, .category:
                 continue   // display-only header — no easing popup
             }
 
@@ -3337,7 +3400,7 @@ final class TimelineEditorView: NSView {
                 guard i < sm.objects.count, sm.objects[i].groupID == nil else { continue } // skip parts
             case .importBundle, .cameraCuts:
                 continue
-            case .camera, .fog, .light, .particles, .group:
+            case .camera, .fog, .light, .particles, .group, .category:
                 break
             }
             let lockY = laneTop(trackIndex) + (laneHeight - lockH) / 2
@@ -3403,12 +3466,12 @@ final class TimelineEditorView: NSView {
         switch ref {
         case .object(let i):    return sceneManager?.objects[safe: i]?.keyframeTrack?.easingMode
         case .group(let gid):   return sceneManager?.groupKeyframeTracks[gid]?.easingMode
-        case .camera:           return camera?.keyframeTrack?.easingMode
+        case .camera(let i):    return cameraTrack(i)?.easingMode
         case .light(let i):     return lightManager?.keyframeTracks[safe: i]??.easingMode
         case .fog:              return fogSettings?.keyframeTrack?.easingMode
         case .particles(let i): return particleManager?.emitters[safe: i]?.keyframeTrack?.easingMode
         case .cameraCuts:       return nil
-        case .importBundle:     return nil   // display-only header — no track
+        case .importBundle, .category: return nil   // display-only header — no track
         }
     }
 
@@ -3417,12 +3480,12 @@ final class TimelineEditorView: NSView {
         switch ref {
         case .object(let i):    sceneManager?.objects[safe: i]?.keyframeTrack?.easingMode = mode
         case .group(let gid):   sceneManager?.groupKeyframeTracks[gid]?.easingMode = mode
-        case .camera:           camera?.keyframeTrack?.easingMode = mode
+        case .camera(let i):    cameraTrack(i)?.easingMode = mode
         case .light(let i):     lightManager?.keyframeTracks[safe: i]??.easingMode = mode
         case .fog:              fogSettings?.keyframeTrack?.easingMode = mode
         case .particles(let i): particleManager?.emitters[safe: i]?.keyframeTrack?.easingMode = mode
         case .cameraCuts:       break
-        case .importBundle:     break   // display-only header — no track
+        case .importBundle, .category: break   // display-only header — no track
         }
     }
 }

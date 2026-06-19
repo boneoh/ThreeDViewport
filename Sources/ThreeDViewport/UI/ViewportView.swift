@@ -332,7 +332,10 @@ final class ViewportView: MTKView {
             self.addCameraKeyframeFromPanel()
         }
         // Camera slider edit → auto-keyframe-on-edit (gated by its settings).
-        cameraPanelState.onSliderEdited = { [weak self] in self?.autoKeyframeOnEdit(.camera) }
+        cameraPanelState.onSliderEdited = { [weak self] in
+            guard let self else { return }
+            self.autoKeyframeOnEdit(.camera(self.activeCameraIndex))
+        }
         // POV sliders → reposition camera on the sphere around the followed target.
         cameraPanelState.onPOVLivePreview = { [weak self] name, dist, azDeg, elDeg in
             guard let self else { return }
@@ -355,6 +358,9 @@ final class ViewportView: MTKView {
         cameraPanelState.onSelectCamera = { [weak self] i in
             guard let self else { return }
             self.activateCamera(i)
+            // Enter Camera mode so the HUD shows the camera + name and the matching
+            // Timeline lane highlights (fires onControlModeChanged → selectTrack).
+            self.setControlMode(.camera)
             self.syncCameraListToPanel()
             self.refreshCameraPanelState()   // show the newly-active camera's pose
             self.needsDisplay = true
@@ -734,7 +740,7 @@ final class ViewportView: MTKView {
     /// `.director` / `.probe` (neither is a timeline track).
     var currentTrackRef: TrackRef? {
         switch controlMode {
-        case .camera: return .camera
+        case .camera: return .camera(activeCameraIndex)
         case .object: return .object(sceneManager.selectedIndex)
         case .light:  return .light(lightManager.selectedIndex)
         case .model:
@@ -758,7 +764,10 @@ final class ViewportView: MTKView {
     /// locked when its parts are locked (set together via the model header).
     func isLocked(_ ref: TrackRef) -> Bool {
         switch ref {
-        case .camera: return cameraLocked
+        case .camera(let i):
+            // The active camera's lock lives in cameraLocked; others in their slot.
+            if i == activeCameraIndex { return cameraLocked }
+            return cameras.indices.contains(i) ? cameras[i].isLocked : false
         case .cameraCuts: return false
         case .fog:    return fogLocked
         case .light(let i):
@@ -771,13 +780,26 @@ final class ViewportView: MTKView {
         case .group(let gid):
             return sceneManager.objects.first(where: { $0.groupID == gid })?.isLocked ?? false
         case .importBundle: return false
+        case .category(let cat):
+            // A category header reads as locked only when EVERY lane under it is locked.
+            switch cat {
+            case .cameras: return cameras.indices.allSatisfy { isLocked(.camera($0)) }
+            case .lights:
+                let ls = lightManager.lights
+                return !ls.isEmpty && ls.allSatisfy { $0.isLocked }
+            case .effects:
+                let es = particleManager.emitters
+                return fogLocked && es.allSatisfy { $0.isLocked }
+            }
         }
     }
 
     /// Sets the lock state for a Timeline track.  A model header cascades to all parts.
     func setLocked(_ ref: TrackRef, _ locked: Bool) {
         switch ref {
-        case .camera: cameraLocked = locked
+        case .camera(let i):
+            if i == activeCameraIndex { cameraLocked = locked }
+            if cameras.indices.contains(i) { cameras[i].isLocked = locked }
         case .cameraCuts: break
         case .fog:    fogLocked = locked
         case .light(let i):
@@ -799,6 +821,17 @@ final class ViewportView: MTKView {
         case .group(let gid):
             for obj in sceneManager.objects where obj.groupID == gid { obj.isLocked = locked }
         case .importBundle: break
+        case .category(let cat):
+            // A category header cascades its lock to every lane it groups.
+            switch cat {
+            case .cameras:
+                for i in cameras.indices { setLocked(.camera(i), locked) }
+            case .lights:
+                for i in lightManager.lights.indices { lightManager.lights[i].isLocked = locked }
+            case .effects:
+                fogLocked = locked
+                particleManager.emitters.forEach { $0.isLocked = locked }
+            }
         }
     }
 
@@ -1003,7 +1036,8 @@ final class ViewportView: MTKView {
         overlayState.sceneModeActive = sceneModeActive
         switch controlMode {
         case .camera:
-            overlayState.selectedItemName = ""
+            overlayState.selectedItemName = cameras.indices.contains(activeCameraIndex)
+                ? cameras[activeCameraIndex].name : ""
         case .object:
             let idx = sceneManager.selectedIndex
             if idx < sceneManager.objects.count {
@@ -1872,13 +1906,13 @@ final class ViewportView: MTKView {
             guard i >= 0, i < lightManager.keyframeTracks.count else { return [] }
             return lightManager.keyframeTracks[i]?.keyframes.map { $0.time } ?? []
         case .camera:
-            return camera.keyframeTrack?.keyframes.map { $0.time } ?? []
+            return camera.keyframeTrack?.keyframes.map { $0.time } ?? []   // active camera only (auto-kf)
         case .fog:
             return fogSettings.keyframeTrack?.keyframes.map { $0.time } ?? []
         case .particles(let i):
             guard i >= 0, i < particleManager.emitters.count else { return [] }
             return particleManager.emitters[i].keyframeTrack?.keyframes.map { $0.time } ?? []
-        case .importBundle:
+        case .importBundle, .category:
             return []
         }
     }
@@ -1894,7 +1928,7 @@ final class ViewportView: MTKView {
         case .fog:              addFogKeyframeAtCurrentTime()
         case .particles(let i): addParticleKeyframeAtCurrentTime(forEmitterAt: i)
         case .cameraCuts:       break
-        case .importBundle:     break
+        case .importBundle, .category: break
         }
     }
 
@@ -2065,7 +2099,7 @@ final class ViewportView: MTKView {
             + " pitch=" + String(format: "%.4f", camera.pitch)
             + " distance=" + String(format: "%.4f", camera.distance)
             + " fov=" + String(format: "%.4f", camera.fovYRadians))
-        onKeyframeStamped?(.camera)
+        onKeyframeStamped?(.camera(activeCameraIndex))
     }
 
     // MARK: - Path Animator
@@ -2094,7 +2128,7 @@ final class ViewportView: MTKView {
                     time: s.time, yaw: yaw, pitch: pitch, distance: dist,
                     target: fixedAim, fov: camera.fovYRadians))
             }
-            onKeyframeStamped?(.camera)
+            onKeyframeStamped?(.camera(activeCameraIndex))
 
         case .light(let i):
             guard i >= 0, i < lightManager.lights.count else { return }
@@ -2293,7 +2327,7 @@ final class ViewportView: MTKView {
                     time: s.time, yaw: yaw, pitch: pitch, distance: distance,
                     target: s.position - offset, fov: fov))
             }
-            onKeyframeStamped?(.camera)
+            onKeyframeStamped?(.camera(activeCameraIndex))
 
         case .light(let i):
             guard i >= 0, i < lightManager.lights.count else { return }
@@ -2551,7 +2585,7 @@ final class ViewportView: MTKView {
                     time: s.time, yaw: yaw, pitch: pitch, distance: dist,
                     target: center, fov: camera.fovYRadians))
             }
-            onKeyframeStamped?(.camera)
+            onKeyframeStamped?(.camera(activeCameraIndex))
 
         case .light(let i):
             guard i >= 0, i < lightManager.lights.count else { return }
@@ -2730,7 +2764,7 @@ final class ViewportView: MTKView {
             + " followTarget='\(targetName)'"
             + " followYawOffset=" + yawOffStr
             + " followPitchOffset=" + pitchOffStr)
-        onKeyframeStamped?(.camera)
+        onKeyframeStamped?(.camera(activeCameraIndex))
     }
 
     /// Positions the camera on a sphere of `distance` around the followed
@@ -4106,12 +4140,19 @@ final class ViewportView: MTKView {
                 return
 
             case KC.c:
-                // C — Camera mode.  (Director POV is now reached with D; C no longer
-                // toggles into it.)  In Scene mode this targets the scene camera for
-                // posing while the view stays through the Director.
-                controlMode = .camera
+                // C — Camera mode.  A second press while already in Camera mode cycles
+                // to the next camera (wrap-around), like O (objects) and L (lights).
+                // (Director POV is now reached with D.)  In Scene mode this targets the
+                // scene camera for posing while the view stays through the Director.
+                if controlMode == .camera, cameras.count > 1 {
+                    activateCamera((activeCameraIndex + 1) % cameras.count)
+                    syncCameraListToPanel()
+                    refreshCameraPanelState()   // dropdown + pose follow the new camera
+                } else {
+                    controlMode = .camera
+                }
                 syncOverlayState()
-                onControlModeChanged?(.camera)
+                onControlModeChanged?(.camera(activeCameraIndex))
                 return
 
             case KC.l:
@@ -4234,7 +4275,7 @@ final class ViewportView: MTKView {
                     // Director mode is meaningless outside Scene mode — revert to
                     // Camera and restore the matching timeline-lane highlight.
                     controlMode = .camera
-                    onControlModeChanged?(.camera)
+                    onControlModeChanged?(.camera(activeCameraIndex))
                 }
                 if !sceneModeActive {
                     // Solo is a Scene-mode aid — clear it on exit so the real

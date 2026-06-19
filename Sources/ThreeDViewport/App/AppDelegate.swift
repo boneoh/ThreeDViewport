@@ -3814,7 +3814,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     /// Human-readable label for a captured track.
     private func pathAnimatorTrackLabel(_ ref: TrackRef) -> String {
         switch ref {
-        case .camera:        return "Camera"
+        case .camera(let i):
+            if let cams = viewportView?.cameras, cams.indices.contains(i) { return cams[i].name }
+            return "Camera \(i + 1)"
         case .light(let i):
             if let lights = viewportView?.lightManager.lights, i >= 0, i < lights.count {
                 return "Light \(i + 1) - \(lights[i].type.displayName)"
@@ -3883,7 +3885,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let viewport = viewportView else { return [] }
         let sm = viewport.sceneManager
         var result: [PathTarget] = []
-        if camera { result.append(PathTarget(label: "Camera", ref: .camera)) }
+        if camera {
+            for (i, cam) in viewport.cameras.enumerated() {
+                result.append(PathTarget(label: cam.name, ref: .camera(i)))
+            }
+        }
         if lights {
             for (i, light) in viewport.lightManager.lights.enumerated() {
                 result.append(PathTarget(label: "Light \(i + 1) - \(light.type.displayName)",
@@ -4298,7 +4304,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             switch ref {
             case .cameraCuts:
                 return
-            case .camera:
+            case .camera(let ci):
+                // Make the clicked camera active so the live controller edits its track.
+                viewport.activateCamera(ci)
                 // Evaluate the camera track at kfTime to get the exact saved values.
                 // Also look up the RAW keyframe to preserve followTargetName —
                 // evaluate() creates a new struct and drops follow metadata.
@@ -4440,7 +4448,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 self.kfEditSnapshot = .particles(index: i, kfTime: kfTime)
                 print("[DEBUG] AppDelegate: entered particle keyframe edit emitter=\(i) t="
                     + String(format: "%.3f", kfTime))
-            case .importBundle:
+            case .importBundle, .category:
                 return   // display-only header — no track to edit
             }
         }
@@ -4579,7 +4587,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         wc.editorView.onLaneSelected = { [weak viewport] ref in
             guard let viewport = viewport else { return }
             switch ref {
-            case .camera, .cameraCuts:
+            case .camera(let i):
+                // Selecting a camera lane makes it the active (editable / scrubbed) camera.
+                viewport.activateCamera(i)
+                viewport.setControlMode(.camera)
+            case .cameraCuts:
                 viewport.setControlMode(.camera)
             case .object(let i):
                 viewport.sceneManager.selectedIndex = i
@@ -4603,7 +4615,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             case .particles(let i):
                 // Make the panel show the clicked emitter (no viewport control mode).
                 viewport.particleManager.selectedIndex = i
-            case .importBundle:
+            case .importBundle, .category:
                 // Display-only header — selecting it just highlights the lane; no
                 // viewport control mode and no selection change.
                 break
@@ -5170,7 +5182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 vp.deleteObjects(set)
             }
 
-        case .fog, .camera:
+        case .fog, .camera, .category:
             return
         }
 
