@@ -1061,9 +1061,14 @@ final class ViewportView: MTKView {
             }
         case .light:
             let li = lightManager.selectedIndex
-            overlayState.selectedItemName = li < lightManager.lights.count
-                ? "Light \(li + 1) - \(lightManager.lights[li].type.displayName)"
-                : ""
+            if li < lightManager.lights.count {
+                let l = lightManager.lights[li]
+                overlayState.selectedItemName = (l.customName?.isEmpty == false)
+                    ? l.customName!
+                    : "Light \(li + 1) - \(l.type.displayName)"
+            } else {
+                overlayState.selectedItemName = ""
+            }
         case .model:
             // Show the model's timeline name (with any duplicate-instance suffix).
             if let gid = sceneManager.selectedGroupID {

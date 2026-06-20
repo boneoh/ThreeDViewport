@@ -39,6 +39,12 @@ final class SceneObject {
 
     var name: String
 
+    // User-chosen display name override (Timeline right-click ▸ Rename).  When set it
+    // replaces the derived display name everywhere (Timeline, HUD, pickers).  For a
+    // grouped model's ROOT object it also renames the whole model/group.  nil = use the
+    // default derived name.
+    var customName: String?
+
     // The .glb file this object was loaded from.
     // Stored so multi-model project files can reload each object independently.
     var sourceURL: URL?

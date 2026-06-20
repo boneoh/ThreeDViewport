@@ -36,6 +36,9 @@ struct LightConfig {
     var isEnabled: Bool          = true
     /// Timeline edit lock — frozen against viewport edits + keyframe changes.
     var isLocked:  Bool          = false
+    /// User-chosen display name (Timeline right-click ▸ Rename).  nil = default
+    /// "Light N - Type".
+    var customName: String?      = nil
 
     // ── Shared ───────────────────────────────────────────────────────────────
     var color:     SIMD3<Float>  = SIMD3<Float>(1.0, 1.0, 1.0)

@@ -88,6 +88,8 @@ final class ParticleEffect: ObservableObject {
     /// Timeline edit lock — frozen against viewport edits + keyframe changes.
     /// @Published so the Atmosphere panel disables this emitter's controls reactively.
     @Published var isLocked: Bool = false
+    /// User-chosen display name (Timeline right-click ▸ Rename).  nil = default type name.
+    @Published var customName: String? = nil
     @Published var type:      ParticleType  = .rain {
         didSet { if type != oldValue { applyTypeDefaults() } }   // Type acts as a preset.
     }

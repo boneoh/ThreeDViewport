@@ -609,6 +609,7 @@ final class ProjectFile {
             l.excludeBeamFromFeedback = lcd.excludeBeamFromFeedback
             l.importBundleID          = bundleID
             l.isLocked                = lcd.isLocked ?? false
+            l.customName              = lcd.customName
             lm.lights.append(l)
             lm.keyframeTracks.append(nil)
         }
@@ -784,6 +785,7 @@ final class ProjectFile {
             return ObjectData(
                 name:                obj.name,
                 keyframes:           kfData,
+                customName:          obj.customName,
                 baseTransformMatrix: encodeMatrix(matrixToSave),
                 easingMode:          (obj.keyframeTrack?.easingMode ?? .linear).rawValue,
                 isVisible:           obj.isVisible,
@@ -870,7 +872,8 @@ final class ProjectFile {
                 beamThickness:           l.beamThickness,
                 excludeBeamFromFeedback: l.excludeBeamFromFeedback,
                 importBundleID:          l.importBundleID,
-                isLocked:                l.isLocked
+                isLocked:                l.isLocked,
+                customName:              l.customName
             )
         }
 
@@ -1090,6 +1093,7 @@ final class ProjectFile {
                                            visible:      vp.probeConfig.isVisible,
                                            isLocked:     vp.probeConfig.isLocked),
             groupBaseTransforms: captureGroupBaseTransforms(from: vp),
+            groupCustomNames:    captureGroupCustomNames(from: vp),
             cameraEasingMode:    (cam.keyframeTrack?.easingMode ?? .linear).rawValue,
             lightEasingModes:    lm.keyframeTracks.map { ($0?.easingMode ?? .linear).rawValue },
             fogEasingMode:       (vp.fogSettings.keyframeTrack?.easingMode ?? .linear).rawValue,
@@ -1126,7 +1130,8 @@ final class ProjectFile {
             r: fx.color.x, g: fx.color.y, b: fx.color.z,
             particleSize: fx.particleSize, fallSpeed: fx.fallSpeed, streak: fx.streak,
             lifetime: fx.lifetime, growth: fx.growth, baseAlpha: fx.baseAlpha,
-            importBundleID: fx.importBundleID, isLocked: fx.isLocked)
+            importBundleID: fx.importBundleID, isLocked: fx.isLocked,
+            customName: fx.customName)
     }
 
     /// Serialises an atmosphere keyframe track (fog or particles) to Codable data.
@@ -1167,6 +1172,7 @@ final class ProjectFile {
                                              into fx: ParticleEffect) {
         fx.isEnabled = pd.isEnabled
         fx.isLocked  = pd.isLocked
+        fx.customName = pd.customName   // v40 Timeline ▸ Rename
         fx.type      = ParticleType(rawValue: pd.type) ?? .rain
         fx.position  = SIMD3<Float>(pd.px, pd.py, pd.pz)
         fx.size      = SIMD3<Float>(pd.sx, pd.sy, pd.sz)
@@ -1341,6 +1347,7 @@ final class ProjectFile {
                 l.excludeBeamFromFeedback = lcd.excludeBeamFromFeedback
                 l.importBundleID          = lcd.importBundleID   // Part B
                 l.isLocked                = lcd.isLocked ?? false
+                l.customName              = lcd.customName        // v40 Timeline ▸ Rename
                 return l
             }
             // Pad keyframe tracks array to match new light count
@@ -1386,6 +1393,10 @@ final class ProjectFile {
         // so this restore is a no-op for them.
         applyGroupBaseTransforms(data.groupBaseTransforms, to: vp,
                                  substitutedFilenames: substitutedFilenames)
+
+        // ── Model/group custom names (v40 Timeline ▸ Rename) ──────────────────
+        vp.sceneManager.groupCustomNames = [:]
+        applyGroupCustomNames(data.groupCustomNames ?? [], to: vp)
 
         // ── Rate-marker schedules (v35) ───────────────────────────────────────
         // Restore the editable Spin / Orbit markers.  The baked keyframes they
@@ -1633,6 +1644,7 @@ final class ProjectFile {
         obj.isVisible = saved.isVisible
         obj.occludeWhenHidden = saved.occludeWhenHidden   // v17
         obj.isLocked = saved.isLocked                     // timeline edit lock
+        obj.customName = saved.customName                 // v40 Timeline ▸ Rename
         obj.objectClass = ObjectClass(rawValue: saved.objectClass) ?? .background
         obj.feedbackEnabled = saved.feedbackEnabled
         obj.importBundleID  = saved.importBundleID   // Part B (import overrides this later)
@@ -1970,6 +1982,37 @@ final class ProjectFile {
             ))
         }
         return out
+    }
+
+    /// Serialises user-chosen model/group names, keyed like group base transforms.
+    private static func captureGroupCustomNames(from vp: ViewportView) -> [GroupCustomNameData] {
+        let occByGid = groupOccurrences(vp.sceneManager.objects)
+        var out: [GroupCustomNameData] = []
+        for (gid, name) in vp.sceneManager.groupCustomNames where !name.isEmpty {
+            guard let fileName = vp.sceneManager.objects
+                .first(where: { $0.groupID == gid })?.sourceURL?.lastPathComponent
+            else { continue }
+            out.append(GroupCustomNameData(sourceFileName: fileName,
+                                           occurrence: occByGid[gid] ?? 0, name: name))
+        }
+        return out
+    }
+
+    /// Reconnects saved model/group names to the runtime group IDs (by filename + occurrence).
+    private static func applyGroupCustomNames(_ entries: [GroupCustomNameData], to vp: ViewportView) {
+        let occByGid = groupOccurrences(vp.sceneManager.objects)
+        var gidForKey: [String: Int] = [:]
+        var seen = Set<Int>()
+        for obj in vp.sceneManager.objects {
+            guard let gid = obj.groupID, seen.insert(gid).inserted,
+                  let fn = obj.sourceURL?.lastPathComponent else { continue }
+            gidForKey["\(fn)#\(occByGid[gid] ?? 0)"] = gid
+        }
+        for e in entries {
+            if let gid = gidForKey["\(e.sourceFileName)#\(e.occurrence)"] {
+                vp.sceneManager.groupCustomNames[gid] = e.name
+            }
+        }
     }
 
     // MARK: - Group identity (supports the same model loaded multiple times)

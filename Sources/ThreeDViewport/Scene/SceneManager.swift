@@ -69,6 +69,11 @@ final class SceneManager {
     var importBundles: [Int: String] = [:]
     private var nextImportBundleID: Int = 0
 
+    // groupID → user-chosen model/group name (Timeline ▸ Rename).  Kept separate from
+    // the parts so renaming the model doesn't collide with a part's own name.  Ephemeral
+    // groupIDs are reconnected on load via (sourceFileName, occurrence) like group tracks.
+    var groupCustomNames: [Int: String] = [:]
+
     // ── Import-bundle looping ("Repeat to Fill Timeline") ────────────────────
     // Per-bundle loop state.  An imported (or loaded) bundle gets an entry whose
     // `enabled` defaults false.  `cycleStart` = host time where the imported
@@ -165,6 +170,8 @@ final class SceneManager {
     }
 
     func groupName(for groupID: Int) -> String {
+        // A user-chosen model/group name (Timeline ▸ Rename) overrides the derived name.
+        if let custom = groupCustomNames[groupID], !custom.isEmpty { return custom }
         guard objects.contains(where: { $0.groupID == groupID }) else {
             return "Group \(groupID)"
         }
@@ -194,8 +201,10 @@ final class SceneManager {
     /// **numbered** ("cube 1", "cube 2") when more than one simple object shares it;
     /// group members keep their part name.
     func displayName(for obj: SceneObject) -> String {
-        // A grouped model's root resolves to the group name (already suffixed).
+        // A grouped model's root resolves to the group name (already suffixed / custom).
         if obj.parentIndex == nil, let gid = obj.groupID { return groupName(for: gid) }
+        // A user-chosen name (Timeline ▸ Rename) overrides the derived name.
+        if let c = obj.customName, !c.isEmpty { return c }
         // A multi-part model's part keeps its own glTF part name (heavy / hydrogen / …).
         if obj.groupID != nil { return obj.name }
         // An envelope keeps its given (unique) name.
@@ -219,6 +228,8 @@ final class SceneManager {
     /// members carry identical mesh names.  Parts with distinct names (heavy /
     /// hydrogen / bonds) are returned unchanged.
     func partName(for obj: SceneObject) -> String {
+        // A user-chosen part name (Timeline ▸ Rename) overrides the derived name.
+        if let c = obj.customName, !c.isEmpty { return c }
         guard let gid = obj.groupID else { return obj.name }
         var total = 0
         var occurrence = 0
@@ -235,6 +246,7 @@ final class SceneManager {
         groupKeyframeTracks.removeAll()
         groupTransforms.removeAll()
         groupEnvelopeParent.removeAll()
+        groupCustomNames.removeAll()
         importBundles.removeAll()
         importBundleLoops.removeAll()
         importBundleSources.removeAll()

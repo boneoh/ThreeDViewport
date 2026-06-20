@@ -73,6 +73,9 @@ struct ProjectData: Codable {
     /// the station's scale once for the whole project).  Tracked groups still
     /// save an entry but the track evaluator overwrites it on first frame.
     var groupBaseTransforms:    [GroupBaseTransformData] = []
+    /// v40: user-chosen model/group names (Timeline ▸ Rename).  Optional → older files
+    /// decode to nil = no custom group names.
+    var groupCustomNames:       [GroupCustomNameData]? = nil
     /// v34: Glue envelopes — geometryless null nodes that parent member objects so
     /// they animate as a unit.  Empty for older files, which load unchanged.
     var envelopes:              [EnvelopeData] = []
@@ -125,6 +128,7 @@ struct ProjectData: Codable {
          particleEmitterKeyframes: [[AtmosphereKeyframeData]] = [],
          probe:               ProbeData               = ProbeData(),
          groupBaseTransforms: [GroupBaseTransformData] = [],
+         groupCustomNames:    [GroupCustomNameData]?   = nil,
          cameraEasingMode:    Int                     = 0,
          lightEasingModes:    [Int]                   = [],
          fogEasingMode:       Int                     = 0,
@@ -167,6 +171,7 @@ struct ProjectData: Codable {
         self.particleEmitterKeyframes = particleEmitterKeyframes
         self.probe               = probe
         self.groupBaseTransforms = groupBaseTransforms
+        self.groupCustomNames    = groupCustomNames
         self.cameraEasingMode    = cameraEasingMode
         self.lightEasingModes    = lightEasingModes
         self.fogEasingMode       = fogEasingMode
@@ -223,6 +228,7 @@ struct ProjectData: Codable {
         particleEmitterKeyframes = (try? c.decode([[AtmosphereKeyframeData]].self,  forKey: .particleEmitterKeyframes)) ?? []
         probe               = (try? c.decode(ProbeData.self,             forKey: .probe))               ?? ProbeData()
         groupBaseTransforms = (try? c.decode([GroupBaseTransformData].self, forKey: .groupBaseTransforms)) ?? []
+        groupCustomNames    =  try? c.decode([GroupCustomNameData].self,    forKey: .groupCustomNames)
         cameraEasingMode    = (try? c.decode(Int.self,   forKey: .cameraEasingMode))    ?? 0
         lightEasingModes    = (try? c.decode([Int].self, forKey: .lightEasingModes))    ?? []
         fogEasingMode       = (try? c.decode(Int.self,   forKey: .fogEasingMode))       ?? 0
@@ -511,6 +517,8 @@ struct ParticleEffectData: Codable {
     var importBundleID: Int? = nil
     /// Timeline edit lock.  Default false → older files load unlocked.
     var isLocked: Bool = false
+    /// v40: user-chosen display name (Timeline ▸ Rename).  nil = default type name.
+    var customName: String? = nil
 
     init(from decoder: Decoder) throws {
         let c     = try decoder.container(keyedBy: CodingKeys.self)
@@ -535,6 +543,7 @@ struct ParticleEffectData: Codable {
         baseAlpha    = try? c.decode(Float.self, forKey: .baseAlpha)
         importBundleID = try? c.decode(Int.self, forKey: .importBundleID)
         isLocked       = (try? c.decode(Bool.self, forKey: .isLocked)) ?? false
+        customName     = try? c.decode(String.self, forKey: .customName)
     }
 
     init(isEnabled: Bool = false, type: Int = 0,
@@ -544,7 +553,8 @@ struct ParticleEffectData: Codable {
          r: Float = 1, g: Float = 1, b: Float = 1,
          particleSize: Float? = nil, fallSpeed: Float? = nil, streak: Float? = nil,
          lifetime: Float? = nil, growth: Float? = nil, baseAlpha: Float? = nil,
-         importBundleID: Int? = nil, isLocked: Bool = false) {
+         importBundleID: Int? = nil, isLocked: Bool = false,
+         customName: String? = nil) {
         self.isEnabled = isEnabled; self.type = type
         self.px = px; self.py = py; self.pz = pz
         self.sx = sx; self.sy = sy; self.sz = sz
@@ -554,6 +564,7 @@ struct ParticleEffectData: Codable {
         self.lifetime = lifetime; self.growth = growth; self.baseAlpha = baseAlpha
         self.importBundleID = importBundleID
         self.isLocked = isLocked
+        self.customName = customName
     }
 }
 
@@ -777,6 +788,8 @@ struct CameraCutData: Codable {
 
 struct ObjectData: Codable {
     var name:      String
+    // v40: user-chosen display name (Timeline ▸ Rename).  nil = default derived name.
+    var customName: String? = nil
     var keyframes: [KeyframeData]
     // v4: column-major 4×4 matrix (16 floats).  Empty array = use GLB default (v1–v3 compat).
     var baseTransformMatrix: [Float] = []
@@ -814,6 +827,7 @@ struct ObjectData: Codable {
     init(from decoder: Decoder) throws {
         let c                = try decoder.container(keyedBy: CodingKeys.self)
         name                 = try  c.decode(String.self,        forKey: .name)
+        customName           =  try? c.decode(String.self,        forKey: .customName)
         keyframes            = try  c.decode([KeyframeData].self, forKey: .keyframes)
         baseTransformMatrix  = (try? c.decode([Float].self,       forKey: .baseTransformMatrix)) ?? []
         easingMode           = (try? c.decode(Int.self,           forKey: .easingMode))          ?? 0
@@ -832,6 +846,7 @@ struct ObjectData: Codable {
     }
 
     init(name: String, keyframes: [KeyframeData],
+         customName: String? = nil,
          baseTransformMatrix: [Float] = [], easingMode: Int = 0,
          isVisible: Bool = true, occludeWhenHidden: Bool = false,
          isLocked: Bool = false,
@@ -841,6 +856,7 @@ struct ObjectData: Codable {
          baseColorFactor: [Float] = [], opacity: Float = 1,
          emissiveStrength: Float = 0, importBundleID: Int? = nil) {
         self.name                = name
+        self.customName          = customName
         self.keyframes           = keyframes
         self.baseTransformMatrix = baseTransformMatrix
         self.easingMode          = easingMode
@@ -1014,6 +1030,8 @@ struct LightConfigData: Codable {
     var importBundleID:          Int?  = nil
     // Timeline edit lock (optional → older files decode to nil = unlocked).
     var isLocked:                Bool? = nil
+    // v40: user-chosen display name (Timeline ▸ Rename).  nil = default "Light N - Type".
+    var customName:              String? = nil
 }
 
 // v6: One saved light keyframe — intensity, colour, target, position.
@@ -1090,5 +1108,25 @@ struct GroupBaseTransformData: Codable {
         sourceFileName = (try? c.decode(String.self,  forKey: .sourceFileName)) ?? ""
         occurrence     = (try? c.decode(Int.self,     forKey: .occurrence))     ?? 0
         matrix         = (try? c.decode([Float].self, forKey: .matrix))         ?? []
+    }
+}
+
+// v40: a user-chosen model/group name (Timeline ▸ Rename), keyed by source filename +
+// occurrence so it reconnects to the runtime-ephemeral group ID on load (like group tracks).
+struct GroupCustomNameData: Codable {
+    var sourceFileName: String
+    var occurrence:     Int = 0
+    var name:           String
+
+    init(sourceFileName: String, occurrence: Int = 0, name: String) {
+        self.sourceFileName = sourceFileName
+        self.occurrence     = occurrence
+        self.name           = name
+    }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        sourceFileName = (try? c.decode(String.self, forKey: .sourceFileName)) ?? ""
+        occurrence     = (try? c.decode(Int.self,    forKey: .occurrence))     ?? 0
+        name           = (try? c.decode(String.self, forKey: .name))           ?? ""
     }
 }

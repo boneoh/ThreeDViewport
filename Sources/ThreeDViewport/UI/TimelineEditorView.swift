@@ -34,6 +34,8 @@ enum ClipboardKeyframe {
 private final class CutDeleteRequest:   NSObject { let id: UUID; init(id: UUID) { self.id = id } }
 private final class CutReassignRequest: NSObject { let id: UUID; let cam: Int; init(id: UUID, cam: Int) { self.id = id; self.cam = cam } }
 private final class CutAddRequest:      NSObject { let time: Double; let cam: Int; init(time: Double, cam: Int) { self.time = time; self.cam = cam } }
+// Carries the row to rename (Timeline ▸ Rename) via NSMenuItem.representedObject.
+private final class RenameRowRequest:   NSObject { let ref: TrackRef; init(ref: TrackRef) { self.ref = ref } }
 
 /// Phase 4: display-only category groups in the Timeline (collapsible headers).
 enum TimelineCategory: Hashable {
@@ -630,8 +632,9 @@ final class TimelineEditorView: NSView {
     /// Timeline label for a light lane: "Light N - <Type>" (mirrors the weather
     /// lanes showing their type); falls back to "Light N" if the type is unavailable.
     private func lightLaneName(_ i: Int) -> String {
-        guard let type = lightManager?.lights[safe: i]?.type.displayName else { return "Light \(i + 1)" }
-        return "Light \(i + 1) - \(type)"
+        guard let light = lightManager?.lights[safe: i] else { return "Light \(i + 1)" }
+        if let c = light.customName, !c.isEmpty { return c }
+        return "Light \(i + 1) - \(light.type.displayName)"
     }
 
     /// Display name for camera lane `i` (matches the Camera panel / inspector).
@@ -839,7 +842,8 @@ final class TimelineEditorView: NSView {
         for (i, e) in usedEmitters {
             typeSeen[e.type, default: 0] += 1
             let base = e.type.displayName
-            let name = (typeTotals[e.type] ?? 0) > 1 ? "\(base) \(typeSeen[e.type]!)" : base
+            let derived = (typeTotals[e.type] ?? 0) > 1 ? "\(base) \(typeSeen[e.type]!)" : base
+            let name = (e.customName?.isEmpty == false) ? e.customName! : derived
             effectChildren.append(.particles(idx: i, name: name))
         }
 
@@ -2177,6 +2181,17 @@ final class TimelineEditorView: NSView {
             }
         }
 
+        // Nameable rows (camera / object / model / light / effect) → Rename… (#5).
+        switch ref {
+        case .camera, .object, .group, .light, .particles:
+            let item = NSMenuItem(title: "Rename…",
+                                  action: #selector(renameRowMenuAction(_:)), keyEquivalent: "")
+            item.target = self; item.representedObject = RenameRowRequest(ref: ref)
+            menu.addItem(item)
+        default:
+            break
+        }
+
         // Keyframe diamond under the cursor → coordinate-channel paste (light/fog/particles).
         if let hit = hitTestDiamond(at: pt, tracks: tracks), let clip = coordinateClipboard {
             let dref = tracks[hit.trackIndex].ref
@@ -2269,6 +2284,55 @@ final class TimelineEditorView: NSView {
         rebuildEasingPopups()
         invalidateTrackCache()   // header name feeds the lane model + its sort order
         needsDisplay = true
+    }
+
+    /// Timeline ▸ Rename for a camera / object / model / light / effect row (#5).
+    /// Sets a custom display name; clearing the field reverts to the default.
+    @objc private func renameRowMenuAction(_ sender: NSMenuItem) {
+        guard let req = sender.representedObject as? RenameRowRequest else { return }
+        let ref = req.ref
+        let current = buildTracks().first { $0.ref == ref }?.name ?? ""
+
+        let alert = NSAlert()
+        alert.messageText     = "Rename"
+        alert.informativeText = "Enter a new name for this row. Leave blank to restore the default."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.stringValue     = current
+        alert.accessoryView   = field
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let newName = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        setRowName(ref, newName)
+        NSApp.sendAction(#selector(AppDelegate.markDirtyFromUI), to: nil, from: self)
+        invalidateTrackCache()   // the name feeds the lane model + its sort order
+        rebuildEasingPopups()
+        needsDisplay = true
+        viewport?.syncOverlayState()       // refresh the HUD if this row is selected
+        if case .camera = ref { viewport?.syncCameraListToPanel() }   // dropdown follows
+    }
+
+    /// Applies a custom display name to a row (empty string clears the override).
+    private func setRowName(_ ref: TrackRef, _ name: String) {
+        let custom: String? = name.isEmpty ? nil : name
+        switch ref {
+        case .camera(let i):
+            // Cameras always carry a name; blank reverts to the positional default.
+            viewport?.cameras[safe: i]?.name = name.isEmpty ? "Camera \(i + 1)" : name
+        case .object(let i):
+            sceneManager?.objects[safe: i]?.customName = custom
+        case .group(let gid):
+            if let custom { sceneManager?.groupCustomNames[gid] = custom }
+            else          { sceneManager?.groupCustomNames.removeValue(forKey: gid) }
+        case .light(let i):
+            if i >= 0, i < (lightManager?.lights.count ?? 0) { lightManager?.lights[i].customName = custom }
+        case .particles(let i):
+            particleManager?.emitters[safe: i]?.customName = custom
+        default:
+            break
+        }
     }
 
     /// Toggles "Repeat to Fill Timeline" for an import bundle and re-tiles it.
