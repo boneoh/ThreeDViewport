@@ -77,6 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         case camera(yaw: Float, pitch: Float, distance: Float,
                     target: SIMD3<Float>,
                     followTargetName: String?,   // nil = was a free keyframe
+                    followObjectID: UUID?,       // P1: stable id of the followed object
                     kfTime: Double)
         case light(index: Int, savedIntensity: Float, savedColor: SIMD3<Float>,
                    savedTarget: SIMD3<Float>, savedPosition: SIMD3<Float>, kfTime: Double)
@@ -4418,8 +4419,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 // Also look up the RAW keyframe to preserve followTargetName —
                 // evaluate() creates a new struct and drops follow metadata.
                 let c = viewport.camera
-                let rawFollowName = c.keyframeTrack?.keyframes
-                    .first(where: { abs($0.time - kfTime) < 0.001 })?.followTargetName
+                let rawKf = c.keyframeTrack?.keyframes
+                    .first(where: { abs($0.time - kfTime) < 0.001 })
+                let rawFollowName = rawKf?.followTargetName
+                let rawFollowID   = rawKf?.followObjectID
                 if let track = c.keyframeTrack,
                    let state = track.evaluate(at: kfTime) {
                     self.kfEditSnapshot = .camera(
@@ -4428,6 +4431,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                         distance:        state.distance,
                         target:          state.target,
                         followTargetName: rawFollowName,
+                        followObjectID:  rawFollowID,
                         kfTime:          kfTime
                     )
                 } else {
@@ -4438,6 +4442,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                         distance:        c.distance,
                         target:          c.target,
                         followTargetName: rawFollowName,
+                        followObjectID:  rawFollowID,
                         kfTime:          kfTime
                     )
                 }
@@ -4577,16 +4582,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 print("[DEBUG] AppDelegate: committed object keyframe edit index=\(index)"
                     + " t=" + String(format: "%.3f", kfTime))
 
-            case .camera(_, _, _, _, let followTargetName, let kfTime):
+            case .camera(_, _, _, _, let followTargetName, let followObjectID, let kfTime):
                 viewport.timeline.seek(to: kfTime)
                 // Resume follow override before re-stamping so the new keyframe is
                 // computed against the live anchor state, then applyCameraFollow
                 // runs normally on subsequent frames.
                 viewport.camera.followSuspended = false
-                if let name = followTargetName {
-                    // Preserve follow: re-add as a follow keyframe for the same target,
-                    // recomputing the yaw offset from the new camera position.
-                    viewport.addFollowCameraKeyframeAtCurrentTime(followingObjectNamed: name)
+                if followTargetName != nil || followObjectID != nil {
+                    // Preserve follow: re-add for the same target (resolved by stable id
+                    // first, name fallback), recomputing the offset from the new pose.
+                    viewport.addFollowCameraKeyframeAtCurrentTime(
+                        followingObjectNamed: followTargetName ?? "", objectID: followObjectID)
                 } else {
                     viewport.addCameraKeyframeAtCurrentTime()
                 }
@@ -4639,7 +4645,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 print("[DEBUG] AppDelegate: cancelled object keyframe edit index=\(index)"
                     + " t=" + String(format: "%.3f", kfTime))
 
-            case .camera(let yaw, let pitch, let distance, let target, _, let kfTime):
+            case .camera(let yaw, let pitch, let distance, let target, _, _, let kfTime):
                 let c      = viewport.camera
                 c.yaw      = yaw
                 c.pitch    = pitch

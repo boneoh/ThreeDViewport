@@ -281,8 +281,12 @@ final class ProjectFile {
     // MARK: - Camera keyframe (de)serialization (shared by the legacy fields + slots)
 
     static func encodeCameraKeyframes(_ track: CameraKeyframeTrack?) -> [CameraKeyframeData] {
-        (track?.keyframes ?? []).map { kf in
-            CameraKeyframeData(
+        var out: [CameraKeyframeData] = []
+        for kf in (track?.keyframes ?? []) {
+            let offset: [Float] = [kf.targetOffset.x, kf.targetOffset.y, kf.targetOffset.z]
+            let fwd:    [Float]? = kf.followForwardLocal.map { [$0.x, $0.y, $0.z] }
+            let up:     [Float]? = kf.followUpLocal.map { [$0.x, $0.y, $0.z] }
+            out.append(CameraKeyframeData(
                 time:               kf.time,
                 yaw:                kf.yaw,
                 pitch:              kf.pitch,
@@ -292,12 +296,14 @@ final class ProjectFile {
                 targetZ:            kf.target.z,
                 fov:                kf.fov,
                 followTarget:       kf.followTargetName,
+                followObjectID:     kf.followObjectID,
                 followYawOffset:    kf.followYawOffset,
                 followPitchOffset:  kf.followPitchOffset,
-                targetOffset:       [kf.targetOffset.x, kf.targetOffset.y, kf.targetOffset.z],
-                followForwardLocal: kf.followForwardLocal.map { [$0.x, $0.y, $0.z] },
-                followUpLocal:      kf.followUpLocal     .map { [$0.x, $0.y, $0.z] })
+                targetOffset:       offset,
+                followForwardLocal: fwd,
+                followUpLocal:      up))
         }
+        return out
     }
 
     static func decodeCameraTrack(_ kfs: [CameraKeyframeData],
@@ -323,6 +329,7 @@ final class ProjectFile {
                 target:             SIMD3<Float>(kfData.targetX, kfData.targetY, kfData.targetZ),
                 fov:                kfData.fov ?? fallbackFov,
                 followTargetName:   kfData.followTarget,
+                followObjectID:     kfData.followObjectID,
                 followYawOffset:    kfData.followYawOffset,
                 followPitchOffset:  kfData.followPitchOffset,
                 targetOffset:       targetOff,

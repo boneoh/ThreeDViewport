@@ -1,3 +1,4 @@
+import Foundation
 import simd
 
 // Phase 5: Camera animation keyframe and interpolating track.
@@ -17,7 +18,11 @@ struct CameraKeyframe {
     /// Stored absolutely and linearly interpolated between adjacent keyframes.
     var fov:              Float
     /// nil = free camera (default).  non-nil = name of the SceneObject to follow.
+    /// Kept as a fallback once `followObjectID` exists (older keyframes, cross-instance).
     var followTargetName: String? = nil
+    /// Identity-refactor P1: stable id of the followed object (preferred over the name,
+    /// so renaming the object no longer breaks the follow link).  nil = match by name.
+    var followObjectID: UUID? = nil
     /// When followTargetName is set, the offset between the camera yaw and the
     /// "behind yaw" of the followed object at keyframe-creation time.
     /// e.g. 0 = directly behind, π/4 = 45° to the right.
@@ -57,10 +62,17 @@ struct CameraKeyframe {
     /// stamped before this field existed.
     var followUpLocal: SIMD3<Float>? = nil
 
+    /// True when this keyframe follows an object (by id or name).
+    var isFollow: Bool { followObjectID != nil || followTargetName != nil }
+    /// Unified follow identity used to decide "same target?" between two keyframes.
+    /// Prefers the stable id; falls back to the name.
+    var followKey: String? { followObjectID?.uuidString ?? followTargetName }
+
     init(time: Double, yaw: Float, pitch: Float,
          distance: Float, target: SIMD3<Float>,
          fov: Float,
          followTargetName:   String? = nil,
+         followObjectID:     UUID?   = nil,
          followYawOffset:    Float?  = nil,
          followPitchOffset:  Float?  = nil,
          targetOffset:       SIMD3<Float> = SIMD3<Float>(0, 0, 0),
@@ -73,6 +85,7 @@ struct CameraKeyframe {
         self.target             = target
         self.fov                = fov
         self.followTargetName   = followTargetName
+        self.followObjectID     = followObjectID
         self.followYawOffset    = followYawOffset
         self.followPitchOffset  = followPitchOffset
         self.targetOffset       = targetOffset
@@ -259,30 +272,32 @@ final class CameraKeyframeTrack {
     ///   follow→ follow (different target): snap — use a's target throughout segment
     func resolveFollowCamera(
         at time: Double,
-        getObjectState: (String) -> (pos: SIMD3<Float>, behindYaw: Float, behindPitch: Float, basis: matrix_float3x3)?
+        getObjectState: (_ id: UUID?, _ name: String?) -> (pos: SIMD3<Float>, behindYaw: Float, behindPitch: Float, basis: matrix_float3x3)?
     ) -> (target: SIMD3<Float>, yaw: Float?, pitch: Float?, worldUp: SIMD3<Float>?)? {
 
         guard !keyframes.isEmpty else { return nil }
+        // Resolve a keyframe's followed object by stable id (preferred) or name (fallback).
+        func state(_ kf: CameraKeyframe) -> (pos: SIMD3<Float>, behindYaw: Float, behindPitch: Float, basis: matrix_float3x3)? {
+            getObjectState(kf.followObjectID, kf.followTargetName)
+        }
 
         // ── Before first keyframe ─────────────────────────────────────────────
         if time <= keyframes.first!.time {
             let kf = keyframes.first!
-            guard let name = kf.followTargetName,
-                  let state = getObjectState(name) else { return nil }
-            let (yaw, pitch) = resolvedYawPitch(for: kf, state: state)
-            let up = kf.followUpLocal.map { state.basis * $0 }
-            return (target: state.pos + state.basis * kf.targetOffset,
+            guard kf.isFollow, let st = state(kf) else { return nil }
+            let (yaw, pitch) = resolvedYawPitch(for: kf, state: st)
+            let up = kf.followUpLocal.map { st.basis * $0 }
+            return (target: st.pos + st.basis * kf.targetOffset,
                     yaw: yaw, pitch: pitch, worldUp: up)
         }
 
         // ── After last keyframe ───────────────────────────────────────────────
         if time >= keyframes.last!.time {
             let kf = keyframes.last!
-            guard let name = kf.followTargetName,
-                  let state = getObjectState(name) else { return nil }
-            let (yaw, pitch) = resolvedYawPitch(for: kf, state: state)
-            let up = kf.followUpLocal.map { state.basis * $0 }
-            return (target: state.pos + state.basis * kf.targetOffset,
+            guard kf.isFollow, let st = state(kf) else { return nil }
+            let (yaw, pitch) = resolvedYawPitch(for: kf, state: st)
+            let up = kf.followUpLocal.map { st.basis * $0 }
+            return (target: st.pos + st.basis * kf.targetOffset,
                     yaw: yaw, pitch: pitch, worldUp: up)
         }
 
@@ -295,14 +310,14 @@ final class CameraKeyframeTrack {
             let span  = b.time - a.time
             let alpha = span < 0.0001 ? Float(1) : Float((time - a.time) / span)
 
-            switch (a.followTargetName, b.followTargetName) {
+            switch (a.isFollow, b.isFollow) {
 
-            case (.none, .none):
+            case (false, false):
                 return nil   // free → free
 
-            case (.none, .some(let bName)):
+            case (false, true):
                 // free → follow: blend stored a.target / a.yaw / a.pitch toward live b values
-                guard let bState = getObjectState(bName) else { return nil }
+                guard let bState = state(b) else { return nil }
                 let bTargetLive = bState.pos + bState.basis * b.targetOffset
                 let blendedTarget = a.target + (bTargetLive - a.target) * alpha
                 let (bYaw, bPitch) = resolvedYawPitch(for: b, state: bState)
@@ -313,9 +328,9 @@ final class CameraKeyframeTrack {
                 let up = (alpha >= 0.5) ? b.followUpLocal.map { bState.basis * $0 } : nil
                 return (target: blendedTarget, yaw: blendedYaw, pitch: blendedPitch, worldUp: up)
 
-            case (.some(let aName), .none):
+            case (true, false):
                 // follow → free: blend live a values toward stored b.target / b.yaw / b.pitch
-                guard let aState = getObjectState(aName) else {
+                guard let aState = state(a) else {
                     return (target: b.target, yaw: nil, pitch: nil, worldUp: nil)
                 }
                 let aTargetLive = aState.pos + aState.basis * a.targetOffset
@@ -327,16 +342,16 @@ final class CameraKeyframeTrack {
                 let up = (alpha < 0.5) ? a.followUpLocal.map { aState.basis * $0 } : nil
                 return (target: blendedTarget, yaw: blendedYaw, pitch: blendedPitch, worldUp: up)
 
-            case (.some(let aName), .some(let bName)):
+            case (true, true):
                 // follow → follow
-                if aName == bName {
+                if a.followKey == b.followKey {
                     // Same target: interpolate everything live, including yaw
                     // and pitch offsets, so the camera transitions smoothly
                     // between the two follow framings without snapping at b.
-                    guard let state = getObjectState(aName) else { return nil }
+                    guard let st = state(a) else { return nil }
                     let localOffset = a.targetOffset + (b.targetOffset - a.targetOffset) * alpha
-                    let (aYaw, aPitch) = resolvedYawPitch(for: a, state: state)
-                    let (bYaw, bPitch) = resolvedYawPitch(for: b, state: state)
+                    let (aYaw, aPitch) = resolvedYawPitch(for: a, state: st)
+                    let (bYaw, bPitch) = resolvedYawPitch(for: b, state: st)
                     let yaw   = blendOptionalAngle(aYaw, bYaw,   fallbackA: a.yaw,   fallbackB: b.yaw,   alpha: alpha)
                     let pitch = blendOptionalFloat(aPitch, bPitch, fallbackA: a.pitch, fallbackB: b.pitch, alpha: alpha)
                     // Up vector: blend in the object's local frame so the result
@@ -345,14 +360,14 @@ final class CameraKeyframeTrack {
                     // keyframe next to a non-POV one eases its roll across the whole
                     // segment instead of flipping in a single frame.
                     let up = blendedWorldUp(a.followUpLocal, b.followUpLocal,
-                                            basis: state.basis, alpha: alpha)
-                    return (target: state.pos + state.basis * localOffset, yaw: yaw, pitch: pitch, worldUp: up)
+                                            basis: st.basis, alpha: alpha)
+                    return (target: st.pos + st.basis * localOffset, yaw: yaw, pitch: pitch, worldUp: up)
                 } else {
                     // Different target: snap — use a's target throughout segment.
-                    guard let state = getObjectState(aName) else { return nil }
-                    let (yaw, pitch) = resolvedYawPitch(for: a, state: state)
-                    let up = a.followUpLocal.map { state.basis * $0 }
-                    return (target: state.pos + state.basis * a.targetOffset, yaw: yaw, pitch: pitch, worldUp: up)
+                    guard let st = state(a) else { return nil }
+                    let (yaw, pitch) = resolvedYawPitch(for: a, state: st)
+                    let up = a.followUpLocal.map { st.basis * $0 }
+                    return (target: st.pos + st.basis * a.targetOffset, yaw: yaw, pitch: pitch, worldUp: up)
                 }
             }
         }

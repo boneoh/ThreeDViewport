@@ -1499,7 +1499,7 @@ final class VideoExporter {
             if !camera.followSuspended,
                let follow = camTrack.resolveFollowCamera(
                 at:             time,
-                getObjectState: { [self] name in sceneManager.worldOrbitAnchor(ofObjectNamed: name) }
+                getObjectState: { [self] id, name in sceneManager.worldOrbitAnchor(ofObjectID: id, named: name) }
             ) {
                 camera.target = follow.target
                 if let yaw   = follow.yaw   { camera.yaw   = yaw }

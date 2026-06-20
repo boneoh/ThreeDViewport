@@ -2765,7 +2765,8 @@ final class ViewportView: MTKView {
     /// to preserve the original follow target when re-writing an edited keyframe.
     ///
     /// Same capture-as-is behaviour as the no-arg variant.
-    func addFollowCameraKeyframeAtCurrentTime(followingObjectNamed targetName: String) {
+    func addFollowCameraKeyframeAtCurrentTime(followingObjectNamed targetName: String,
+                                              objectID: UUID? = nil) {
         if camera.keyframeTrack == nil {
             camera.keyframeTrack = CameraKeyframeTrack()
             print("[DEBUG] ViewportView: created new CameraKeyframeTrack")
@@ -2774,7 +2775,12 @@ final class ViewportView: MTKView {
         var followPitchOffset:  Float? = nil
         var targetOffset = SIMD3<Float>(0, 0, 0)
         var followForwardLocal: SIMD3<Float>? = nil
-        if let anchor = sceneManager.worldOrbitAnchor(ofObjectNamed: targetName) {
+        // Resolve the followed object preferring its STABLE id (identity P1) — so editing
+        // a follow keyframe after the target was RENAMED still finds it; the name is just
+        // a fallback.  Re-store the object's CURRENT display name + id.
+        let followObj = sceneManager.followObject(id: objectID, name: targetName)
+        let resolvedName = followObj.map { sceneManager.displayName(for: $0) } ?? targetName
+        if let anchor = followObj.flatMap({ sceneManager.worldOrbitAnchor(for: $0) }) {
             followYawOffset   = camera.yaw    - anchor.behindYaw
             followPitchOffset = camera.pitch  - anchor.behindPitch
             // Convert the world-space delta into the followed object's local
@@ -2791,7 +2797,8 @@ final class ViewportView: MTKView {
             distance:           camera.distance,
             target:             camera.target,
             fov:                camera.fovYRadians,
-            followTargetName:   targetName,
+            followTargetName:   resolvedName,
+            followObjectID:     followObj?.entityID,
             followYawOffset:    followYawOffset,
             followPitchOffset:  followPitchOffset,
             targetOffset:       targetOffset,

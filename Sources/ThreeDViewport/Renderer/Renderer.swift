@@ -1660,8 +1660,8 @@ final class Renderer: NSObject, MTKViewDelegate {
               !camTrack.keyframes.isEmpty else { return }
         if let follow = camTrack.resolveFollowCamera(
             at:             timeline.renderTime,
-            getObjectState: { [weak self] name in
-                self?.sceneManager.worldOrbitAnchor(ofObjectNamed: name)
+            getObjectState: { [weak self] id, name in
+                self?.sceneManager.worldOrbitAnchor(ofObjectID: id, named: name)
             }
         ) {
             camera.target = follow.target

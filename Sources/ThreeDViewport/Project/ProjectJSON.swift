@@ -949,6 +949,8 @@ struct CameraKeyframeData: Codable {
     var fov:          Float? = nil
     /// nil = free camera (default, absent in older project files).
     var followTarget:    String? = nil
+    /// v41 identity refactor: stable id of the followed object (preferred over the name).
+    var followObjectID:  UUID?   = nil
     /// Camera yaw stored as an offset from the object's "behind yaw" at creation time.
     /// nil = no yaw-relative follow (absolute yaw / position-only follow).
     var followYawOffset: Float?  = nil
@@ -985,6 +987,7 @@ struct CameraKeyframeData: Codable {
         targetZ  = try  c.decode(Float.self,  forKey: .targetZ)
         fov                = try? c.decode(Float.self,   forKey: .fov)
         followTarget       = try? c.decode(String.self,  forKey: .followTarget)
+        followObjectID     = try? c.decode(UUID.self,    forKey: .followObjectID)
         followYawOffset    = try? c.decode(Float.self,   forKey: .followYawOffset)
         followPitchOffset  = try? c.decode(Float.self,   forKey: .followPitchOffset)
         targetOffset       = try? c.decode([Float].self, forKey: .targetOffset)
@@ -996,6 +999,7 @@ struct CameraKeyframeData: Codable {
          targetX: Float, targetY: Float, targetZ: Float,
          fov: Float? = nil,
          followTarget: String? = nil,
+         followObjectID: UUID? = nil,
          followYawOffset: Float? = nil,
          followPitchOffset: Float? = nil,
          targetOffset: [Float]? = nil,
@@ -1010,6 +1014,7 @@ struct CameraKeyframeData: Codable {
         self.targetZ            = targetZ
         self.fov                = fov
         self.followTarget       = followTarget
+        self.followObjectID     = followObjectID
         self.followYawOffset    = followYawOffset
         self.followPitchOffset  = followPitchOffset
         self.targetOffset       = targetOffset

@@ -515,15 +515,31 @@ final class SceneManager {
     ///   object the same way yaw/pitch do.  For clean (uniform-scale +
     ///   rotation) transforms this is orthonormal and `.transpose` is its
     ///   inverse — which is the form the follow code uses for world→local.
+    /// Resolves a follow target preferring the STABLE entity id (identity refactor P1),
+    /// falling back to the display/raw name for older keyframes or cross-instance pastes.
+    func followObject(id: UUID?, name: String?) -> SceneObject? {
+        if let id, let obj = objects.first(where: { $0.entityID == id }) { return obj }
+        guard let name else { return nil }
+        // Match by canonical display name ("hand 1" / "cube 2"), then raw name.
+        return objects.first(where: { displayName(for: $0) == name })
+            ?? objects.first(where: { $0.name == name })
+    }
+
+    /// Orbit anchor by stable id (preferred) or name (fallback).  Used by camera follow.
+    func worldOrbitAnchor(ofObjectID id: UUID?, named name: String?)
+        -> (pos: SIMD3<Float>, behindYaw: Float, behindPitch: Float, basis: matrix_float3x3)? {
+        guard let obj = followObject(id: id, name: name) else { return nil }
+        return worldOrbitAnchor(for: obj)
+    }
+
     func worldOrbitAnchor(ofObjectNamed name: String)
         -> (pos: SIMD3<Float>, behindYaw: Float, behindPitch: Float, basis: matrix_float3x3)? {
-        // Match by the canonical display name (handles grouped models "hand 1" and
-        // duplicated simple objects "cube 2"), falling back to the raw object name
-        // for older projects that stored a plain part name.
-        guard let obj = objects.first(where: { displayName(for: $0) == name })
-            ?? objects.first(where: { $0.name == name })
-        else { return nil }
+        guard let obj = followObject(id: nil, name: name) else { return nil }
+        return worldOrbitAnchor(for: obj)
+    }
 
+    func worldOrbitAnchor(for obj: SceneObject)
+        -> (pos: SIMD3<Float>, behindYaw: Float, behindPitch: Float, basis: matrix_float3x3)? {
         // Rendered world transform of the followed object.  When the model has
         // a group-level keyframe, the group matrix is a multiplier on top of
         // each part's hierarchical transform (not a complete pose by itself),
