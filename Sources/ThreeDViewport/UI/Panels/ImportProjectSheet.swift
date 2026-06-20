@@ -17,6 +17,9 @@ final class ImportProjectOptions: ObservableObject {
     /// Also bring in the source's particle emitters (appended) and its fog (adopted
     /// only when the host has none — fog is a single global volume).
     @Published var includeEffects: Bool = false
+    /// Bring in the source's Position Marks, re-homed onto the imported items (placed +
+    /// time-shifted with the import).  Marks whose owner isn't imported are skipped.
+    @Published var importMarks: Bool = false
     /// After importing, re-apply the source's spin/orbit rate markers to the imported
     /// objects so they stay EDITABLE (and run to the host timeline's end).  On by
     /// default so the imported motion is editable in the host project.
@@ -122,6 +125,7 @@ struct ImportProjectSheet: View {
 
             Toggle("Include lights", isOn: $options.includeLights)
             Toggle("Include fog & particles", isOn: $options.includeEffects)
+            Toggle("Import position marks", isOn: $options.importMarks)
             Toggle("Make spin/orbit editable (extends to end)", isOn: $options.makeSpinEditable)
             Toggle("Glue imported items (opens the Glue dialog)", isOn: $options.glueImported)
 

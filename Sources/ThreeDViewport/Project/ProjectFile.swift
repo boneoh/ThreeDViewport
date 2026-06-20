@@ -103,6 +103,9 @@ final class ProjectFile {
         var replaceExistingCameras: Bool = false
         /// When true, import the source's camera cuts (remapped to the imported cameras).
         var importCameraCuts: Bool = false
+        /// When true, import the source's Position Marks, re-homed onto the imported items
+        /// (placed by M, time-shifted by T); marks whose owner wasn't imported are skipped.
+        var importMarks: Bool = false
     }
 
     /// Imports another `.3dvp`'s models, animation, materials, and envelopes INTO the
@@ -216,16 +219,32 @@ final class ProjectFile {
             o.transform     = o.baseTransform
         }
 
+        // Map each SOURCE entity id → the HOST entity id it became (identity refactor P6:
+        // imported entities get fresh ids).  Used to re-home imported Position Marks onto
+        // the right host items.  Objects map positionally (data.objects[i] ↔ imported[i]).
+        var srcToHostID: [UUID: UUID] = [:]
+        for i in 0..<n { if let sid = data.objects[i].id { srcToHostID[sid] = imported[i].entityID } }
+
         // 6. Lights (opt-in).
-        if options.includeLights { appendImportedLights(data, by: M, timeOffset: T, bundleID: bundleID, vp: vp) }
-        if options.includeEffects { appendImportedEffects(data, by: M, timeOffset: T, bundleID: bundleID, vp: vp) }
+        if options.includeLights { appendImportedLights(data, by: M, timeOffset: T, bundleID: bundleID, vp: vp, idMap: &srcToHostID) }
+        if options.includeEffects { appendImportedEffects(data, by: M, timeOffset: T, bundleID: bundleID, vp: vp, idMap: &srcToHostID) }
         if !options.importCameraIndices.isEmpty {
             appendImportedCameras(data, by: M, timeOffset: T,
                                   replaceExisting: options.replaceExistingCameras,
                                   importCuts: options.importCameraCuts,
                                   indices: options.importCameraIndices,
-                                  projectName: url.deletingPathExtension().lastPathComponent, vp: vp)
+                                  projectName: url.deletingPathExtension().lastPathComponent, vp: vp,
+                                  idMap: &srcToHostID)
         }
+
+        // 6b. Position Marks (opt-in) — re-home onto imported items, place by M, shift by T.
+        if options.importMarks { appendImportedMarks(data, by: M, timeOffset: T, srcToHostID: srcToHostID, vp: vp) }
+
+        // 6c. Skip hidden objects: drop any imported standalone object that was Invisible,
+        //     and any imported model/group whose parts are ALL invisible (a partially-
+        //     hidden model is kept intact).  Uses the robust id-keyed deleteObjects, which
+        //     also prunes any marks/schedules that referenced the removed objects.
+        removeHiddenImportedObjects(fromIndex: modelStart, vp: vp)
 
         // 7. Extend the timeline to fit the imported clip.  In HOST time the clip
         //    spans [insertTime, insertTime + length], where length is the slice span
@@ -494,7 +513,8 @@ final class ProjectFile {
     private static func appendImportedCameras(_ data: ProjectData, by M: matrix_float4x4,
                                               timeOffset T: Double, replaceExisting: Bool,
                                               importCuts: Bool,
-                                              indices: [Int], projectName: String, vp: ViewportView) {
+                                              indices: [Int], projectName: String, vp: ViewportView,
+                                              idMap: inout [UUID: UUID]) {
         // Source cameras: prefer cameraSlots; fall back to the legacy single camera.
         let slots: [CameraSlotData]
         if let s = data.cameraSlots, !s.isEmpty { slots = s }
@@ -565,6 +585,7 @@ final class ProjectFile {
                 cam.keyframeTrack = track
                 if existing == vp.activeCameraIndex { replacedActive = true }
                 srcToHost[idx] = existing
+                if let sid = slot.id { idMap[sid] = cam.entityID }   // P6: source cam id → host id
             } else {
                 var name = baseName
                 if !replaceExisting {
@@ -572,10 +593,12 @@ final class ProjectFile {
                     while used.contains(name) { name = "\(projectName) \(n)"; n += 1 }
                 }
                 used.insert(name)
-                vp.cameras.append(SceneCamera(name: name, yaw: p.yaw, pitch: p.pitch,
-                                              distance: p.distance, target: p.target,
-                                              fovYRadians: p.fov, keyframeTrack: track))
+                let cam = SceneCamera(name: name, yaw: p.yaw, pitch: p.pitch,
+                                      distance: p.distance, target: p.target,
+                                      fovYRadians: p.fov, keyframeTrack: track)
+                vp.cameras.append(cam)
                 srcToHost[idx] = vp.cameras.count - 1
+                if let sid = slot.id { idMap[sid] = cam.entityID }   // P6: source cam id → host id
             }
         }
         if replacedActive { vp.reloadActiveCameraFromSlot() }   // refresh the live camera
@@ -595,7 +618,8 @@ final class ProjectFile {
                                              by M: matrix_float4x4,
                                              timeOffset: Double,
                                              bundleID: Int,
-                                             vp: ViewportView) {
+                                             vp: ViewportView,
+                                             idMap: inout [UUID: UUID]) {
         let lm = vp.lightManager
         func point(_ x: Float, _ y: Float, _ z: Float) -> SIMD3<Float> {
             let v = M * SIMD4<Float>(x, y, z, 1)
@@ -619,6 +643,7 @@ final class ProjectFile {
             l.importBundleID          = bundleID
             l.isLocked                = lcd.isLocked ?? false
             l.customName              = lcd.customName
+            if let sid = lcd.id { idMap[sid] = l.entityID }   // P6: source light id → host id
             lm.lights.append(l)
             lm.keyframeTracks.append(nil)
         }
@@ -649,7 +674,8 @@ final class ProjectFile {
                                               by M: matrix_float4x4,
                                               timeOffset T: Double,
                                               bundleID: Int,
-                                              vp: ViewportView) {
+                                              vp: ViewportView,
+                                              idMap: inout [UUID: UUID]) {
         func point(_ v: SIMD3<Float>) -> SIMD3<Float> {
             let p = M * SIMD4<Float>(v.x, v.y, v.z, 1); return SIMD3<Float>(p.x, p.y, p.z)
         }
@@ -685,6 +711,7 @@ final class ProjectFile {
             let em  = i < data.particleEmitterEasingModes.count ? data.particleEmitterEasingModes[i] : 0
             applyParticleEmitter(pd, keyframes: kfs, easingMode: em, into: fx)
             fx.entityID = UUID()           // P6: fresh id (applyParticleEmitter restored the source's → collision on self-import)
+            if let sid = pd.id { idMap[sid] = fx.entityID }   // P6: source emitter id → host id
             fx.importBundleID = bundleID   // group under this import's bundle (override source tag)
             fx.position = point(fx.position)
             fx.size     = sized(fx.size)
@@ -713,6 +740,63 @@ final class ProjectFile {
                 placeTrack(track)
                 vp.fogSettings.keyframeTrack = track
             }
+        }
+    }
+
+    /// Re-homes the source's Position Marks onto the imported items (P6): placed by M,
+    /// time-shifted by T, owner remapped via `srcToHostID`.  A mark is SKIPPED when its
+    /// owner wasn't imported (not in the map) or it has no owner id (pre-P2 source).
+    private static func appendImportedMarks(_ data: ProjectData, by M: matrix_float4x4,
+                                            timeOffset T: Double,
+                                            srcToHostID: [UUID: UUID], vp: ViewportView) {
+        func point(_ x: Float, _ y: Float, _ z: Float) -> SIMD3<Float> {
+            let v = M * SIMD4<Float>(x, y, z, 1); return SIMD3<Float>(v.x, v.y, v.z)
+        }
+        var added = 0
+        for md in (data.probe.marks ?? []) {
+            guard let srcOwnerID = md.ownerID, let hostID = srcToHostID[srcOwnerID],
+                  let raw = md.ownerCategory, let cat = MarkCategory(rawValue: raw) else { continue }
+            var secondary: SIMD3<Float>? = nil
+            if let x = md.sx2, let y = md.sy2, let z = md.sz2 { secondary = point(x, y, z) }
+            let owner = MarkOwner(category: cat, id: hostID, index: 0,
+                                  name: md.ownerName ?? cat.displayName, occurrence: 0)
+            vp.probeConfig.marks.append(ProbeMark(
+                name:     md.name,
+                position: point(md.px, md.py, md.pz),
+                color:    SIMD3<Float>(md.r, md.g, md.b),
+                time:     (md.time ?? 0) + T,
+                owner:    owner,
+                secondaryPosition: secondary))
+            added += 1
+        }
+        if added > 0 { vp.probeConfig.marksVisible = true }
+        print("[DEBUG] ProjectFile: imported \(added) position mark(s)")
+    }
+
+    /// Drops imported objects the user had hidden (Model Inspector ▸ Invisible): standalone
+    /// invisible objects, and model/groups where EVERY part is invisible.  A partially-
+    /// hidden multi-part model is kept intact.  Uses the id-keyed deleteObjects, which also
+    /// prunes any marks/schedules that referenced the removed objects.
+    private static func removeHiddenImportedObjects(fromIndex modelStart: Int, vp: ViewportView) {
+        let objs = vp.sceneManager.objects
+        guard modelStart < objs.count else { return }
+        var anyVisible: [Int: Bool] = [:]   // gid → any part visible (imported parts only)
+        for i in modelStart..<objs.count {
+            if let gid = objs[i].groupID { anyVisible[gid] = (anyVisible[gid] ?? false) || objs[i].isVisible }
+        }
+        var toDelete = Set<Int>()
+        for i in modelStart..<objs.count {
+            let o = objs[i]
+            if o.isEnvelope { continue }
+            if let gid = o.groupID {
+                if anyVisible[gid] == false { toDelete.insert(i) }   // whole-hidden model
+            } else if !o.isVisible {
+                toDelete.insert(i)                                   // standalone hidden object
+            }
+        }
+        if !toDelete.isEmpty {
+            vp.deleteObjects(toDelete)
+            print("[DEBUG] ProjectFile: skipped \(toDelete.count) hidden imported object(s)")
         }
     }
 

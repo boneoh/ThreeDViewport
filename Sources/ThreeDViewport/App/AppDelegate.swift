@@ -1709,7 +1709,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 sliceRange:     options.effectiveSlice,
                 importCameraIndices: Array(options.selectedCameras).sorted(),
                 replaceExistingCameras: options.replaceExistingCameras,
-                importCameraCuts: options.importCameraCuts)
+                importCameraCuts: options.importCameraCuts,
+                importMarks: options.importMarks)
             let bundlesBefore = Set(viewport.sceneManager.importBundleSources.keys)
             guard ProjectFile.importProject(from: url, into: viewport, options: opts) else {
                 self.showErrorAlert(message: "Import failed",
