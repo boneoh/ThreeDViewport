@@ -164,7 +164,9 @@ final class ProjectFile {
 
         // 2. Restore per-object data positionally, shifting keyframe times by T.
         let n = min(imported.count, data.objects.count)
-        for i in 0..<n { restoreObject(data.objects[i], into: imported[i], vp: vp, timeOffset: T) }
+        for i in 0..<n {
+            restoreObject(data.objects[i], into: imported[i], vp: vp, timeOffset: T, assignSavedID: false)
+        }
         for o in imported { o.importBundleID = bundleID }
 
         // 3. Group placement + group-level animation, composed with M.  Keyed by
@@ -682,6 +684,7 @@ final class ProjectFile {
             let kfs = i < emitterKfs.count ? emitterKfs[i] : []
             let em  = i < data.particleEmitterEasingModes.count ? data.particleEmitterEasingModes[i] : 0
             applyParticleEmitter(pd, keyframes: kfs, easingMode: em, into: fx)
+            fx.entityID = UUID()           // P6: fresh id (applyParticleEmitter restored the source's → collision on self-import)
             fx.importBundleID = bundleID   // group under this import's bundle (override source tag)
             fx.position = point(fx.position)
             fx.size     = sized(fx.size)
@@ -1675,9 +1678,12 @@ final class ProjectFile {
     /// `importProject` in separate passes (after envelopes re-parent their members).
     private static func restoreObject(_ saved: ObjectData, into obj: SceneObject,
                                       vp: ViewportView,
-                                      timeOffset: Double = 0) {
+                                      timeOffset: Double = 0,
+                                      assignSavedID: Bool = true) {
         // ── v15: restore Model Inspector state ───────────────────────────────────
-        if let sid = saved.id { obj.entityID = sid }      // v41 stable id (else keep generated)
+        // P6: a plain LOAD restores the saved id; an IMPORT keeps the fresh loader id so
+        // importing a project into itself (or twice) can't collide ids.
+        if assignSavedID, let sid = saved.id { obj.entityID = sid }
         obj.isVisible = saved.isVisible
         obj.occludeWhenHidden = saved.occludeWhenHidden   // v17
         obj.isLocked = saved.isLocked                     // timeline edit lock
