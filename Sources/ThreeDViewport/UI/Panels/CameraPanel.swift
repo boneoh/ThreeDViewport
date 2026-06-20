@@ -53,6 +53,8 @@ final class CameraPanelState: ObservableObject {
     var onAddCamera:       (() -> Void)?
     var onDeleteCamera:    (() -> Void)?
     var onCaptureDirector: (() -> Void)?
+    /// Drops a Position Mark at the active camera (eye + aim) at the current playhead.
+    var onAddMark:         (() -> Void)?
 
     // ── Camera cuts (Phase 1c) ──────────────────────────────────────────────────
     struct CutRow: Identifiable, Equatable {
@@ -184,6 +186,11 @@ struct CameraPanel: View {
                     Label("Set to Director View", systemImage: "scope")
                 }
                 .help("Aim this camera at the Director free-view's current framing")
+                .padding(.bottom, 6)
+                Button { state.onAddMark?() } label: {
+                    Label("Add Mark", systemImage: "mappin.and.ellipse")
+                }
+                .help("Save a Position Mark at this camera's eye + aim at the playhead")
                 .padding(.bottom, 12)
 
                 // ── Camera cuts (scheduled; drive Play + Export) ──────────────

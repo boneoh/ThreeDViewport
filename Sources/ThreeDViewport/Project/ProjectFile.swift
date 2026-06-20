@@ -1076,7 +1076,15 @@ final class ProjectFile {
                                            marks: vp.probeConfig.marks.map {
                                                MarkData(name: $0.name,
                                                         px: $0.position.x, py: $0.position.y, pz: $0.position.z,
-                                                        r: $0.color.x, g: $0.color.y, b: $0.color.z)
+                                                        r: $0.color.x, g: $0.color.y, b: $0.color.z,
+                                                        time: $0.time,
+                                                        ownerCategory:  $0.owner?.category.rawValue,
+                                                        ownerIndex:     $0.owner?.index,
+                                                        ownerName:      $0.owner?.name,
+                                                        ownerOccurrence: $0.owner?.occurrence,
+                                                        sx2: $0.secondaryPosition?.x,
+                                                        sy2: $0.secondaryPosition?.y,
+                                                        sz2: $0.secondaryPosition?.z)
                                            },
                                            marksVisible: vp.probeConfig.marksVisible,
                                            visible:      vp.probeConfig.isVisible,
@@ -1405,10 +1413,22 @@ final class ProjectFile {
         // v29: bake probe position.  Gizmo visibility is now persisted too
         // (pre-existing projects with no `visible` key default to hidden).
         vp.probeConfig.position = SIMD3<Float>(data.probe.px, data.probe.py, data.probe.pz)
-        vp.probeConfig.marks = (data.probe.marks ?? []).map {
-            ProbeMark(name: $0.name,
-                      position: SIMD3<Float>($0.px, $0.py, $0.pz),
-                      color:    SIMD3<Float>($0.r, $0.g, $0.b))
+        vp.probeConfig.marks = (data.probe.marks ?? []).map { md in
+            var owner: MarkOwner? = nil
+            if let raw = md.ownerCategory, let cat = MarkCategory(rawValue: raw) {
+                owner = MarkOwner(category: cat,
+                                  index:      md.ownerIndex ?? 0,
+                                  name:       md.ownerName ?? cat.displayName,
+                                  occurrence: md.ownerOccurrence ?? 0)
+            }
+            var secondary: SIMD3<Float>? = nil
+            if let x = md.sx2, let y = md.sy2, let z = md.sz2 { secondary = SIMD3<Float>(x, y, z) }
+            return ProbeMark(name: md.name,
+                             position: SIMD3<Float>(md.px, md.py, md.pz),
+                             color:    SIMD3<Float>(md.r, md.g, md.b),
+                             time:     md.time ?? 0,
+                             owner:    owner,
+                             secondaryPosition: secondary)
         }
         vp.probeConfig.marksVisible = data.probe.marksVisible ?? false
         vp.probeConfig.isVisible    = data.probe.visible ?? false

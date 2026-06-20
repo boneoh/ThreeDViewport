@@ -2543,7 +2543,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                       !track.keyframes.isEmpty else { return }
                 vp.addLightKeyframeAtCurrentTime(forLightAt: i)
             },
-            onAutoKeyframeLight: { [weak viewport] i in viewport?.autoKeyframeOnEdit(.light(i)) }
+            onAutoKeyframeLight: { [weak viewport] i in viewport?.autoKeyframeOnEdit(.light(i)) },
+            onAddMark: { [weak self] i in self?.addLightMark(i) }
         )
 
         let hostingView = FirstClickHostingView(rootView: inspectorView)
@@ -2724,7 +2725,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             onAutoKeyframeParticles: { [weak viewport] in
                 guard let vp = viewport else { return }
                 vp.autoKeyframeOnEdit(.particles(vp.particleManager.selectedIndex))
-            })
+            },
+            onAddMark: { [weak self] in self?.addEffectMark() })
         panel.contentView = FirstClickHostingView(rootView: atmoView)
 
         if let win = window {
@@ -2816,6 +2818,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
 
         guard let viewport = viewportView else { return }
+
+        viewport.cameraPanelState.onAddMark = { [weak self] in self?.addCameraMark() }
 
         let panel = KeyForwardingPanel(
             contentRect: NSRect(x: 0, y: 0, width: 296, height: 260),
@@ -3073,8 +3077,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
         state.onAddToFavorites = { [weak self] in self?.addSelectedToFavorites() }
         state.onAddMark        = { [weak self] in
-            guard let pos = self?.viewportView?.selectedObjectWorldPosition() else { return }
-            self?.promptForMark(at: pos)
+            guard let self, let pos = self.viewportView?.selectedObjectWorldPosition() else { return }
+            self.promptForMark(at: pos, owner: self.objectMarkOwner())
         }
 
         let panel = KeyForwardingPanel(
@@ -3182,29 +3186,106 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     /// Prompts for a name + colour, then saves a mark at `markPosition` — defaults to the
     /// probe's current position; the Model Inspector passes the selected object's position.
-    private func promptForMark(at markPosition: SIMD3<Float>? = nil) {
+    /// Camera panel ▸ Add Mark — captures the active camera's eye + aim as one mark.
+    private func addCameraMark() {
+        guard let vp = viewportView, vp.cameras.indices.contains(vp.activeCameraIndex) else { return }
+        let owner = MarkOwner(category: .camera, index: vp.activeCameraIndex,
+                              name: vp.cameras[vp.activeCameraIndex].name)
+        promptForMark(at: vp.camera.eyePosition, owner: owner, secondary: vp.camera.target)
+    }
+
+    /// Lights panel ▸ Add Mark — captures light `i`'s position.
+    private func addLightMark(_ i: Int) {
+        guard let vp = viewportView, vp.lightManager.lights.indices.contains(i) else { return }
+        let owner = MarkOwner(category: .light, index: i,
+                              name: "Light \(i + 1) - \(vp.lightManager.lights[i].type.displayName)")
+        promptForMark(at: vp.lightManager.lights[i].position, owner: owner)
+    }
+
+    /// Atmosphere panel ▸ Add Mark — captures the selected emitter's position.
+    private func addEffectMark() {
+        guard let vp = viewportView else { return }
+        let i = vp.particleManager.selectedIndex
+        guard vp.particleManager.emitters.indices.contains(i) else { return }
+        let e = vp.particleManager.emitters[i]
+        // Name by type, disambiguating duplicate types by occurrence (1-based suffix).
+        let occ  = vp.particleManager.emitters[..<i].filter { $0.type == e.type }.count
+        let name = occ > 0 ? "\(e.type.displayName) \(occ + 1)" : e.type.displayName
+        let owner = MarkOwner(category: .effect, index: i, name: name, occurrence: occ)
+        promptForMark(at: e.position, owner: owner)
+    }
+
+    /// Mark owner for the currently selected object (the Model Inspector's Add Mark).
+    private func objectMarkOwner() -> MarkOwner? {
+        guard let vp = viewportView else { return nil }
+        let i = vp.sceneManager.selectedIndex
+        guard vp.sceneManager.objects.indices.contains(i) else { return nil }
+        let obj = vp.sceneManager.objects[i]
+        let occ = vp.sceneManager.objects[..<i].filter { $0.name == obj.name }.count
+        return MarkOwner(category: .object, index: i,
+                         name: vp.sceneManager.displayName(for: obj), occurrence: occ)
+    }
+
+    /// Seconds → MM:SS:FF (frames at the timeline's rate), matching the viewport playhead.
+    private func markTimecode(_ t: Double) -> String {
+        let fr          = max(1, Int(viewportView?.timeline.frameRate ?? 30))
+        let totalFrames = Int(max(0, t) * Double(fr))
+        return String(format: "%02d:%02d:%02d",
+                      totalFrames / fr / 60, (totalFrames / fr) % 60, totalFrames % fr)
+    }
+
+    /// The default name for a new mark: "<owner> N" where N counts existing marks for
+    /// that owner (per-owner counter); falls back to "Mark N" when there's no owner.
+    private func defaultMarkName(for owner: MarkOwner?, marks: [ProbeMark]) -> String {
+        guard let owner else { return "Mark \(marks.count + 1)" }
+        let n = marks.filter { $0.owner?.category == owner.category
+                            && $0.owner?.index == owner.index
+                            && $0.owner?.name  == owner.name }.count + 1
+        return "\(owner.name) \(n)"
+    }
+
+    /// Opens the Mark Position dialog and appends a mark.
+    /// - `markPosition`: world point to save (nil = the probe's current position).
+    /// - `owner` / `category`: the item this mark belongs to (drives name + colour + Timeline row).
+    /// - `secondary`: optional second point (a camera mark's aim/target).
+    private func promptForMark(at markPosition: SIMD3<Float>? = nil,
+                               owner: MarkOwner? = nil,
+                               secondary: SIMD3<Float>? = nil) {
         guard let viewport = viewportView else { return }
-        let probe = viewport.probeConfig
-        let pos   = markPosition ?? probe.position
+        let probe    = viewport.probeConfig
+        let pos      = markPosition ?? probe.position
+        let category = owner?.category
+        let time     = viewport.timeline.currentTime
 
         let alert = NSAlert()
         alert.messageText     = "Mark Position"
         alert.informativeText = "Name this mark and choose a colour. It's saved at "
-            + (markPosition == nil ? "the probe's current position." : "the object's current position.")
+            + (markPosition == nil ? "the probe's current position." : "the item's current position.")
         alert.addButton(withTitle: "Add")
         alert.addButton(withTitle: "Cancel")
 
-        let accessory  = NSView(frame: NSRect(x: 0, y: 0, width: 240, height: 58))
-        let nameLabel  = NSTextField(labelWithString: "Name:")
-        nameLabel.frame = NSRect(x: 0, y: 32, width: 52, height: 20)
-        let nameField  = NSTextField(frame: NSRect(x: 56, y: 30, width: 184, height: 24))
-        nameField.stringValue = "Mark \(probe.marks.count + 1)"
-        let colorLabel = NSTextField(labelWithString: "Colour:")
-        colorLabel.frame = NSRect(x: 0, y: 2, width: 52, height: 20)
-        let well       = NSColorWell(frame: NSRect(x: 56, y: 0, width: 48, height: 24))
-        well.color     = lastMarkColor
-        accessory.addSubview(nameLabel); accessory.addSubview(nameField)
-        accessory.addSubview(colorLabel); accessory.addSubview(well)
+        // Accessory: read-only Time + Category rows, then editable Name + Colour.
+        let accessory  = NSView(frame: NSRect(x: 0, y: 0, width: 252, height: 104))
+        func label(_ s: String, _ y: CGFloat) -> NSTextField {
+            let f = NSTextField(labelWithString: s); f.frame = NSRect(x: 0, y: y, width: 64, height: 20); return f
+        }
+        let timeVal = NSTextField(labelWithString: markTimecode(time))
+        timeVal.frame = NSRect(x: 68, y: 78, width: 180, height: 20)
+        timeVal.font  = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        let catVal  = NSTextField(labelWithString: category?.displayName ?? "—")
+        catVal.frame = NSRect(x: 68, y: 54, width: 180, height: 20)
+        let nameField = NSTextField(frame: NSRect(x: 68, y: 28, width: 184, height: 24))
+        nameField.stringValue = defaultMarkName(for: owner, marks: probe.marks)
+        let well = NSColorWell(frame: NSRect(x: 68, y: 0, width: 48, height: 24))
+        // Default colour by category; the probe path keeps the last-used colour.
+        well.color = category.map { NSColor(srgbRed: CGFloat($0.defaultColor.x),
+                                            green:   CGFloat($0.defaultColor.y),
+                                            blue:    CGFloat($0.defaultColor.z), alpha: 1) }
+            ?? lastMarkColor
+        accessory.addSubview(label("Time:",     78)); accessory.addSubview(timeVal)
+        accessory.addSubview(label("Category:", 54)); accessory.addSubview(catVal)
+        accessory.addSubview(label("Name:",     30)); accessory.addSubview(nameField)
+        accessory.addSubview(label("Colour:",    2)); accessory.addSubview(well)
         alert.accessoryView = accessory
         alert.window.initialFirstResponder = nameField
 
@@ -3217,14 +3298,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let color = SIMD3<Float>(Float(rgb.redComponent), Float(rgb.greenComponent), Float(rgb.blueComponent))
         lastMarkColor = well.color
         let trimmed = nameField.stringValue.trimmingCharacters(in: .whitespaces)
-        let name    = trimmed.isEmpty ? "Mark \(probe.marks.count + 1)" : trimmed
+        let name    = trimmed.isEmpty ? defaultMarkName(for: owner, marks: probe.marks) : trimmed
 
-        probe.marks.append(ProbeMark(name: name, position: pos, color: color))
+        probe.marks.append(ProbeMark(name: name, position: pos, color: color,
+                                     time: time, owner: owner, secondaryPosition: secondary))
         probe.selectedMarkIndex = probe.marks.count - 1
         probe.marksVisible = true   // reveal so the new mark is visible immediately
         markDirty()
         syncGaitPanelToProject()    // keep the Gait panel's mark list current
-        print("[DEBUG] AppDelegate: added mark '\(name)' at \(pos)")
+        print("[DEBUG] AppDelegate: added mark '\(name)' at \(pos) t=\(time) owner=\(String(describing: owner))")
     }
 
     /// Toggles visibility of all marks (K key / menu).

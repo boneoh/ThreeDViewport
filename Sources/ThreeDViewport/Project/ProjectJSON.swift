@@ -388,10 +388,19 @@ struct ProbeData: Codable {
 }
 
 // v33: one saved position mark (name + world position + RGB colour).
+// v39: mark processing — scrub time, owning item (category + index + name + occurrence),
+// and an optional second point (a camera mark's aim).  All optional → older files load.
 struct MarkData: Codable {
     var name: String = ""
     var px: Float = 0; var py: Float = 0; var pz: Float = 0
     var r:  Float = 1; var g:  Float = 1; var b:  Float = 1
+    var time:           Double? = nil
+    var ownerCategory:  Int?    = nil    // MarkCategory raw; nil = legacy/unassigned
+    var ownerIndex:     Int?    = nil
+    var ownerName:      String? = nil
+    var ownerOccurrence: Int?   = nil
+    // Secondary point (camera aim/target); nil for single-point marks.
+    var sx2: Float? = nil; var sy2: Float? = nil; var sz2: Float? = nil
 }
 
 // v23: One atmosphere keyframe (fog volume or particle emitter).  Mirrors

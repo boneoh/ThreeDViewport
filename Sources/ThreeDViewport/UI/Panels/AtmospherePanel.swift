@@ -40,6 +40,8 @@ struct AtmospherePanel: View {
     /// Fires when a keyframeable fog/particle slider edit ends → auto-keyframe-on-edit.
     var onAutoKeyframeFog:       () -> Void = {}
     var onAutoKeyframeParticles: () -> Void = {}
+    /// Drops a Position Mark at the selected emitter's position at the current playhead.
+    var onAddMark:               () -> Void = {}
 
     private var fogKeyCount: Int { fog.keyframeTrack?.keyframes.count ?? 0 }
 
@@ -125,6 +127,12 @@ struct AtmospherePanel: View {
                         // stays tappable so you can still select a locked emitter.
                         if let fx = particleManager.selected {
                             Group {
+                                Button { onAddMark() } label: {
+                                    Label("Add Mark", systemImage: "mappin.and.ellipse")
+                                }
+                                .controlSize(.small)
+                                .help("Save a Position Mark at this emitter's position at the playhead")
+
                                 EmitterMainControls(emitter: fx, onStamp: onStampParticles, onClear: onClearParticles,
                                                     onAutoKeyframe: onAutoKeyframeParticles)
 

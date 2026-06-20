@@ -42,6 +42,8 @@ struct LightsInspectorPanel: View {
     var onAutoStampLight: (Int) -> Void = { _ in }
     /// Fires when a keyframeable light slider edit ends → auto-keyframe-on-edit.
     var onAutoKeyframeLight: (Int) -> Void = { _ in }
+    /// Drops a Position Mark at light `i`'s position at the current playhead.
+    var onAddMark: (Int) -> Void = { _ in }
 
     var body: some View {
         ScrollView {
@@ -278,6 +280,12 @@ struct LightsInspectorPanel: View {
                 .font(.subheadline)
                 .environment(\.controlActiveState, .active)
             }
+
+            Button { onAddMark(i) } label: {
+                Label("Add Mark", systemImage: "mappin.and.ellipse")
+            }
+            .controlSize(.small)
+            .help("Save a Position Mark at this light's position at the playhead")
 
             // Type picker
             Picker("Type", selection: lightBinding(i, \.type)) {
