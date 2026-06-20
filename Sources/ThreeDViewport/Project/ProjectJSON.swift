@@ -309,6 +309,9 @@ struct SpinRateScheduleData: Codable {
     var targetName:  String // object name (kind 2)
     var targetIndex: Int    // groupID (kind 3)
     var markers:     [SpinRateMarkerData]
+    // v41 identity refactor (P5): stable object id for kind-2 targets — preferred over
+    // name+occurrence on load.  nil for groups / pre-v41 files (use the legacy fields).
+    var targetEntityID: UUID? = nil
 }
 
 struct OrbitRateMarkerData: Codable {
@@ -324,6 +327,9 @@ struct OrbitRateScheduleData: Codable {
     var axisEnd:     [Float]  // 3 floats
     var radius:      Float
     var markers:     [OrbitRateMarkerData]
+    // v41 identity refactor (P5): stable id for object/light/camera targets — preferred
+    // over name/index on load.  nil for groups / pre-v41 files (use the legacy fields).
+    var targetEntityID: UUID? = nil
 }
 
 // v34: One Glue envelope.  `transform` is the column-major 4×4 origin matrix (16
@@ -787,10 +793,12 @@ struct CameraSlotData: Codable {
     var id:         UUID? = nil
 }
 
-/// A scheduled camera cut (Phase 1c): from `time` the program camera is `cameraIndex`.
+/// A scheduled camera cut (Phase 1c): from `time` the program camera is the one with
+/// `cameraID` (P5), falling back to the array `cameraIndex` for pre-v41 files.
 struct CameraCutData: Codable {
     var time:        Double
     var cameraIndex: Int
+    var cameraID:    UUID? = nil
 }
 
 struct ObjectData: Codable {

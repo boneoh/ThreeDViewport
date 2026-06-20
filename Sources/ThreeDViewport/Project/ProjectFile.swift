@@ -1011,11 +1011,13 @@ final class ProjectFile {
                 spinSchedData.append(SpinRateScheduleData(
                     targetKind: 3, targetName: groupFilename(gid), targetIndex: occByGid[gid] ?? 0, markers: md))
             case .entity(let id):
-                // Spin targets objects only.  targetIndex = occurrence among same-named.
+                // Spin targets objects only.  Store the stable id (P5) + name/occurrence
+                // as a legacy fallback for older app builds.
                 guard let i = vp.sceneManager.objects.firstIndex(where: { $0.entityID == id }) else { continue }
                 spinSchedData.append(SpinRateScheduleData(
                     targetKind: 2, targetName: vp.sceneManager.objects[i].name,
-                    targetIndex: objectOccurrence(vp.sceneManager.objects, at: i), markers: md))
+                    targetIndex: objectOccurrence(vp.sceneManager.objects, at: i),
+                    markers: md, targetEntityID: id))
             }
         }
         var orbitSchedData: [OrbitRateScheduleData] = []
@@ -1023,21 +1025,23 @@ final class ProjectFile {
             let md = sched.markers.map { OrbitRateMarkerData(time: $0.time, rate: $0.rate) }
             let aS = [sched.axisStart.x, sched.axisStart.y, sched.axisStart.z]
             let aE = [sched.axisEnd.x,   sched.axisEnd.y,   sched.axisEnd.z]
-            func add(_ kind: Int, _ name: String, _ index: Int) {
+            func add(_ kind: Int, _ name: String, _ index: Int, _ eid: UUID?) {
                 orbitSchedData.append(OrbitRateScheduleData(
                     targetKind: kind, targetName: name, targetIndex: index,
-                    axisStart: aS, axisEnd: aE, radius: sched.radius, markers: md))
+                    axisStart: aS, axisEnd: aE, radius: sched.radius, markers: md,
+                    targetEntityID: eid))
             }
             switch key {
             case .group(let gid):
-                add(3, groupFilename(gid), occByGid[gid] ?? 0)
+                add(3, groupFilename(gid), occByGid[gid] ?? 0, nil)
             case .entity(let id):
+                // Stable id (P5) preferred; name/index kept as a legacy fallback.
                 if let i = vp.sceneManager.objects.firstIndex(where: { $0.entityID == id }) {
-                    add(2, vp.sceneManager.objects[i].name, objectOccurrence(vp.sceneManager.objects, at: i))
+                    add(2, vp.sceneManager.objects[i].name, objectOccurrence(vp.sceneManager.objects, at: i), id)
                 } else if let li = vp.lightManager.lights.firstIndex(where: { $0.entityID == id }) {
-                    add(1, "", li)
+                    add(1, "", li, id)
                 } else if let ci = vp.cameras.firstIndex(where: { $0.entityID == id }) {
-                    add(0, "", ci)
+                    add(0, "", ci, id)
                 }
             }
         }
@@ -1125,10 +1129,10 @@ final class ProjectFile {
             cameraSlots:         cameraSlotData,
             activeCameraIndex:   vp.activeCameraIndex,
             cameraCuts:          vp.cameraCuts.map { cut in
-                // Cuts key by camera id (P4); the file format still stores the array index
-                // (DTO → id move is P5).  Resolve id → current index on save.
+                // Store the stable camera id (P5) + the array index as a legacy fallback.
                 CameraCutData(time: cut.time,
-                              cameraIndex: vp.cameras.firstIndex { $0.entityID == cut.cameraID } ?? 0)
+                              cameraIndex: vp.cameras.firstIndex { $0.entityID == cut.cameraID } ?? 0,
+                              cameraID: cut.cameraID)
             }
         )
     }
@@ -1490,9 +1494,13 @@ final class ProjectFile {
         // Mirror the live (just-restored) camera into the active slot so the slot shares
         // the live pose + track (the active slot == the legacy fields by construction).
         vp.captureActiveCamera()
-        // Phase 1c: scheduled camera cuts.  Stored by array index; resolve to the
-        // camera's stable id (P4).  Drop cuts whose index is out of range.
+        // Phase 1c: scheduled camera cuts.  P5: prefer the stable camera id; fall back to
+        // the array index for pre-v41 files.  Drop cuts that resolve to no camera.
+        let liveCameraIDs = Set(vp.cameras.map { $0.entityID })
         vp.cameraCuts = data.cameraCuts.compactMap { cd in
+            if let id = cd.cameraID, liveCameraIDs.contains(id) {
+                return CameraCut(time: cd.time, cameraID: id)
+            }
             guard vp.cameras.indices.contains(cd.cameraIndex) else { return nil }
             return CameraCut(time: cd.time, cameraID: vp.cameras[cd.cameraIndex].entityID)
         }
@@ -1849,10 +1857,22 @@ final class ProjectFile {
         vp.orbitRateSchedules = [:]
         let gidMap = groupGidMap(vp.sceneManager, substitutedFilenames: [:])
 
+        // Live entity ids present after objects/lights/cameras were restored — used to
+        // honour the stable id (P5) when it resolves, before the legacy name/index path.
+        let liveObjectIDs = Set(vp.sceneManager.objects.map { $0.entityID })
+        let liveEntityIDs = liveObjectIDs
+            .union(vp.lightManager.lights.map { $0.entityID })
+            .union(vp.cameras.map { $0.entityID })
+
         for sd in data.spinRateSchedules {
             let markers = sd.markers.map { SpinRateMarker(time: $0.time, rate: $0.rate, axisIndex: $0.axisIndex,
                                                           rate2: $0.rate2 ?? 0, axisIndex2: $0.axisIndex2 ?? 0) }
             guard !markers.isEmpty else { continue }
+            // P5: prefer the stable object id when it resolves to a live object.
+            if let id = sd.targetEntityID, liveObjectIDs.contains(id) {
+                vp.spinRateSchedules[.entity(id)] = markers
+                continue
+            }
             switch sd.targetKind {
             case 2:
                 // Match the occurrence-th object of that name (legacy files: targetIndex
@@ -1879,6 +1899,11 @@ final class ProjectFile {
                 axisStart: SIMD3<Float>(od.axisStart[0], od.axisStart[1], od.axisStart[2]),
                 axisEnd:   SIMD3<Float>(od.axisEnd[0],   od.axisEnd[1],   od.axisEnd[2]),
                 radius:    od.radius, markers: markers)
+            // P5: prefer the stable id (object/light/camera) when it resolves.
+            if let id = od.targetEntityID, liveEntityIDs.contains(id) {
+                vp.orbitRateSchedules[.entity(id)] = sched
+                continue
+            }
             switch od.targetKind {
             case 0:
                 let ci = max(0, od.targetIndex)
