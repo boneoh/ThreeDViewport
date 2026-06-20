@@ -37,6 +37,13 @@ enum ObjectClass: String, CaseIterable {
 // Phase 6 adds sourceURL and per-object visibility toggle.
 final class SceneObject {
 
+    // Stable identity (identity refactor P0).  `var` so load can restore the saved id;
+    // a fresh object (new load / duplicate / glue / import) gets a new one.  Will become
+    // the canonical reference for keyframes / schedules / follow targets / marks (replacing
+    // array-index + name matching).  Named `entityID` to avoid the SwiftUI Identifiable
+    // `id` (ObjectIdentifier, transient).  Not used for behaviour yet in P0.
+    var entityID = UUID()
+
     var name: String
 
     // User-chosen display name override (Timeline right-click ▸ Rename).  When set it

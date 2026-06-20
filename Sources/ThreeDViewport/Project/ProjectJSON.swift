@@ -519,6 +519,8 @@ struct ParticleEffectData: Codable {
     var isLocked: Bool = false
     /// v40: user-chosen display name (Timeline ▸ Rename).  nil = default type name.
     var customName: String? = nil
+    /// v41: stable entity id (identity refactor).  Optional → older files generate on load.
+    var id: UUID? = nil
 
     init(from decoder: Decoder) throws {
         let c     = try decoder.container(keyedBy: CodingKeys.self)
@@ -544,6 +546,7 @@ struct ParticleEffectData: Codable {
         importBundleID = try? c.decode(Int.self, forKey: .importBundleID)
         isLocked       = (try? c.decode(Bool.self, forKey: .isLocked)) ?? false
         customName     = try? c.decode(String.self, forKey: .customName)
+        id             = try? c.decode(UUID.self,   forKey: .id)
     }
 
     init(isEnabled: Bool = false, type: Int = 0,
@@ -554,7 +557,7 @@ struct ParticleEffectData: Codable {
          particleSize: Float? = nil, fallSpeed: Float? = nil, streak: Float? = nil,
          lifetime: Float? = nil, growth: Float? = nil, baseAlpha: Float? = nil,
          importBundleID: Int? = nil, isLocked: Bool = false,
-         customName: String? = nil) {
+         customName: String? = nil, id: UUID? = nil) {
         self.isEnabled = isEnabled; self.type = type
         self.px = px; self.py = py; self.pz = pz
         self.sx = sx; self.sy = sy; self.sz = sz
@@ -565,6 +568,7 @@ struct ParticleEffectData: Codable {
         self.importBundleID = importBundleID
         self.isLocked = isLocked
         self.customName = customName
+        self.id = id
     }
 }
 
@@ -778,6 +782,8 @@ struct CameraSlotData: Codable {
     var keyframes:  [CameraKeyframeData] = []
     var easingMode: Int  = 0
     var isLocked:   Bool = false
+    // v41: stable entity id (identity refactor).  Optional → older files generate on load.
+    var id:         UUID? = nil
 }
 
 /// A scheduled camera cut (Phase 1c): from `time` the program camera is `cameraIndex`.
@@ -788,6 +794,9 @@ struct CameraCutData: Codable {
 
 struct ObjectData: Codable {
     var name:      String
+    // v41: stable entity id (identity refactor).  Optional → pre-v41 files generate one
+    // on load (assigned positionally), making ids stable from the next save onward.
+    var id:        UUID? = nil
     // v40: user-chosen display name (Timeline ▸ Rename).  nil = default derived name.
     var customName: String? = nil
     var keyframes: [KeyframeData]
@@ -827,6 +836,7 @@ struct ObjectData: Codable {
     init(from decoder: Decoder) throws {
         let c                = try decoder.container(keyedBy: CodingKeys.self)
         name                 = try  c.decode(String.self,        forKey: .name)
+        id                   =  try? c.decode(UUID.self,          forKey: .id)
         customName           =  try? c.decode(String.self,        forKey: .customName)
         keyframes            = try  c.decode([KeyframeData].self, forKey: .keyframes)
         baseTransformMatrix  = (try? c.decode([Float].self,       forKey: .baseTransformMatrix)) ?? []
@@ -846,6 +856,7 @@ struct ObjectData: Codable {
     }
 
     init(name: String, keyframes: [KeyframeData],
+         id: UUID? = nil,
          customName: String? = nil,
          baseTransformMatrix: [Float] = [], easingMode: Int = 0,
          isVisible: Bool = true, occludeWhenHidden: Bool = false,
@@ -856,6 +867,7 @@ struct ObjectData: Codable {
          baseColorFactor: [Float] = [], opacity: Float = 1,
          emissiveStrength: Float = 0, importBundleID: Int? = nil) {
         self.name                = name
+        self.id                  = id
         self.customName          = customName
         self.keyframes           = keyframes
         self.baseTransformMatrix = baseTransformMatrix
@@ -1032,6 +1044,8 @@ struct LightConfigData: Codable {
     var isLocked:                Bool? = nil
     // v40: user-chosen display name (Timeline ▸ Rename).  nil = default "Light N - Type".
     var customName:              String? = nil
+    // v41: stable entity id (identity refactor).  Optional → older files generate on load.
+    var id:                      UUID? = nil
 }
 
 // v6: One saved light keyframe — intensity, colour, target, position.

@@ -14,6 +14,9 @@ struct CameraCut: Identifiable {
 /// here so the project can hold multiple cameras (Phase 1).  In Phase 1a there is exactly
 /// one camera ("Camera 1") and behavior is identical to the single-camera app.
 final class SceneCamera {
+    // Stable identity (identity refactor P0).  Restored on load; a new camera gets a
+    // fresh one.  Future canonical reference (replacing camera array index / cut index).
+    var entityID = UUID()
     var name:          String
     var yaw:           Float
     var pitch:         Float

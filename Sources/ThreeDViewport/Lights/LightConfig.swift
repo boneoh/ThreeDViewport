@@ -1,3 +1,4 @@
+import Foundation
 import simd
 
 // Phase 7: light type — maps to the integer stored in ShaderLight.position.w.
@@ -31,6 +32,10 @@ enum LightType: Int, CaseIterable {
 
 // Configuration for a single light of any type.
 struct LightConfig {
+
+    // Stable identity (identity refactor P0).  Restored from the project on load; a new
+    // light gets a fresh one.  Future canonical reference (replacing array index).
+    var entityID = UUID()
 
     var type:      LightType     = .directional
     var isEnabled: Bool          = true

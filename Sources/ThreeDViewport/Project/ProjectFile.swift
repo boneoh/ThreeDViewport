@@ -785,6 +785,7 @@ final class ProjectFile {
             return ObjectData(
                 name:                obj.name,
                 keyframes:           kfData,
+                id:                  obj.entityID,
                 customName:          obj.customName,
                 baseTransformMatrix: encodeMatrix(matrixToSave),
                 easingMode:          (obj.keyframeTrack?.easingMode ?? .linear).rawValue,
@@ -817,7 +818,8 @@ final class ProjectFile {
                                    fov: c.fovYRadians),
                 keyframes:  encodeCameraKeyframes(c.keyframeTrack),
                 easingMode: (c.keyframeTrack?.easingMode ?? .linear).rawValue,
-                isLocked:   c.isLocked)
+                isLocked:   c.isLocked,
+                id:         c.entityID)
         }
 
         // ── Feedback settings (v5) ────────────────────────────────────────────
@@ -873,7 +875,8 @@ final class ProjectFile {
                 excludeBeamFromFeedback: l.excludeBeamFromFeedback,
                 importBundleID:          l.importBundleID,
                 isLocked:                l.isLocked,
-                customName:              l.customName
+                customName:              l.customName,
+                id:                      l.entityID
             )
         }
 
@@ -1131,7 +1134,7 @@ final class ProjectFile {
             particleSize: fx.particleSize, fallSpeed: fx.fallSpeed, streak: fx.streak,
             lifetime: fx.lifetime, growth: fx.growth, baseAlpha: fx.baseAlpha,
             importBundleID: fx.importBundleID, isLocked: fx.isLocked,
-            customName: fx.customName)
+            customName: fx.customName, id: fx.entityID)
     }
 
     /// Serialises an atmosphere keyframe track (fog or particles) to Codable data.
@@ -1173,6 +1176,7 @@ final class ProjectFile {
         fx.isEnabled = pd.isEnabled
         fx.isLocked  = pd.isLocked
         fx.customName = pd.customName   // v40 Timeline ▸ Rename
+        if let pid = pd.id { fx.entityID = pid }   // v41 stable id
         fx.type      = ParticleType(rawValue: pd.type) ?? .rain
         fx.position  = SIMD3<Float>(pd.px, pd.py, pd.pz)
         fx.size      = SIMD3<Float>(pd.sx, pd.sy, pd.sz)
@@ -1348,6 +1352,7 @@ final class ProjectFile {
                 l.importBundleID          = lcd.importBundleID   // Part B
                 l.isLocked                = lcd.isLocked ?? false
                 l.customName              = lcd.customName        // v40 Timeline ▸ Rename
+                if let lid = lcd.id { l.entityID = lid }          // v41 stable id
                 return l
             }
             // Pad keyframe tracks array to match new light count
@@ -1454,7 +1459,7 @@ final class ProjectFile {
         if let slots = data.cameraSlots, !slots.isEmpty {
             vp.cameras = slots.map { s in
                 let fov = s.camera.fov ?? defaultFovRadians
-                return SceneCamera(
+                let cam = SceneCamera(
                     name:          s.name,
                     yaw:           s.camera.yaw,
                     pitch:         s.camera.pitch,
@@ -1463,6 +1468,8 @@ final class ProjectFile {
                     fovYRadians:   fov,
                     keyframeTrack: decodeCameraTrack(s.keyframes, easingMode: s.easingMode, fallbackFov: fov),
                     isLocked:      s.isLocked)
+                if let sid = s.id { cam.entityID = sid }   // v41 stable id
+                return cam
             }
             vp.activeCameraIndex = max(0, min(data.activeCameraIndex, vp.cameras.count - 1))
         } else {
@@ -1641,6 +1648,7 @@ final class ProjectFile {
                                       vp: ViewportView,
                                       timeOffset: Double = 0) {
         // ── v15: restore Model Inspector state ───────────────────────────────────
+        if let sid = saved.id { obj.entityID = sid }      // v41 stable id (else keep generated)
         obj.isVisible = saved.isVisible
         obj.occludeWhenHidden = saved.occludeWhenHidden   // v17
         obj.isLocked = saved.isLocked                     // timeline edit lock

@@ -1,3 +1,4 @@
+import Foundation
 import Combine
 import simd
 
@@ -84,6 +85,9 @@ enum ParticleType: Int, CaseIterable {
 
 // Observable model — owned by ViewportView, read live by Renderer and VideoExporter.
 final class ParticleEffect: ObservableObject {
+    // Stable identity (identity refactor P0).  Restored from the project on load; a new
+    // emitter gets a fresh one.  Future canonical reference (replacing array index).
+    var entityID = UUID()
     @Published var isEnabled: Bool          = false
     /// Timeline edit lock — frozen against viewport edits + keyframe changes.
     /// @Published so the Atmosphere panel disables this emitter's controls reactively.
