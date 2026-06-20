@@ -1,12 +1,13 @@
 import simd
 import Foundation
 
-/// A scheduled hard cut: from `time` onward (until the next cut) the program camera is
-/// `cameraIndex` (an index into ViewportView.cameras).  Drives playback + export.
+/// A scheduled hard cut: from `time` onward (until the next cut) the program camera is the
+/// one whose stable `cameraID` matches (identity refactor P4 — was an array index, which
+/// broke when cameras were deleted/reordered).  Drives playback + export.
 struct CameraCut: Identifiable {
     let id = UUID()
     var time: Double
-    var cameraIndex: Int
+    var cameraID: UUID
 }
 
 /// One scene camera's authored state.  The ACTIVE camera is edited and rendered through

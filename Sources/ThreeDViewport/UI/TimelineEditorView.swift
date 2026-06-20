@@ -1269,7 +1269,7 @@ final class TimelineEditorView: NSView {
             line.line(to: NSPoint(x: x, y: top + laneHeight - 1))
             line.lineWidth = 2
             line.stroke()
-            let name = vp.cameras.indices.contains(cut.cameraIndex) ? vp.cameras[cut.cameraIndex].name : "—"
+            let name = vp.cameras.first { $0.entityID == cut.cameraID }?.name ?? "—"
             let str  = NSAttributedString(string: name, attributes: attrs)
             let sz   = str.size()
             let bg   = NSRect(x: x + 1, y: top + 3, width: sz.width + 6, height: 13)

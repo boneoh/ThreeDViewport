@@ -170,12 +170,13 @@ final class VideoExporter {
     var activeCameraIndex: Int           = 0
 
     /// Program camera index at time `t` (mirrors ViewportView.programCameraIndex).
+    /// Cuts key by camera id (P4); resolve to the current array index.
     private func programCameraIndex(at t: Double) -> Int {
         guard !cameraCuts.isEmpty else { return activeCameraIndex }
         let sorted = cameraCuts.sorted { $0.time < $1.time }
-        var idx = sorted[0].cameraIndex
-        for c in sorted where c.time <= t + 1e-9 { idx = c.cameraIndex }
-        return min(max(0, idx), cameras.count - 1)
+        var id = sorted[0].cameraID
+        for c in sorted where c.time <= t + 1e-9 { id = c.cameraID }
+        return cameras.firstIndex { $0.entityID == id } ?? activeCameraIndex
     }
 
     // Probe marks rendered into the export when `marksVisible` is on (mirrors the

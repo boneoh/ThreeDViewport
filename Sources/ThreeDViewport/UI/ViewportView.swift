@@ -947,10 +947,12 @@ final class ViewportView: MTKView {
     func deleteCamera(at i: Int) {
         guard cameras.count > 1, cameras.indices.contains(i) else { return }
         let wasActive = (i == activeCameraIndex)
+        let deletedID = cameras[i].entityID
         cameras.remove(at: i)
         pruneOrphanMarks()
-        cameraCuts.removeAll { $0.cameraIndex == i }
-        for k in cameraCuts.indices where cameraCuts[k].cameraIndex > i { cameraCuts[k].cameraIndex -= 1 }
+        // Cuts reference the camera by stable id (P4) — just drop the deleted camera's
+        // cuts; the rest stay valid with no index remapping.
+        cameraCuts.removeAll { $0.cameraID == deletedID }
         if wasActive {
             activeCameraIndex = min(i, cameras.count - 1)
             loadCameraIntoController(activeCameraIndex)
@@ -961,21 +963,24 @@ final class ViewportView: MTKView {
 
     // MARK: - Camera cuts (Phase 1c)
 
+    /// Index of the camera with the given stable id, or nil if it no longer exists.
+    func cameraIndex(forID id: UUID) -> Int? { cameras.firstIndex { $0.entityID == id } }
+
     /// The camera index the cut schedule selects at time `t` (the "program" camera).
-    /// Empty cuts → the active camera.
+    /// Empty cuts → the active camera.  Cuts key by camera id (P4), resolved to an index.
     func programCameraIndex(at t: Double) -> Int {
         guard !cameraCuts.isEmpty else { return activeCameraIndex }
         let sorted = cameraCuts.sorted { $0.time < $1.time }
-        var idx = sorted[0].cameraIndex                       // before the first cut, hold it
-        for c in sorted where c.time <= t + 1e-9 { idx = c.cameraIndex }
-        return min(max(0, idx), cameras.count - 1)
+        var id = sorted[0].cameraID                           // before the first cut, hold it
+        for c in sorted where c.time <= t + 1e-9 { id = c.cameraID }
+        return cameraIndex(forID: id) ?? activeCameraIndex
     }
 
     /// Adds (or replaces) a cut at `time` to camera `i`, keeping the list time-sorted.
     func addCameraCut(at time: Double, cameraIndex i: Int) {
         guard cameras.indices.contains(i) else { return }
         cameraCuts.removeAll { abs($0.time - time) < 1e-4 }
-        cameraCuts.append(CameraCut(time: time, cameraIndex: i))
+        cameraCuts.append(CameraCut(time: time, cameraID: cameras[i].entityID))
         cameraCuts.sort { $0.time < $1.time }
     }
 
@@ -992,7 +997,7 @@ final class ViewportView: MTKView {
     func setCameraCut(id: UUID, cameraIndex: Int) {
         guard cameras.indices.contains(cameraIndex),
               let i = cameraCuts.firstIndex(where: { $0.id == id }) else { return }
-        cameraCuts[i].cameraIndex = cameraIndex
+        cameraCuts[i].cameraID = cameras[cameraIndex].entityID
     }
 
     /// Sets the active camera's framing to the Director free-view's current pose.
@@ -1023,7 +1028,7 @@ final class ViewportView: MTKView {
         let rows = cameraCuts.sorted { $0.time < $1.time }.map { c in
             CameraPanelState.CutRow(
                 id: c.id, time: c.time,
-                cameraName: cameras.indices.contains(c.cameraIndex) ? cameras[c.cameraIndex].name : "—")
+                cameraName: cameras.first { $0.entityID == c.cameraID }?.name ?? "—")
         }
         if cameraPanelState.cuts != rows { cameraPanelState.cuts = rows }
     }

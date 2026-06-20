@@ -1124,7 +1124,12 @@ final class ProjectFile {
             fogLocked:           vp.fogLocked,
             cameraSlots:         cameraSlotData,
             activeCameraIndex:   vp.activeCameraIndex,
-            cameraCuts:          vp.cameraCuts.map { CameraCutData(time: $0.time, cameraIndex: $0.cameraIndex) }
+            cameraCuts:          vp.cameraCuts.map { cut in
+                // Cuts key by camera id (P4); the file format still stores the array index
+                // (DTO → id move is P5).  Resolve id → current index on save.
+                CameraCutData(time: cut.time,
+                              cameraIndex: vp.cameras.firstIndex { $0.entityID == cut.cameraID } ?? 0)
+            }
         )
     }
 
@@ -1485,8 +1490,12 @@ final class ProjectFile {
         // Mirror the live (just-restored) camera into the active slot so the slot shares
         // the live pose + track (the active slot == the legacy fields by construction).
         vp.captureActiveCamera()
-        // Phase 1c: scheduled camera cuts.
-        vp.cameraCuts = data.cameraCuts.map { CameraCut(time: $0.time, cameraIndex: $0.cameraIndex) }
+        // Phase 1c: scheduled camera cuts.  Stored by array index; resolve to the
+        // camera's stable id (P4).  Drop cuts whose index is out of range.
+        vp.cameraCuts = data.cameraCuts.compactMap { cd in
+            guard vp.cameras.indices.contains(cd.cameraIndex) else { return nil }
+            return CameraCut(time: cd.time, cameraID: vp.cameras[cd.cameraIndex].entityID)
+        }
 
         vp.probeConfig.selectedMarkIndex = nil
         // v28: hot-reload the Lighting HDR from the saved path (bundled if missing).
