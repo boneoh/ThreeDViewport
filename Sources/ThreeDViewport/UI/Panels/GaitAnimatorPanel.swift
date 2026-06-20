@@ -22,7 +22,6 @@ final class GaitAnimatorState: ObservableObject {
     /// Derive stride from the model's legs + swing so the feet don't skate; disables the
     /// manual Stride field.  On by default.
     @Published var autoStride: Bool = true
-    @Published var startTime: Double? = 0
 
     // Tuning multipliers (1.0 = the gait's default amplitude).
     @Published var swingMul: String = "1.0"
@@ -46,13 +45,20 @@ final class GaitAnimatorState: ObservableObject {
 
 struct GaitAnimatorPanel: View {
     @ObservedObject var state: GaitAnimatorState
+    /// Live timeline so the "Start at playhead" timecode tracks the playhead.
+    @ObservedObject var timeline: Timeline
 
-    let captureStart: () -> Void
-    let create:       () -> Void
+    let create: () -> Void
 
-    private func timeText(_ t: Double?) -> String {
-        guard let t = t else { return "—" }
-        return String(format: "%.3f s", t)
+    /// Seconds → MM:SS:FF (frames at timeline.frameRate), matching the viewport playhead.
+    private func timecode(_ t: Double) -> String {
+        let fr          = max(1, Int(timeline.frameRate))
+        let totalFrames = Int(max(0, t) * timeline.frameRate)
+        let frames      = totalFrames % fr
+        let totalSecs   = totalFrames / fr
+        let secs        = totalSecs % 60
+        let mins        = totalSecs / 60
+        return String(format: "%02d:%02d:%02d", mins, secs, frames)
     }
 
     /// Marks not yet in the path, in scene order (for the "Add" menu).
@@ -168,9 +174,9 @@ struct GaitAnimatorPanel: View {
                     }
                     .opacity(state.autoStride ? 0.5 : 1)
                     HStack {
-                        Button("Start at Playhead", action: captureStart)
+                        Text("Start at playhead").frame(width: 110, alignment: .leading)
                         Spacer()
-                        Text(timeText(state.startTime)).font(.system(.caption, design: .monospaced))
+                        Text(timecode(timeline.currentTime)).font(.system(.caption, design: .monospaced))
                             .foregroundColor(.secondary)
                     }
                 }

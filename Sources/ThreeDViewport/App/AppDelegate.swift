@@ -3683,10 +3683,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         panel.contentView = FirstClickHostingView(rootView: GaitAnimatorPanel(
             state: state,
-            captureStart: { [weak viewport] in
-                state.startTime = viewport?.timeline.currentTime ?? 0
-                state.status = "Start time set to playhead."
-            },
+            timeline: viewport.timeline,
             create: { [weak self] in self?.gaitCreate() }
         ))
 
@@ -3724,7 +3721,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if !state.autoStride, !(stride > 0) {
             state.validationAlert = "Stride must be a positive number."; return
         }
-        let start = state.startTime ?? 0
+        let start = viewport.timeline.currentTime   // always start at the live playhead
 
         // Tuning multipliers (default 1.0 when a field is blank/invalid).
         func mul(_ s: String) -> Float { Float(s).map { $0 > 0 ? $0 : 1 } ?? 1 }

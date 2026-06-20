@@ -30,7 +30,8 @@ generated keyframes are ordinary tracks you can trim, retime, and ease like any 
 4. **Build the path** in *Path Marks*: add the marks you want and **put them in the
    order to be walked** (see below).
 5. **Set Speed**, leave **Auto stride** on (or set Stride manually).
-6. Optionally **Start at Playhead** to begin the walk at the current time.
+6. **Position the playhead** where the walk should begin — the *Start at playhead*
+   readout shows the start time as `MM:SS:FF`; the walk always begins there.
 7. **Create Keyframes** — bakes the root path and the limb cycle into the tracks.
 
 ## Path Marks — choosing and ordering
@@ -70,8 +71,8 @@ how sharply the path bends; swim excepted).
   changing Speed changes the **cadence** (steps per second) at a constant step length —
   the natural way to go faster. Turn it off to set **Stride** (distance per full cycle)
   by hand.
-- **Start at Playhead** — captures the current time as the walk's start; the readout
-  shows it.
+- **Start at playhead** — the walk always begins at the current playhead position; the
+  readout shows that time as `MM:SS:FF` (matching the viewport playhead).
 - **Tuning** — per-channel multipliers (Swing / Knee / Arm / Bob), `1.0` = the gait's
   default amplitude, to dial the motion up or down.
 - **Plant feet on marks** — drops the model so its **feet** meet the marks (instead of
