@@ -996,52 +996,49 @@ final class ProjectFile {
         }
 
         // v35: rate-marker schedules (Spin / Orbit animators).
+        // Schedules are id-keyed at runtime (P3); the file format still stores targetKind
+        // + name/occurrence (objects) / index (light/camera) / filename+occurrence (groups),
+        // so resolve each ScheduleKey back to those fields here.  (DTO → id move is P5.)
+        func groupFilename(_ gid: Int) -> String {
+            vp.sceneManager.objects.first { $0.groupID == gid }?.sourceURL?.lastPathComponent ?? ""
+        }
         var spinSchedData: [SpinRateScheduleData] = []
-        for (ref, markers) in vp.spinRateSchedules where !markers.isEmpty {
+        for (key, markers) in vp.spinRateSchedules where !markers.isEmpty {
             let md = markers.map { SpinRateMarkerData(time: $0.time, rate: $0.rate, axisIndex: $0.axisIndex,
                                                       rate2: $0.rate2, axisIndex2: $0.axisIndex2) }
-            switch ref {
-            case .object(let i):
-                guard i >= 0, i < vp.sceneManager.objects.count else { continue }
-                // targetIndex carries the occurrence among same-named objects so a
-                // duplicated single-mesh object reloads onto the RIGHT instance.
+            switch key {
+            case .group(let gid):
+                spinSchedData.append(SpinRateScheduleData(
+                    targetKind: 3, targetName: groupFilename(gid), targetIndex: occByGid[gid] ?? 0, markers: md))
+            case .entity(let id):
+                // Spin targets objects only.  targetIndex = occurrence among same-named.
+                guard let i = vp.sceneManager.objects.firstIndex(where: { $0.entityID == id }) else { continue }
                 spinSchedData.append(SpinRateScheduleData(
                     targetKind: 2, targetName: vp.sceneManager.objects[i].name,
                     targetIndex: objectOccurrence(vp.sceneManager.objects, at: i), markers: md))
-            case .group(let gid):
-                // Key by (filename, occurrence) so it survives reload + duplicates.
-                let fn = vp.sceneManager.objects.first { $0.groupID == gid }?
-                    .sourceURL?.lastPathComponent ?? ""
-                spinSchedData.append(SpinRateScheduleData(
-                    targetKind: 3, targetName: fn, targetIndex: occByGid[gid] ?? 0, markers: md))
-            default:
-                continue
             }
         }
         var orbitSchedData: [OrbitRateScheduleData] = []
-        for (ref, sched) in vp.orbitRateSchedules where !sched.markers.isEmpty {
+        for (key, sched) in vp.orbitRateSchedules where !sched.markers.isEmpty {
             let md = sched.markers.map { OrbitRateMarkerData(time: $0.time, rate: $0.rate) }
             let aS = [sched.axisStart.x, sched.axisStart.y, sched.axisStart.z]
             let aE = [sched.axisEnd.x,   sched.axisEnd.y,   sched.axisEnd.z]
-            switch ref {
-            case .camera(let ci):
-                // targetIndex carries the camera slot index (legacy files used -1 → camera 0).
+            func add(_ kind: Int, _ name: String, _ index: Int) {
                 orbitSchedData.append(OrbitRateScheduleData(
-                    targetKind: 0, targetName: "", targetIndex: ci,
+                    targetKind: kind, targetName: name, targetIndex: index,
                     axisStart: aS, axisEnd: aE, radius: sched.radius, markers: md))
-            case .light(let i):
-                orbitSchedData.append(OrbitRateScheduleData(
-                    targetKind: 1, targetName: "", targetIndex: i,
-                    axisStart: aS, axisEnd: aE, radius: sched.radius, markers: md))
-            case .object(let i):
-                guard i >= 0, i < vp.sceneManager.objects.count else { continue }
-                // targetIndex carries the occurrence among same-named objects (see spin).
-                orbitSchedData.append(OrbitRateScheduleData(
-                    targetKind: 2, targetName: vp.sceneManager.objects[i].name,
-                    targetIndex: objectOccurrence(vp.sceneManager.objects, at: i),
-                    axisStart: aS, axisEnd: aE, radius: sched.radius, markers: md))
-            default:
-                continue
+            }
+            switch key {
+            case .group(let gid):
+                add(3, groupFilename(gid), occByGid[gid] ?? 0)
+            case .entity(let id):
+                if let i = vp.sceneManager.objects.firstIndex(where: { $0.entityID == id }) {
+                    add(2, vp.sceneManager.objects[i].name, objectOccurrence(vp.sceneManager.objects, at: i))
+                } else if let li = vp.lightManager.lights.firstIndex(where: { $0.entityID == id }) {
+                    add(1, "", li)
+                } else if let ci = vp.cameras.firstIndex(where: { $0.entityID == id }) {
+                    add(0, "", ci)
+                }
             }
         }
 
@@ -1853,7 +1850,7 @@ final class ProjectFile {
                 // 0/-1 → clamp to occurrence 0 = first instance, the old behavior).
                 if let i = objectIndex(vp.sceneManager.objects, name: sd.targetName,
                                        occurrence: max(0, sd.targetIndex)) {
-                    vp.spinRateSchedules[.object(i)] = markers
+                    vp.spinRateSchedules[.entity(vp.sceneManager.objects[i].entityID)] = markers
                 }
             case 3:
                 // New files key by (filename, occurrence); legacy files stored the gid
@@ -1875,14 +1872,23 @@ final class ProjectFile {
                 radius:    od.radius, markers: markers)
             switch od.targetKind {
             case 0:
-                vp.orbitRateSchedules[.camera(max(0, od.targetIndex))] = sched
+                let ci = max(0, od.targetIndex)
+                if vp.cameras.indices.contains(ci) {
+                    vp.orbitRateSchedules[.entity(vp.cameras[ci].entityID)] = sched
+                }
             case 1:
-                vp.orbitRateSchedules[.light(od.targetIndex)] = sched
+                if vp.lightManager.lights.indices.contains(od.targetIndex) {
+                    vp.orbitRateSchedules[.entity(vp.lightManager.lights[od.targetIndex].entityID)] = sched
+                }
             case 2:
                 if let i = objectIndex(vp.sceneManager.objects, name: od.targetName,
                                        occurrence: max(0, od.targetIndex)) {
-                    vp.orbitRateSchedules[.object(i)] = sched
+                    vp.orbitRateSchedules[.entity(vp.sceneManager.objects[i].entityID)] = sched
                 }
+            case 3:
+                let gid = od.targetName.isEmpty ? od.targetIndex
+                                                : gidMap["\(od.targetName)#\(od.targetIndex)"]
+                if let gid = gid { vp.orbitRateSchedules[.group(gid)] = sched }
             default:
                 break
             }

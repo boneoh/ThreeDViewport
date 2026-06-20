@@ -109,11 +109,33 @@ final class ViewportView: MTKView {
     // Gait (walk) Animator helper state.
     let gaitState          = GaitAnimatorState()
 
-    // Rate-marker schedules (Spin / Orbit animators), keyed by track.  These are the
-    // editable source of truth; the dense pose keyframes are regenerated from them.
-    // Persisted in the project file (identity-keyed) so rates stay adjustable.
-    var spinRateSchedules:  [TrackRef: [SpinRateMarker]]   = [:]
-    var orbitRateSchedules: [TrackRef: OrbitRateSchedule]  = [:]
+    // Rate-marker schedules (Spin / Orbit animators).  These are the editable source of
+    // truth; the dense pose keyframes are regenerated from them.  Keyed by ScheduleKey
+    // (identity refactor P3): stable entity id for objects/lights/cameras, gid for groups
+    // — so deleting/reordering objects no longer needs index remapping.  Access via
+    // spinSchedule(for:)/orbitSchedule(for:)/setSpinSchedule/setOrbitSchedule.
+    var spinRateSchedules:  [ScheduleKey: [SpinRateMarker]]   = [:]
+    var orbitRateSchedules: [ScheduleKey: OrbitRateSchedule]  = [:]
+
+    /// Maps a Timeline TrackRef to the stable schedule key (nil for ref types that can't
+    /// own a rate schedule, or an out-of-range index).
+    func scheduleKey(for ref: TrackRef) -> ScheduleKey? {
+        switch ref {
+        case .object(let i): return sceneManager.objects.indices.contains(i) ? .entity(sceneManager.objects[i].entityID) : nil
+        case .light(let i):  return lightManager.lights.indices.contains(i)  ? .entity(lightManager.lights[i].entityID)  : nil
+        case .camera(let i): return cameras.indices.contains(i)              ? .entity(cameras[i].entityID)              : nil
+        case .group(let gid): return .group(gid)
+        default:             return nil
+        }
+    }
+
+    func spinSchedule(for ref: TrackRef)  -> [SpinRateMarker]?  { scheduleKey(for: ref).flatMap { spinRateSchedules[$0] } }
+    func orbitSchedule(for ref: TrackRef) -> OrbitRateSchedule? { scheduleKey(for: ref).flatMap { orbitRateSchedules[$0] } }
+    /// True when `ref` has a spin OR orbit schedule (rate-driven track).
+    func hasRateSchedule(for ref: TrackRef) -> Bool {
+        guard let k = scheduleKey(for: ref) else { return false }
+        return spinRateSchedules[k] != nil || orbitRateSchedules[k] != nil
+    }
 
     private var playbackCancellable: AnyCancellable?
 
@@ -1709,45 +1731,45 @@ final class ViewportView: MTKView {
 
     // MARK: - Delete scene entities (from the Timeline grid)
 
-    /// Deletes a set of scene objects, repairing all index-based state: the index-keyed
-    /// Spin / Orbit schedules here, plus parentIndex / group tracks in SceneManager.
+    /// Deletes a set of scene objects.  Spin/Orbit schedules are id-keyed (P3) so no
+    /// index remap is needed — orphaned schedules are pruned; SceneManager repairs
+    /// parentIndex / group tracks.
     func deleteObjects(_ indices: Set<Int>) {
         let del = indices.filter { $0 >= 0 && $0 < sceneManager.objects.count }
         guard !del.isEmpty else { return }
-        let delSorted = del.sorted()
-        func shift(_ old: Int) -> Int { old - delSorted.filter { $0 < old }.count }
-        func remapObjectKeys<T>(_ dict: [TrackRef: T]) -> [TrackRef: T] {
-            var out: [TrackRef: T] = [:]
-            for (ref, v) in dict {
-                guard case .object(let i) = ref else { out[ref] = v; continue }
-                if del.contains(i) { continue }        // schedule for a deleted object → drop
-                out[.object(shift(i))] = v
-            }
-            return out
-        }
-        spinRateSchedules  = remapObjectKeys(spinRateSchedules)
-        orbitRateSchedules = remapObjectKeys(orbitRateSchedules)
         sceneManager.removeObjects(at: del)
+        pruneOrphanRateSchedules()
         pruneOrphanMarks()
         pruneEmptyImportBundles()
         renderer?.invalidateAnimationCache()
     }
 
-    /// Deletes a light, remapping orbit schedules keyed by light index (lights can be
-    /// orbit targets; spin doesn't apply to lights).  No-op on the last light.
+    /// Deletes a light.  Orbit schedules are id-keyed (P3) so no remap is needed.
+    /// No-op on the last light.
     func deleteLight(_ index: Int) {
         guard index >= 0, index < lightManager.lights.count, lightManager.lights.count > 1 else { return }
-        var out: [TrackRef: OrbitRateSchedule] = [:]
-        for (ref, v) in orbitRateSchedules {
-            guard case .light(let i) = ref else { out[ref] = v; continue }
-            if i == index { continue }
-            out[.light(i > index ? i - 1 : i)] = v
-        }
-        orbitRateSchedules = out
         lightManager.removeLight(at: index)
+        pruneOrphanRateSchedules()
         pruneOrphanMarks()
         pruneEmptyImportBundles()
         renderer?.invalidateAnimationCache()
+    }
+
+    /// Drops Spin/Orbit schedules whose target entity / group no longer exists (P3).
+    func pruneOrphanRateSchedules() {
+        var liveEntities = Set<UUID>()
+        liveEntities.formUnion(sceneManager.objects.map { $0.entityID })
+        liveEntities.formUnion(lightManager.lights.map  { $0.entityID })
+        liveEntities.formUnion(cameras.map              { $0.entityID })
+        let liveGroups = Set(sceneManager.objects.compactMap { $0.groupID })
+        func keep(_ key: ScheduleKey) -> Bool {
+            switch key {
+            case .entity(let id):  return liveEntities.contains(id)
+            case .group(let gid):  return liveGroups.contains(gid)
+            }
+        }
+        spinRateSchedules  = spinRateSchedules.filter  { keep($0.key) }
+        orbitRateSchedules = orbitRateSchedules.filter { keep($0.key) }
     }
 
     /// Deletes a particle emitter.  No-op on the last emitter.
@@ -1919,7 +1941,7 @@ final class ViewportView: MTKView {
         guard s.autoKeyframeUpdateNearby || s.autoKeyframeInsertBetween else { return }
         // Skip rate-driven tracks: their keyframes are regenerated from spin/orbit
         // markers, so an auto-stamp would just be wiped on the next regenerate.
-        if spinRateSchedules[ref] != nil || orbitRateSchedules[ref] != nil { return }
+        if hasRateSchedule(for: ref) { return }
         let times = autoKeyframeTrackTimes(ref)
         guard !times.isEmpty else { return }   // animated-only
         let playhead = timeline.currentTime
@@ -2231,8 +2253,8 @@ final class ViewportView: MTKView {
         // (and leaves a stray keyframe behind) — the cause of a model tumbling instead of
         // walking when it carried a leftover group spin.
         for ref in [TrackRef.group(gid)] + groupPartIndices.map({ TrackRef.object($0) }) {
-            if spinRateSchedules[ref]  != nil { setSpinSchedule(ref: ref, markers: [], keyframesPerRevolution: 12) }
-            if orbitRateSchedules[ref] != nil { setOrbitSchedule(ref: ref, schedule: nil, keyframesPerRevolution: 12) }
+            if spinSchedule(for: ref)  != nil { setSpinSchedule(ref: ref, markers: [], keyframesPerRevolution: 12) }
+            if orbitSchedule(for: ref) != nil { setOrbitSchedule(ref: ref, schedule: nil, keyframesPerRevolution: 12) }
         }
 
         let groupScale = TransformMath.scale(of: sceneManager.groupTransforms[gid] ?? matrix_identity_float4x4)
@@ -2410,11 +2432,11 @@ final class ViewportView: MTKView {
     /// empty `markers` clears the schedule and the keyframes it owned.
     func setSpinSchedule(ref: TrackRef, markers: [SpinRateMarker],
                          keyframesPerRevolution: Float) {
-        let oldFirst  = spinRateSchedules[ref]?.map(\.time).min()
+        let oldFirst  = spinSchedule(for: ref)?.map(\.time).min()
         let newFirst  = markers.map(\.time).min()
         let clearFrom = [oldFirst, newFirst].compactMap { $0 }.min() ?? 0
         let cleaned   = markers.isEmpty ? nil : markers.sorted { $0.time < $1.time }
-        spinRateSchedules[ref] = cleaned
+        if let key = scheduleKey(for: ref) { spinRateSchedules[key] = cleaned }
         regenerateSpinRate(ref: ref, markers: cleaned ?? [],
                            keyframesPerRevolution: keyframesPerRevolution, clearFrom: clearFrom)
         regenerateLoopForRef(ref)   // re-tile if this track is in a looped import bundle
@@ -2424,11 +2446,11 @@ final class ViewportView: MTKView {
     /// Passing `nil` (or an empty marker list) clears the schedule and its keyframes.
     func setOrbitSchedule(ref: TrackRef, schedule: OrbitRateSchedule?,
                           keyframesPerRevolution: Float) {
-        let oldFirst  = orbitRateSchedules[ref]?.markers.map(\.time).min()
+        let oldFirst  = orbitSchedule(for: ref)?.markers.map(\.time).min()
         let newFirst  = schedule?.markers.map(\.time).min()
         let clearFrom = [oldFirst, newFirst].compactMap { $0 }.min() ?? 0
         let cleaned: OrbitRateSchedule? = (schedule?.markers.isEmpty ?? true) ? nil : schedule
-        orbitRateSchedules[ref] = cleaned
+        if let key = scheduleKey(for: ref) { orbitRateSchedules[key] = cleaned }
         regenerateOrbitRate(ref: ref, schedule: cleaned,
                             keyframesPerRevolution: keyframesPerRevolution, clearFrom: clearFrom)
         regenerateLoopForRef(ref)   // re-tile if this track is in a looped import bundle

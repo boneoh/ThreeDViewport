@@ -1,6 +1,15 @@
 import Foundation
 import simd
 
+/// Stable key for a rate schedule's target (identity refactor P3).  Objects, lights and
+/// cameras key by their stable entity id (survives delete/reorder without re-indexing);
+/// multi-part model groups key by their gid (stable within a session, persisted by
+/// source filename + occurrence).
+enum ScheduleKey: Hashable {
+    case entity(UUID)   // object / light / camera
+    case group(Int)     // multi-part model group id
+}
+
 // Rate-marker schedules for the Spin and Orbit animators.
 //
 // Unlike the older windowed bakers (revolutions over a captured [start, end]),

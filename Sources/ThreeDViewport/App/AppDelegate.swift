@@ -240,6 +240,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             // Refresh the Effects grid's rows + highlight (fires on object-array
             // changes too, so add/remove/load all keep the grid current).
             self.effectsGridState?.sync()
+            // Re-sync open Spin/Orbit panels so a deleted-then-readded object can't
+            // leave the old object's rate markers cached in the panel (P3 follow-up).
+            self.refreshPathAnimatorsAfterSceneChange()
         }
 
         // Viewport / timeline selection change → highlight the timeline lane AND
@@ -3940,6 +3943,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     /// Keeps any OPEN Spin / Orbit panel's Target in step with the viewport /
     /// timeline selection (the dropdown can still override until the next change).
+    /// Re-syncs the open Spin/Orbit panels after the scene's object list changes
+    /// (add / remove / replace).  Rebuilds their target lists, drops a capturedRef whose
+    /// target vanished, and UNCONDITIONALLY reloads the marker cache from the live
+    /// schedule — so re-adding a deleted object can't leave the old object's rate markers
+    /// showing under "Rate Keyframes" (identity refactor P3 follow-up).
+    private func refreshPathAnimatorsAfterSceneChange() {
+        guard let viewport = viewportView else { return }
+        if spinPanel?.isVisible == true {
+            let s = viewport.spinAnimatorState
+            s.targets = pathAnimatorTargets(camera: false, lights: false, objects: true,
+                                            groups: true, groupParts: true)
+            if let ref = s.capturedRef, !s.targets.contains(where: { $0.ref == ref }) { s.capturedRef = nil }
+            spinReloadFromSchedule()
+        }
+        if orbitPathPanel?.isVisible == true {
+            let s = viewport.orbitPathState
+            s.targets = pathAnimatorTargets(camera: true, lights: true, objects: true,
+                                            groups: false, groupParts: true)
+            if let ref = s.capturedRef, !s.targets.contains(where: { $0.ref == ref }) { s.capturedRef = nil }
+            orbitReloadFromSchedule()
+        }
+    }
+
     /// Setting `capturedRef` fires the panel's onChange, which reloads its markers.
     private func syncPathAnimatorPanelsToSelection(_ ref: TrackRef) {
         guard let viewport = viewportView else { return }
@@ -4024,7 +4050,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private func orbitReloadFromSchedule() {
         guard let viewport = viewportView else { return }
         let state = viewport.orbitPathState
-        guard let ref = state.capturedRef, let sched = viewport.orbitRateSchedules[ref] else {
+        guard let ref = state.capturedRef, let sched = viewport.orbitSchedule(for: ref) else {
             state.markers = []
             return
         }
@@ -4170,7 +4196,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let viewport = viewportView else { return }
         let state = viewport.spinAnimatorState
         if let ref = state.capturedRef {
-            state.markers = viewport.spinRateSchedules[ref] ?? []
+            state.markers = viewport.spinSchedule(for: ref) ?? []
         } else {
             state.markers = []
         }
@@ -4196,7 +4222,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // whole-timeline spin.  (Forcing the first one to frame 0 ignored a playhead
         // the user had deliberately positioned.)
         let t = viewport.timeline.currentTime
-        var markers = (viewport.spinRateSchedules[ref] ?? []).filter { abs($0.time - t) >= 1e-3 }
+        var markers = (viewport.spinSchedule(for: ref) ?? []).filter { abs($0.time - t) >= 1e-3 }
         markers.append(SpinRateMarker(time: t, rate: rate, axisIndex: state.axisIndex,
                                       rate2: rate2, axisIndex2: state.axisIndex2))
         markers.sort { $0.time < $1.time }
@@ -4210,7 +4236,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private func spinDeleteMarker(_ id: UUID) {
         guard let viewport = viewportView, let ref = viewport.spinAnimatorState.capturedRef else { return }
         let perRev = Float(viewport.spinAnimatorState.perRev) ?? 12
-        let markers = (viewport.spinRateSchedules[ref] ?? []).filter { $0.id != id }
+        let markers = (viewport.spinSchedule(for: ref) ?? []).filter { $0.id != id }
         viewport.setSpinSchedule(ref: ref, markers: markers, keyframesPerRevolution: perRev)
         viewport.spinAnimatorState.markers = markers
         timelineEditorWC?.editorView.needsDisplay = true
