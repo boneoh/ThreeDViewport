@@ -402,6 +402,7 @@ struct MarkData: Codable {
     var r:  Float = 1; var g:  Float = 1; var b:  Float = 1
     var time:           Double? = nil
     var ownerCategory:  Int?    = nil    // MarkCategory raw; nil = legacy/unassigned
+    var ownerID:        UUID?   = nil    // v41 identity refactor: stable owner id (preferred)
     var ownerIndex:     Int?    = nil
     var ownerName:      String? = nil
     var ownerOccurrence: Int?   = nil

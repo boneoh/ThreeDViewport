@@ -3190,8 +3190,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     /// Camera panel ▸ Add Mark — captures the active camera's eye + aim as one mark.
     private func addCameraMark() {
         guard let vp = viewportView, vp.cameras.indices.contains(vp.activeCameraIndex) else { return }
-        let owner = MarkOwner(category: .camera, index: vp.activeCameraIndex,
-                              name: vp.cameras[vp.activeCameraIndex].name)
+        let cam = vp.cameras[vp.activeCameraIndex]
+        let owner = MarkOwner(category: .camera, id: cam.entityID,
+                              index: vp.activeCameraIndex, name: cam.name)
         promptForMark(at: vp.camera.eyePosition, owner: owner, secondary: vp.camera.target)
     }
 
@@ -3200,7 +3201,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private func addLightMark(_ i: Int) {
         guard let vp = viewportView, vp.lightManager.lights.indices.contains(i) else { return }
         let light = vp.lightManager.lights[i]
-        let owner = MarkOwner(category: .light, index: i,
+        let owner = MarkOwner(category: .light, id: light.entityID, index: i,
                               name: "Light \(i + 1) - \(light.type.displayName)")
         let aims  = light.type == .directional || light.type == .spot || light.type == .laser
         promptForMark(at: light.position, owner: owner, secondary: aims ? light.target : nil)
@@ -3215,7 +3216,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // Name by type, disambiguating duplicate types by occurrence (1-based suffix).
         let occ  = vp.particleManager.emitters[..<i].filter { $0.type == e.type }.count
         let name = occ > 0 ? "\(e.type.displayName) \(occ + 1)" : e.type.displayName
-        let owner = MarkOwner(category: .effect, index: i, name: name, occurrence: occ)
+        let owner = MarkOwner(category: .effect, id: e.entityID, index: i, name: name, occurrence: occ)
         promptForMark(at: e.position, owner: owner)
     }
 
@@ -3228,7 +3229,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard vp.sceneManager.objects.indices.contains(i) else { return nil }
         let obj = vp.sceneManager.objects[i]
         let occ = vp.sceneManager.objects[..<i].filter { $0.name == obj.name }.count
-        return MarkOwner(category: .object, index: i, name: obj.name, occurrence: occ)
+        return MarkOwner(category: .object, id: obj.entityID, index: i, name: obj.name, occurrence: occ)
     }
 
     /// Seconds → MM:SS:FF (frames at the timeline's rate), matching the viewport playhead.

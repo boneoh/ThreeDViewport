@@ -1092,6 +1092,7 @@ final class ProjectFile {
                                                         r: $0.color.x, g: $0.color.y, b: $0.color.z,
                                                         time: $0.time,
                                                         ownerCategory:  $0.owner?.category.rawValue,
+                                                        ownerID:        $0.owner?.id,
                                                         ownerIndex:     $0.owner?.index,
                                                         ownerName:      $0.owner?.name,
                                                         ownerOccurrence: $0.owner?.occurrence,
@@ -1440,6 +1441,7 @@ final class ProjectFile {
             var owner: MarkOwner? = nil
             if let raw = md.ownerCategory, let cat = MarkCategory(rawValue: raw) {
                 owner = MarkOwner(category: cat,
+                                  id:         md.ownerID,
                                   index:      md.ownerIndex ?? 0,
                                   name:       md.ownerName ?? cat.displayName,
                                   occurrence: md.ownerOccurrence ?? 0)
@@ -1535,6 +1537,12 @@ final class ProjectFile {
         mgr.selectedIndex = 0
         print("[DEBUG] ProjectFile: particle emitters=\(mgr.emitters.count)"
             + " fogKeyframes=\(data.fogKeyframes.count)")
+
+        // ── Migrate legacy Position-Mark owners to stable ids (identity refactor P2) ──
+        // Pre-id marks stored owner by category + index / name+occurrence; now that all
+        // entities are loaded, resolve each to its entityID so marks become id-keyed
+        // (rename-proof, no re-index churn) from the next save onward.
+        migrateMarkOwnerIDs(vp: vp)
 
         // ── Import-bundle loops ("Repeat to Fill Timeline") ───────────────────
         // Re-tile any looped bundle out to the (now restored) timeline duration.
@@ -2011,6 +2019,36 @@ final class ProjectFile {
                                            occurrence: occByGid[gid] ?? 0, name: name))
         }
         return out
+    }
+
+    /// Resolves legacy Position-Mark owners (no id) to their owning entity's stable id,
+    /// by the old category + index / name+occurrence key.  Unresolvable marks (owner
+    /// deleted) keep id == nil and remain legacy-keyed.
+    private static func migrateMarkOwnerIDs(vp: ViewportView) {
+        let sm = vp.sceneManager
+        for k in vp.probeConfig.marks.indices {
+            guard var owner = vp.probeConfig.marks[k].owner, owner.id == nil else { continue }
+            var resolved: UUID? = nil
+            switch owner.category {
+            case .object:
+                var seen = 0
+                for o in sm.objects where o.name == owner.name {
+                    if seen == owner.occurrence { resolved = o.entityID; break }
+                    seen += 1
+                }
+            case .camera:
+                if vp.cameras.indices.contains(owner.index) { resolved = vp.cameras[owner.index].entityID }
+            case .light:
+                if vp.lightManager.lights.indices.contains(owner.index) {
+                    resolved = vp.lightManager.lights[owner.index].entityID
+                }
+            case .effect:
+                if vp.particleManager.emitters.indices.contains(owner.index) {
+                    resolved = vp.particleManager.emitters[owner.index].entityID
+                }
+            }
+            if let resolved { owner.id = resolved; vp.probeConfig.marks[k].owner = owner }
+        }
     }
 
     /// Reconnects saved model/group names to the runtime group IDs (by filename + occurrence).

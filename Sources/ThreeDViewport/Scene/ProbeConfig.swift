@@ -35,9 +35,13 @@ enum MarkCategory: Int, Codable, CaseIterable {
 /// name + occurrence so they survive reorder (mirrors the spin/orbit schedule keys).
 struct MarkOwner: Equatable {
     var category:   MarkCategory
-    var index:      Int            // camera / light / emitter slot, or object index at capture
-    var name:       String         // owning item's display name (default mark name + resilience)
-    var occurrence: Int = 0        // for objects: occurrence among same-named (0 otherwise)
+    /// Stable entity id of the owning item (identity refactor P2).  Preferred for
+    /// grouping / pruning / rename-tracking.  nil = legacy mark (resolve via the
+    /// index/name/occurrence fallback, then migrate to an id on next save).
+    var id:         UUID?
+    var index:      Int            // legacy / fallback: slot or object index at capture
+    var name:       String         // owning item's display name at capture (default mark name + fallback)
+    var occurrence: Int = 0        // legacy / fallback: occurrence among same-named objects
 }
 
 /// A saved, named world-space position (a "mark") set from the Probe or an item's

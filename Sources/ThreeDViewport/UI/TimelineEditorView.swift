@@ -54,18 +54,20 @@ enum TimelineCategory: Hashable {
 /// lights / effects key by slot index; objects key by name + occurrence so the row
 /// survives reorder (mirrors how spin/orbit schedules key objects).
 struct MarkRowKey: Hashable {
-    let category:   MarkCategory
-    let index:      Int
-    let name:       String
-    let occurrence: Int
+    let category: MarkCategory
+    let id:       UUID?       // stable owner id (preferred, identity refactor P2)
+    let legacy:   String      // fallback grouping key, used only when `id` is nil
 
     init(_ owner: MarkOwner) {
         category = owner.category
-        switch owner.category {
-        case .object:
-            index = 0; name = owner.name; occurrence = owner.occurrence
-        default:
-            index = owner.index; name = ""; occurrence = 0
+        id       = owner.id
+        if owner.id != nil {
+            legacy = ""
+        } else {
+            switch owner.category {
+            case .object: legacy = "o|\(owner.name)|\(owner.occurrence)"
+            default:      legacy = "i|\(owner.index)"
+            }
         }
     }
 }
@@ -654,9 +656,32 @@ final class TimelineEditorView: NSView {
             .map { (index: $0.offset, mark: $0.element) }
     }
 
-    /// Display label for a Position-Marks row (the owning item's name).
+    /// Display label for a Position-Marks row — the owning item's CURRENT name
+    /// (resolved live by id so it tracks renames), falling back to the captured name.
     private func markRowName(_ key: MarkRowKey) -> String {
-        marksForRow(key).first?.mark.owner?.name ?? key.name
+        guard let owner = marksForRow(key).first?.mark.owner else { return "Marks" }
+        return ownerDisplayName(owner)
+    }
+
+    /// The owning item's current display name, resolved by stable id where possible.
+    private func ownerDisplayName(_ o: MarkOwner) -> String {
+        switch o.category {
+        case .object:
+            if let id = o.id, let obj = sceneManager?.objects.first(where: { $0.entityID == id }) {
+                return sceneManager?.displayName(for: obj) ?? o.name
+            }
+        case .camera:
+            if let id = o.id, let c = viewport?.cameras.first(where: { $0.entityID == id }) { return c.name }
+        case .light:
+            if let id = o.id, let li = lightManager?.lights.firstIndex(where: { $0.entityID == id }) {
+                return lightLaneName(li)
+            }
+        case .effect:
+            if let id = o.id, let e = particleManager?.emitters.first(where: { $0.entityID == id }) {
+                if let c = e.customName, !c.isEmpty { return c }
+            }
+        }
+        return o.name
     }
 
     /// The probe-marks index of the `kfIndex`-th diamond on a mark row, or nil.

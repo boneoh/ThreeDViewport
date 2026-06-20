@@ -924,9 +924,9 @@ final class ViewportView: MTKView {
     /// camera indices shift down.
     func deleteCamera(at i: Int) {
         guard cameras.count > 1, cameras.indices.contains(i) else { return }
-        removeMarksForSlot(.camera, i)
         let wasActive = (i == activeCameraIndex)
         cameras.remove(at: i)
+        pruneOrphanMarks()
         cameraCuts.removeAll { $0.cameraIndex == i }
         for k in cameraCuts.indices where cameraCuts[k].cameraIndex > i { cameraCuts[k].cameraIndex -= 1 }
         if wasActive {
@@ -1728,7 +1728,7 @@ final class ViewportView: MTKView {
         spinRateSchedules  = remapObjectKeys(spinRateSchedules)
         orbitRateSchedules = remapObjectKeys(orbitRateSchedules)
         sceneManager.removeObjects(at: del)
-        reconcileObjectMarks()
+        pruneOrphanMarks()
         pruneEmptyImportBundles()
         renderer?.invalidateAnimationCache()
     }
@@ -1744,8 +1744,8 @@ final class ViewportView: MTKView {
             out[.light(i > index ? i - 1 : i)] = v
         }
         orbitRateSchedules = out
-        removeMarksForSlot(.light, index)
         lightManager.removeLight(at: index)
+        pruneOrphanMarks()
         pruneEmptyImportBundles()
         renderer?.invalidateAnimationCache()
     }
@@ -1753,37 +1753,30 @@ final class ViewportView: MTKView {
     /// Deletes a particle emitter.  No-op on the last emitter.
     func deleteParticleEmitter(_ index: Int) {
         guard index >= 0, index < particleManager.emitters.count, particleManager.emitters.count > 1 else { return }
-        removeMarksForSlot(.effect, index)
         particleManager.removeEmitter(at: index)
+        pruneOrphanMarks()
         pruneEmptyImportBundles()
         renderer?.invalidateAnimationCache()
     }
 
-    /// Deleting a slot-based item (camera / light / effect) drops its Position Marks and
-    /// shifts higher owner indices down to match the surviving items.
-    private func removeMarksForSlot(_ category: MarkCategory, _ index: Int) {
-        probeConfig.marks.removeAll { $0.owner?.category == category && $0.owner?.index == index }
-        for k in probeConfig.marks.indices {
-            if probeConfig.marks[k].owner?.category == category,
-               let oi = probeConfig.marks[k].owner?.index, oi > index {
-                probeConfig.marks[k].owner?.index = oi - 1
-            }
-        }
-    }
-
-    /// Deleting objects drops any Position Marks whose owning object no longer exists
-    /// (matched by name + occurrence, the object owner key).
-    private func reconcileObjectMarks() {
-        var valid = Set<String>()
-        var seen:  [String: Int] = [:]
-        for obj in sceneManager.objects {
-            let occ = seen[obj.name, default: 0]
-            valid.insert("\(obj.name)#\(occ)")
-            seen[obj.name] = occ + 1
-        }
+    /// Drops Position Marks whose owning item no longer exists (identity refactor P2).
+    /// Matched by stable owner id — no index remapping needed since ids are stable.
+    /// Legacy marks without an owner id are left alone (migrated to ids on load).
+    func pruneOrphanMarks() {
+        var live = Set<UUID>()
+        live.formUnion(sceneManager.objects.map     { $0.entityID })
+        live.formUnion(lightManager.lights.map      { $0.entityID })
+        live.formUnion(particleManager.emitters.map { $0.entityID })
+        live.formUnion(cameras.map                  { $0.entityID })
+        let before = probeConfig.marks.count
         probeConfig.marks.removeAll { m in
-            guard let o = m.owner, o.category == .object else { return false }
-            return !valid.contains("\(o.name)#\(o.occurrence)")
+            guard let oid = m.owner?.id else { return false }   // legacy / unowned → keep
+            return !live.contains(oid)
+        }
+        if probeConfig.marks.count != before {
+            if let sel = probeConfig.selectedMarkIndex, sel >= probeConfig.marks.count {
+                probeConfig.selectedMarkIndex = probeConfig.marks.isEmpty ? nil : probeConfig.marks.count - 1
+            }
         }
     }
 
