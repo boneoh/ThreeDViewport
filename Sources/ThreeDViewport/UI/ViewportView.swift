@@ -780,6 +780,7 @@ final class ViewportView: MTKView {
         case .group(let gid):
             return sceneManager.objects.first(where: { $0.groupID == gid })?.isLocked ?? false
         case .importBundle: return false
+        case .mark: return probeConfig.isLocked   // marks edit-lock follows the probe
         case .category(let cat):
             // A category header reads as locked only when EVERY lane under it is locked.
             switch cat {
@@ -790,6 +791,7 @@ final class ViewportView: MTKView {
             case .effects:
                 let es = particleManager.emitters
                 return fogLocked && es.allSatisfy { $0.isLocked }
+            case .marks: return probeConfig.isLocked
             }
         }
     }
@@ -821,6 +823,7 @@ final class ViewportView: MTKView {
         case .group(let gid):
             for obj in sceneManager.objects where obj.groupID == gid { obj.isLocked = locked }
         case .importBundle: break
+        case .mark: probeConfig.isLocked = locked   // marks edit-lock follows the probe
         case .category(let cat):
             // A category header cascades its lock to every lane it groups.
             switch cat {
@@ -831,6 +834,8 @@ final class ViewportView: MTKView {
             case .effects:
                 fogLocked = locked
                 particleManager.emitters.forEach { $0.isLocked = locked }
+            case .marks:
+                probeConfig.isLocked = locked
             }
         }
     }
@@ -919,6 +924,7 @@ final class ViewportView: MTKView {
     /// camera indices shift down.
     func deleteCamera(at i: Int) {
         guard cameras.count > 1, cameras.indices.contains(i) else { return }
+        removeMarksForSlot(.camera, i)
         let wasActive = (i == activeCameraIndex)
         cameras.remove(at: i)
         cameraCuts.removeAll { $0.cameraIndex == i }
@@ -1717,6 +1723,7 @@ final class ViewportView: MTKView {
         spinRateSchedules  = remapObjectKeys(spinRateSchedules)
         orbitRateSchedules = remapObjectKeys(orbitRateSchedules)
         sceneManager.removeObjects(at: del)
+        reconcileObjectMarks()
         pruneEmptyImportBundles()
         renderer?.invalidateAnimationCache()
     }
@@ -1732,6 +1739,7 @@ final class ViewportView: MTKView {
             out[.light(i > index ? i - 1 : i)] = v
         }
         orbitRateSchedules = out
+        removeMarksForSlot(.light, index)
         lightManager.removeLight(at: index)
         pruneEmptyImportBundles()
         renderer?.invalidateAnimationCache()
@@ -1740,9 +1748,38 @@ final class ViewportView: MTKView {
     /// Deletes a particle emitter.  No-op on the last emitter.
     func deleteParticleEmitter(_ index: Int) {
         guard index >= 0, index < particleManager.emitters.count, particleManager.emitters.count > 1 else { return }
+        removeMarksForSlot(.effect, index)
         particleManager.removeEmitter(at: index)
         pruneEmptyImportBundles()
         renderer?.invalidateAnimationCache()
+    }
+
+    /// Deleting a slot-based item (camera / light / effect) drops its Position Marks and
+    /// shifts higher owner indices down to match the surviving items.
+    private func removeMarksForSlot(_ category: MarkCategory, _ index: Int) {
+        probeConfig.marks.removeAll { $0.owner?.category == category && $0.owner?.index == index }
+        for k in probeConfig.marks.indices {
+            if probeConfig.marks[k].owner?.category == category,
+               let oi = probeConfig.marks[k].owner?.index, oi > index {
+                probeConfig.marks[k].owner?.index = oi - 1
+            }
+        }
+    }
+
+    /// Deleting objects drops any Position Marks whose owning object no longer exists
+    /// (matched by name + occurrence, the object owner key).
+    private func reconcileObjectMarks() {
+        var valid = Set<String>()
+        var seen:  [String: Int] = [:]
+        for obj in sceneManager.objects {
+            let occ = seen[obj.name, default: 0]
+            valid.insert("\(obj.name)#\(occ)")
+            seen[obj.name] = occ + 1
+        }
+        probeConfig.marks.removeAll { m in
+            guard let o = m.owner, o.category == .object else { return false }
+            return !valid.contains("\(o.name)#\(o.occurrence)")
+        }
     }
 
     /// Drops bundle metadata (name / loop / source) for any import bundle that no
@@ -1912,7 +1949,7 @@ final class ViewportView: MTKView {
         case .particles(let i):
             guard i >= 0, i < particleManager.emitters.count else { return [] }
             return particleManager.emitters[i].keyframeTrack?.keyframes.map { $0.time } ?? []
-        case .importBundle, .category:
+        case .mark, .importBundle, .category:
             return []
         }
     }
@@ -1928,7 +1965,7 @@ final class ViewportView: MTKView {
         case .fog:              addFogKeyframeAtCurrentTime()
         case .particles(let i): addParticleKeyframeAtCurrentTime(forEmitterAt: i)
         case .cameraCuts:       break
-        case .importBundle, .category: break
+        case .mark, .importBundle, .category: break
         }
     }
 

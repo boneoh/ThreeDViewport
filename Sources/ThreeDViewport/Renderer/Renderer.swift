@@ -1353,6 +1353,19 @@ final class Renderer: NSObject, MTKViewDelegate {
 
             var sphere = SceneWidgets.sphereWireframe(center: p, radius: len * 0.25)
             drawWidgetLines(encoder: encoder, vertices: &sphere, viewProjection: vp, color: c)
+
+            // Dual mark (camera eye→aim, or aimed light pos→target): draw the secondary
+            // point in a DISTINCT style — a hollow ring (no axis cross), dimmed, with a
+            // thin connecting line — so primary vs. target reads at a glance.
+            if let q = mark.secondaryPosition {
+                let dim = SIMD4<Float>(mark.color * 0.65, 1)
+                var link = [p, q]
+                drawWidgetLines(encoder: encoder, vertices: &link, viewProjection: vp, color: dim)
+                var ring1 = SceneWidgets.sphereWireframe(center: q, radius: len * 0.5)
+                drawWidgetLines(encoder: encoder, vertices: &ring1, viewProjection: vp, color: dim)
+                var ring2 = SceneWidgets.sphereWireframe(center: q, radius: len * 0.28)
+                drawWidgetLines(encoder: encoder, vertices: &ring2, viewProjection: vp, color: dim)
+            }
         }
     }
 

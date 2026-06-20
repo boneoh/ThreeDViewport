@@ -37,12 +37,33 @@ private final class CutAddRequest:      NSObject { let time: Double; let cam: In
 
 /// Phase 4: display-only category groups in the Timeline (collapsible headers).
 enum TimelineCategory: Hashable {
-    case cameras, lights, effects
+    case cameras, lights, effects, marks
     var title: String {
         switch self {
         case .cameras: return "Cameras"
         case .lights:  return "Lights"
         case .effects: return "Effects"
+        case .marks:   return "Position Marks"
+        }
+    }
+}
+
+/// Identifies one Position-Marks row (all marks owned by a single item).  Cameras /
+/// lights / effects key by slot index; objects key by name + occurrence so the row
+/// survives reorder (mirrors how spin/orbit schedules key objects).
+struct MarkRowKey: Hashable {
+    let category:   MarkCategory
+    let index:      Int
+    let name:       String
+    let occurrence: Int
+
+    init(_ owner: MarkOwner) {
+        category = owner.category
+        switch owner.category {
+        case .object:
+            index = 0; name = owner.name; occurrence = owner.occurrence
+        default:
+            index = owner.index; name = ""; occurrence = 0
         }
     }
 }
@@ -57,6 +78,7 @@ enum TrackRef: Equatable, Hashable {
     case fog            // the fog volume (single instance)
     case particles(Int) // index into ParticleManager.emitters
     case importBundle(Int) // import-bundle ID — display-only collapsible header (Part B)
+    case mark(MarkRowKey)  // Position-Marks row — all marks owned by one item
 }
 
 // One row in the timeline label/track area.
@@ -217,6 +239,8 @@ final class TimelineEditorView: NSView {
     /// Pose data from the last Cmd+C.  nil = nothing copied yet.
     /// Scoped to this view instance; does not use the system pasteboard.
     private var clipboardKeyframe: ClipboardKeyframe? = nil
+    /// Local clipboard for Position Marks (Cmd+C/V on a mark row); not shared cross-instance.
+    private var markClipboard: ProbeMark? = nil
 
     /// Called when a lane row or diamond is clicked, so AppDelegate can switch the
     /// viewport to the matching control mode / selection.
@@ -615,6 +639,90 @@ final class TimelineEditorView: NSView {
         viewport?.cameras[safe: i]?.name ?? "Camera \(i + 1)"
     }
 
+    // MARK: - Position Marks (Phase B) helpers
+
+    /// The marks owned by one row, paired with their index in `probeConfig.marks`,
+    /// sorted by time.  Empty when the probe / owner has none.
+    private func marksForRow(_ key: MarkRowKey) -> [(index: Int, mark: ProbeMark)] {
+        guard let marks = viewport?.probeConfig.marks else { return [] }
+        return marks.enumerated()
+            .filter { $0.element.owner.map(MarkRowKey.init) == key }
+            .sorted { $0.element.time < $1.element.time }
+            .map { (index: $0.offset, mark: $0.element) }
+    }
+
+    /// Display label for a Position-Marks row (the owning item's name).
+    private func markRowName(_ key: MarkRowKey) -> String {
+        marksForRow(key).first?.mark.owner?.name ?? key.name
+    }
+
+    /// The probe-marks index of the `kfIndex`-th diamond on a mark row, or nil.
+    private func markIndex(for key: MarkRowKey, kfIndex: Int) -> Int? {
+        let rows = marksForRow(key)
+        return rows.indices.contains(kfIndex) ? rows[kfIndex].index : nil
+    }
+
+    /// The probe-marks index of the mark on a row nearest `time`, or nil.
+    private func markIndex(for key: MarkRowKey, atTime time: Double) -> Int? {
+        marksForRow(key).min { abs($0.mark.time - time) < abs($1.mark.time - time) }
+            .flatMap { abs($0.mark.time - time) < 0.0005 ? $0.index : nil }
+    }
+
+    /// Moves a mark in time (drag).  No-op when the probe is locked.  Lightweight: the
+    /// row set is unchanged (diamonds are drawn from live keyframeTimes), so this only
+    /// mutates + redraws — no cache invalidation or popup rebuild on the drag hot path.
+    private func retimeMark(_ key: MarkRowKey, fromTime: Double, toTime: Double) {
+        guard let probe = viewport?.probeConfig, !probe.isLocked,
+              let mi = markIndex(for: key, atTime: fromTime) else { return }
+        probe.marks[mi].time = max(0, toTime)
+        NSApp.sendAction(#selector(AppDelegate.markDirtyFromUI), to: nil, from: self)
+        needsDisplay = true
+    }
+
+    /// Deletes the mark at probe-marks index `mi` (if not locked).
+    private func deleteMark(at mi: Int?) {
+        guard let mi, let probe = viewport?.probeConfig, !probe.isLocked,
+              probe.marks.indices.contains(mi) else { return }
+        probe.marks.remove(at: mi)
+        if let sel = probe.selectedMarkIndex {
+            probe.selectedMarkIndex = sel == mi ? nil : (sel > mi ? sel - 1 : sel)
+        }
+        marksChanged()
+    }
+
+    /// Reveals + selects the `kfIndex`-th mark on a row (clicking its diamond): shows
+    /// all marks, highlights this one, and names it in the viewport HUD.
+    private func displayMark(_ key: MarkRowKey, kfIndex: Int) {
+        guard let probe = viewport?.probeConfig, let mi = markIndex(for: key, kfIndex: kfIndex),
+              probe.marks.indices.contains(mi) else { return }
+        probe.marksVisible      = true
+        probe.selectedMarkIndex = mi
+        viewport?.overlayState.markName = probe.marks[mi].name
+        viewport?.needsDisplay = true
+    }
+
+    /// Pastes the copied mark onto a row at the playhead (re-homed to that row's owner).
+    private func pasteMark(into key: MarkRowKey) {
+        guard let probe = viewport?.probeConfig, !probe.isLocked, let src = markClipboard,
+              let owner = marksForRow(key).first?.mark.owner else { return }
+        let m = ProbeMark(name: src.name, position: src.position, color: src.color,
+                          time: timeline?.currentTime ?? 0, owner: owner,
+                          secondaryPosition: src.secondaryPosition)
+        probe.marks.append(m)
+        probe.selectedMarkIndex = probe.marks.count - 1
+        probe.marksVisible = true
+        marksChanged()
+        print("[DEBUG] TimelineEditorView: pasted mark '\(m.name)' at t=\(m.time)")
+    }
+
+    /// Marks the project dirty and refreshes the timeline after a mark edit.
+    private func marksChanged() {
+        NSApp.sendAction(#selector(AppDelegate.markDirtyFromUI), to: nil, from: self)
+        invalidateTrackCache()
+        rebuildEasingPopups()
+        needsDisplay = true
+    }
+
     /// The keyframe track backing camera lane `i`.  The ACTIVE camera's track lives on
     /// the live controller (where edits land before being captured into the slot), so
     /// read it there; every other camera reads its slot's track.
@@ -698,6 +806,7 @@ final class TimelineEditorView: NSView {
             case light(idx: Int)
             case fog
             case particles(idx: Int, name: String)
+            case mark(key: MarkRowKey, name: String)
         }
         var entries: [(sortName: String, order: Int, entry: RowEntry)] = []
         var order = 0
@@ -737,6 +846,23 @@ final class TimelineEditorView: NSView {
         var lightChildren: [RowEntry] = []
         for i in 0..<lightCount { lightChildren.append(.light(idx: i)) }
 
+        // Position-Marks rows: one per owning item that has marks (Phase B).  Grouped
+        // by owner key, ordered by category then owner name for a stable A→Z layout.
+        var markChildren: [RowEntry] = []
+        if let marks = viewport?.probeConfig.marks {
+            var seenKeys: [MarkRowKey] = []
+            for m in marks {
+                guard let owner = m.owner else { continue }   // skip legacy/probe-only marks
+                let key = MarkRowKey(owner)
+                if !seenKeys.contains(key) { seenKeys.append(key) }
+            }
+            seenKeys.sort {
+                if $0.category != $1.category { return $0.category.rawValue < $1.category.rawValue }
+                return markRowName($0).localizedStandardCompare(markRowName($1)) == .orderedAscending
+            }
+            markChildren = seenKeys.map { .mark(key: $0, name: markRowName($0)) }
+        }
+
         var seenGroups = Set<Int>()
         for (i, obj) in objects.enumerated() {
             if obj.isEnvelope {
@@ -770,6 +896,8 @@ final class TimelineEditorView: NSView {
                 result.append(TrackRow(name: "Fog", ref: .fog, indentLevel: level))
             case .particles(let idx, let name):
                 result.append(TrackRow(name: name, ref: .particles(idx), indentLevel: level))
+            case .mark(let key, let name):
+                result.append(TrackRow(name: name, ref: .mark(key), indentLevel: level))
             case .standalone(let idx, let obj):
                 result.append(TrackRow(name: sceneManager?.displayName(for: obj) ?? obj.name,
                                        ref: .object(idx), indentLevel: level))
@@ -825,6 +953,7 @@ final class TimelineEditorView: NSView {
         emitCategory(.cameras, cameraChildren)
         if !lightChildren.isEmpty  { emitCategory(.lights,  lightChildren) }
         if !effectChildren.isEmpty { emitCategory(.effects, effectChildren) }
+        if !markChildren.isEmpty   { emitCategory(.marks,   markChildren) }
 
         // ── Import bundles (Part B) ───────────────────────────────────────────
         // Partition the alphabetical top-level entries into bundles (display-only
@@ -886,6 +1015,8 @@ final class TimelineEditorView: NSView {
         switch ref {
         case .camera(let i):
             return cameraTrack(i)?.keyframes.map { $0.time } ?? []
+        case .mark(let key):
+            return marksForRow(key).map { $0.mark.time }
         case .cameraCuts:
             return []                                  // cut markers, not keyframes
         case .object(let i):
@@ -1662,6 +1793,8 @@ final class TimelineEditorView: NSView {
             select(trackIndex: hit.trackIndex, kfIndex: hit.kfIndex)
             let times = keyframeTimes(for: tracks[hit.trackIndex].ref)
             if hit.kfIndex < times.count { timeline?.seek(to: times[hit.kfIndex]) }
+            // Clicking a Position-Marks diamond also reveals + selects that mark (step 6).
+            if case .mark(let key) = tracks[hit.trackIndex].ref { displayMark(key, kfIndex: hit.kfIndex) }
             onLaneSelected?(tracks[hit.trackIndex].ref)
 
             // Edit mode disabled (under evaluation for removal) — double-click no
@@ -2087,6 +2220,7 @@ final class TimelineEditorView: NSView {
         case .importBundle:  return "Delete Import"
         case .category:      return nil
         case .cameraCuts:    return nil
+        case .mark:          return nil   // delete individual mark diamonds, not the row
         case .group:         return "Delete Model"
         case .object(let i):
             guard let obj = sceneManager?.objects[safe: i] else { return nil }
@@ -2476,6 +2610,9 @@ final class TimelineEditorView: NSView {
             else { return }
             track.retimeKeyframe(at: idx, to: toTime)
 
+        case .mark(let key):
+            retimeMark(key, fromTime: fromTime, toTime: toTime)
+
         case .cameraCuts:
             return                                     // retimed via cut-marker drag, not here
 
@@ -2545,6 +2682,8 @@ final class TimelineEditorView: NSView {
                 fogSettings?.keyframeTrack?.moveKeyframes(from: from, to: to)
             case .particles(let i):
                 particleManager?.emitters[safe: i]?.keyframeTrack?.moveKeyframes(from: from, to: to)
+            case .mark(let key):
+                for (f, t) in zip(from, to) { retimeMark(key, fromTime: f, toTime: t) }
             case .importBundle, .category:
                 break   // display-only header — no track
             }
@@ -2594,6 +2733,8 @@ final class TimelineEditorView: NSView {
             fogSettings?.keyframeTrack?.removeKeyframe(at: ki)
         case .particles(let i):
             particleManager?.emitters[safe: i]?.keyframeTrack?.removeKeyframe(at: ki)
+        case .mark(let key):
+            deleteMark(at: markIndex(for: key, kfIndex: ki))
         case .importBundle, .category:
             break   // display-only header — no track
         }
@@ -2642,6 +2783,8 @@ final class TimelineEditorView: NSView {
                   let idx   = track.keyframes.firstIndex(where: { abs($0.time - time) < eps })
             else { return }
             track.removeKeyframe(at: idx)
+        case .mark(let key):
+            deleteMark(at: markIndex(for: key, atTime: time))
         case .importBundle, .category:
             return   // display-only header — no track
         }
@@ -2658,6 +2801,7 @@ final class TimelineEditorView: NSView {
         case .group(let gid): onInsertGroupKeyframe?(gid)
         case .fog:            onInsertFogKeyframe?()
         case .particles(let i): onInsertParticleKeyframe?(i)
+        case .mark:           return   // marks are added via the panels' Add Mark buttons
         case .importBundle, .category: return   // display-only header — no track
         case .cameraCuts:     return   // cuts are added via the lane / Camera panel
         }
@@ -2831,7 +2975,7 @@ final class TimelineEditorView: NSView {
         case .group(let gid):   return (sceneManager?.groupName(for: gid), nil)
         case .light(let i):     return (nil, i)
         case .particles(let i): return (nil, i)
-        case .importBundle, .category: return (nil, nil)   // display-only header — not copyable
+        case .mark, .importBundle, .category: return (nil, nil)   // not cross-instance copyable
         }
     }
 
@@ -3004,8 +3148,8 @@ final class TimelineEditorView: NSView {
                 case .particles(let i):
                     guard let kf = particleManager?.emitters[safe: i]?.keyframeTrack?.keyframes[safe: d.kfIndex] else { continue }
                     entries.append((.particles(kf), t, ref))
-                case .importBundle, .category:
-                    continue   // display-only header — no track
+                case .mark, .importBundle, .category:
+                    continue   // marks copy single-only; headers have no track
                 }
             }
             guard !entries.isEmpty else { return }
@@ -3056,6 +3200,14 @@ final class TimelineEditorView: NSView {
             clipboardKeyframe = .particles(kf)
             coordinateClipboard?.position = kf.position
             coordinateClipboard?.size     = kf.size
+        case .mark(let key):
+            // Marks use a dedicated, local clipboard (not the keyframe pasteboard).
+            if let mi = markIndex(for: key, kfIndex: ki),
+               let m  = viewport?.probeConfig.marks[safe: mi] {
+                markClipboard = m
+                print("[DEBUG] TimelineEditorView: Cmd+C — copied mark '\(m.name)'")
+            }
+            return
         case .importBundle, .category:
             return   // display-only header — no track
         }
@@ -3071,6 +3223,13 @@ final class TimelineEditorView: NSView {
     /// original tracks at currentTime + each entry's time offset.
     /// Otherwise pastes the single clipboardKeyframe onto the selected lane.
     private func pasteKeyframe(tracks: TrackList) {
+        // ── Position-Marks rows use their own local clipboard ──────────────────
+        if let ti = selectedTrackIndex, ti < tracks.count,
+           case .mark(let key) = tracks[ti].ref {
+            pasteMark(into: key)
+            return
+        }
+
         // ── Most-recent-copy-wins across instances ─────────────────────────────
         // If the system pasteboard changed since our own last copy, another app
         // instance copied more recently — prefer it over our in-memory clipboard.
@@ -3273,7 +3432,11 @@ final class TimelineEditorView: NSView {
         // (so panel-added cuts redraw the lane) — Phase 1c-2.
         let camCount = viewport?.cameras.count ?? 1
         let cutCount = viewport?.cameraCuts.count ?? 0
-        let effectsSig   = (fogInUse ? 1 : 0) &+ (emittersInUse &* 2) &+ (camCount &* 1000) &+ (cutCount &* 7)
+        // Mark count (owned marks only) so Position-Marks rows appear/disappear as marks
+        // are added/deleted from the panels (Phase B).
+        let markCount = (viewport?.probeConfig.marks ?? []).reduce(into: 0) { $0 += ($1.owner != nil ? 1 : 0) }
+        let effectsSig   = (fogInUse ? 1 : 0) &+ (emittersInUse &* 2) &+ (camCount &* 1000)
+                         &+ (cutCount &* 7) &+ (markCount &* 100003)
         let needsRebuild = objCount != lastObjectCount
                         || bounds   != lastBounds
                         || expandedHeaders != lastExpandedHeaders
@@ -3359,8 +3522,8 @@ final class TimelineEditorView: NSView {
                 action  = #selector(easingPopupTrackChanged(_:))
                 tag     = 0
                 current = mode
-            case .importBundle, .category:
-                continue   // display-only header — no easing popup
+            case .mark, .importBundle, .category:
+                continue   // marks / headers — no easing popup
             }
 
             let popup = NSPopUpButton(frame: NSRect(x: popupX, y: popupY,
@@ -3398,8 +3561,8 @@ final class TimelineEditorView: NSView {
             switch row.ref {
             case .object(let i):
                 guard i < sm.objects.count, sm.objects[i].groupID == nil else { continue } // skip parts
-            case .importBundle, .cameraCuts:
-                continue
+            case .importBundle, .cameraCuts, .mark:
+                continue   // marks edit-lock follows the probe, not a per-row toggle
             case .camera, .fog, .light, .particles, .group, .category:
                 break
             }
@@ -3471,7 +3634,7 @@ final class TimelineEditorView: NSView {
         case .fog:              return fogSettings?.keyframeTrack?.easingMode
         case .particles(let i): return particleManager?.emitters[safe: i]?.keyframeTrack?.easingMode
         case .cameraCuts:       return nil
-        case .importBundle, .category: return nil   // display-only header — no track
+        case .mark, .importBundle, .category: return nil   // marks / headers — no easing
         }
     }
 
@@ -3485,7 +3648,7 @@ final class TimelineEditorView: NSView {
         case .fog:              fogSettings?.keyframeTrack?.easingMode = mode
         case .particles(let i): particleManager?.emitters[safe: i]?.keyframeTrack?.easingMode = mode
         case .cameraCuts:       break
-        case .importBundle, .category: break   // display-only header — no track
+        case .mark, .importBundle, .category: break   // marks / headers — no easing
         }
     }
 }

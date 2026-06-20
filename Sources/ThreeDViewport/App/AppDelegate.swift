@@ -3194,12 +3194,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         promptForMark(at: vp.camera.eyePosition, owner: owner, secondary: vp.camera.target)
     }
 
-    /// Lights panel ▸ Add Mark — captures light `i`'s position.
+    /// Lights panel ▸ Add Mark — captures light `i`'s position (plus its aim/target as a
+    /// second point for lights that aim: directional / spot / laser).
     private func addLightMark(_ i: Int) {
         guard let vp = viewportView, vp.lightManager.lights.indices.contains(i) else { return }
+        let light = vp.lightManager.lights[i]
         let owner = MarkOwner(category: .light, index: i,
-                              name: "Light \(i + 1) - \(vp.lightManager.lights[i].type.displayName)")
-        promptForMark(at: vp.lightManager.lights[i].position, owner: owner)
+                              name: "Light \(i + 1) - \(light.type.displayName)")
+        let aims  = light.type == .directional || light.type == .spot || light.type == .laser
+        promptForMark(at: light.position, owner: owner, secondary: aims ? light.target : nil)
     }
 
     /// Atmosphere panel ▸ Add Mark — captures the selected emitter's position.
@@ -3216,14 +3219,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     /// Mark owner for the currently selected object (the Model Inspector's Add Mark).
+    /// Keyed by raw object name + occurrence so it matches the mark-row grouping and
+    /// the delete-time reconcile (both use raw name, not the decorated display name).
     private func objectMarkOwner() -> MarkOwner? {
         guard let vp = viewportView else { return nil }
         let i = vp.sceneManager.selectedIndex
         guard vp.sceneManager.objects.indices.contains(i) else { return nil }
         let obj = vp.sceneManager.objects[i]
         let occ = vp.sceneManager.objects[..<i].filter { $0.name == obj.name }.count
-        return MarkOwner(category: .object, index: i,
-                         name: vp.sceneManager.displayName(for: obj), occurrence: occ)
+        return MarkOwner(category: .object, index: i, name: obj.name, occurrence: occ)
     }
 
     /// Seconds → MM:SS:FF (frames at the timeline's rate), matching the viewport playhead.
@@ -4405,7 +4409,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             viewport.timeline.seek(to: kfTime)
 
             switch ref {
-            case .cameraCuts:
+            case .cameraCuts, .mark:
                 return
             case .camera(let ci):
                 // Make the clicked camera active so the live controller edits its track.
@@ -4718,9 +4722,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             case .particles(let i):
                 // Make the panel show the clicked emitter (no viewport control mode).
                 viewport.particleManager.selectedIndex = i
-            case .importBundle, .category:
-                // Display-only header — selecting it just highlights the lane; no
-                // viewport control mode and no selection change.
+            case .mark, .importBundle, .category:
+                // Marks display via the diamond click (seek + show); headers just
+                // highlight the lane — no viewport control mode here.
                 break
             }
         }
@@ -5285,7 +5289,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 vp.deleteObjects(set)
             }
 
-        case .fog, .camera, .category:
+        case .fog, .camera, .category, .mark:
             return
         }
 
