@@ -3117,6 +3117,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         ) { [weak viewport] _ in
             guard let viewport,
                   let selected = viewport.sceneManager.selectedObject else { return }
+            // Already showing a selection (incl. an isolated grouped part in Object
+            // mode) — don't flip it.  Without this, a modal that re-keys the panel
+            // (e.g. Add Mark) would promote an isolated child part to its parent group.
+            if viewport.controlMode == .object || viewport.controlMode == .model { return }
             let mode: ControlMode = (selected.groupID != nil) ? .model : .object
             viewport.setControlMode(mode)
         }
@@ -3466,7 +3470,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             },
             captureStart: { [weak self] in self?.linearPathCaptureStart() },
             captureEnd:   { [weak self] in self?.linearPathCaptureEnd() },
-            create:       { [weak self] in self?.linearPathCreate() }
+            create:       { [weak self] in self?.linearPathCreate() },
+            isTargetLocked: { [weak viewport] ref in
+                guard let ref, let viewport else { return false }
+                return viewport.isLocked(ref)
+            }
         ))
 
         if let win = window {
@@ -3572,7 +3580,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             },
             captureStart: { [weak self] in self?.curvePathCaptureStart() },
             captureEnd:   { [weak self] in self?.curvePathCaptureEnd() },
-            create:       { [weak self] in self?.curvePathCreate() }
+            create:       { [weak self] in self?.curvePathCreate() },
+            isTargetLocked: { [weak viewport] ref in
+                guard let ref, let viewport else { return false }
+                return viewport.isLocked(ref)
+            }
         ))
 
         if let win = window {
@@ -3684,7 +3696,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.contentView = FirstClickHostingView(rootView: GaitAnimatorPanel(
             state: state,
             timeline: viewport.timeline,
-            create: { [weak self] in self?.gaitCreate() }
+            create: { [weak self] in self?.gaitCreate() },
+            isTargetLocked: { [weak viewport] ref in
+                guard let ref, let viewport else { return false }
+                return viewport.isLocked(ref)
+            }
         ))
 
         if let win = window {
@@ -3793,7 +3809,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             applyGeometry: { [weak self] in self?.orbitApplyGeometry() },
             deleteMarker:  { [weak self] in self?.orbitDeleteMarker($0) },
             clearMarkers:  { [weak self] in self?.orbitClearMarkers() },
-            selectTarget:  { [weak self] in self?.orbitReloadFromSchedule() }
+            selectTarget:  { [weak self] in self?.orbitReloadFromSchedule() },
+            isTargetLocked: { [weak viewport] ref in
+                guard let ref, let viewport else { return false }
+                return viewport.isLocked(ref)
+            }
         ))
 
         if let win = window {
@@ -4038,7 +4058,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             addMarker:    { [weak self] in self?.spinAddMarker() },
             deleteMarker: { [weak self] in self?.spinDeleteMarker($0) },
             clearMarkers: { [weak self] in self?.spinClearMarkers() },
-            selectTarget: { [weak self] in self?.spinReloadFromSchedule() }
+            selectTarget: { [weak self] in self?.spinReloadFromSchedule() },
+            isTargetLocked: { [weak viewport] ref in
+                guard let ref, let viewport else { return false }
+                return viewport.isLocked(ref)
+            }
         ))
 
         if let win = window {

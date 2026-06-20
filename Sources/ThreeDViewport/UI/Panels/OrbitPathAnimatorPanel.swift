@@ -48,6 +48,8 @@ struct OrbitPathAnimatorPanel: View {
     let deleteMarker:     (UUID) -> Void
     let clearMarkers:     () -> Void
     let selectTarget:     () -> Void
+    /// True when the chosen target's Timeline track is locked → Create is disabled.
+    let isTargetLocked:   (TrackRef?) -> Bool
 
     private func vecText(_ v: SIMD3<Float>?) -> String {
         guard let v = v else { return "—" }
@@ -97,9 +99,11 @@ struct OrbitPathAnimatorPanel: View {
                         Text("Create Keyframes").frame(maxWidth: .infinity)
                     }
                     .keyboardShortcut(.defaultAction)
+                    .disabled(isTargetLocked(state.capturedRef))
                     if !state.markers.isEmpty {
                         Button("Apply Radius / Axis", action: applyGeometry)
                             .frame(maxWidth: .infinity)
+                            .disabled(isTargetLocked(state.capturedRef))
                     }
                 }
                 .padding(4)
@@ -126,11 +130,13 @@ struct OrbitPathAnimatorPanel: View {
                                     Image(systemName: "xmark.circle")
                                 }
                                 .buttonStyle(.borderless)
+                                .disabled(isTargetLocked(state.capturedRef))
                             }
                         }
                         Divider()
                         Button("Clear All", action: clearMarkers)
                             .buttonStyle(.borderless)
+                            .disabled(isTargetLocked(state.capturedRef))
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

@@ -42,6 +42,8 @@ struct SpinAnimatorPanel: View {
     let deleteMarker: (UUID) -> Void
     let clearMarkers: () -> Void
     let selectTarget: () -> Void
+    /// True when the chosen target's Timeline track is locked → Create is disabled.
+    let isTargetLocked: (TrackRef?) -> Bool
 
     private func axisLabel(_ i: Int) -> String { ["X", "Y", "Z"][max(0, min(2, i))] }
 
@@ -104,6 +106,7 @@ struct SpinAnimatorPanel: View {
                         Text("Create Keyframes").frame(maxWidth: .infinity)
                     }
                     .keyboardShortcut(.defaultAction)
+                    .disabled(isTargetLocked(state.capturedRef))
                 }
                 .padding(4)
             }
@@ -131,11 +134,13 @@ struct SpinAnimatorPanel: View {
                                     Image(systemName: "xmark.circle")
                                 }
                                 .buttonStyle(.borderless)
+                                .disabled(isTargetLocked(state.capturedRef))
                             }
                         }
                         Divider()
                         Button("Clear All", action: clearMarkers)
                             .buttonStyle(.borderless)
+                            .disabled(isTargetLocked(state.capturedRef))
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

@@ -49,6 +49,8 @@ struct GaitAnimatorPanel: View {
     @ObservedObject var timeline: Timeline
 
     let create: () -> Void
+    /// True when the chosen target's Timeline track is locked → Create is disabled.
+    let isTargetLocked: (TrackRef?) -> Bool
 
     /// Seconds → MM:SS:FF (frames at timeline.frameRate), matching the viewport playhead.
     private func timecode(_ t: Double) -> String {
@@ -200,6 +202,7 @@ struct GaitAnimatorPanel: View {
                 Text("Create Keyframes").frame(maxWidth: .infinity)
             }
             .keyboardShortcut(.defaultAction)
+            .disabled(isTargetLocked(state.capturedRef))
 
             if !state.status.isEmpty {
                 Text(state.status).font(.caption).foregroundColor(.secondary)

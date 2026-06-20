@@ -43,6 +43,8 @@ struct LinearPathAnimatorPanel: View {
     let captureStart:      () -> Void
     let captureEnd:        () -> Void
     let create:            () -> Void
+    /// True when the chosen target's Timeline track is locked → Create is disabled.
+    let isTargetLocked:    (TrackRef?) -> Bool
 
     private func vecText(_ v: SIMD3<Float>?) -> String {
         guard let v = v else { return "—" }
@@ -109,6 +111,7 @@ struct LinearPathAnimatorPanel: View {
                 Text("Create Keyframes").frame(maxWidth: .infinity)
             }
             .keyboardShortcut(.defaultAction)
+            .disabled(isTargetLocked(state.capturedRef))
 
             if !state.status.isEmpty {
                 Text(state.status).font(.caption).foregroundColor(.secondary)
