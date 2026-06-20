@@ -2141,7 +2141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         for (i, light) in vp.lightManager.lights.enumerated() where light.isEnabled {
             let track = i < vp.lightManager.keyframeTracks.count ? vp.lightManager.keyframeTracks[i] : nil
             if track?.keyframes.isEmpty ?? true {
-                flagged.append("Light \(i + 1) — \(light.type.displayName)")
+                flagged.append(lightDisplayName(light, at: i))
             }
         }
 
@@ -3206,7 +3206,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let vp = viewportView, vp.lightManager.lights.indices.contains(i) else { return }
         let light = vp.lightManager.lights[i]
         let owner = MarkOwner(category: .light, id: light.entityID, index: i,
-                              name: "Light \(i + 1) - \(light.type.displayName)")
+                              name: lightDisplayName(light, at: i))
         let aims  = light.type == .directional || light.type == .spot || light.type == .laser
         promptForMark(at: light.position, owner: owner, secondary: aims ? light.target : nil)
     }
@@ -3920,6 +3920,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         print("[DEBUG] AppDelegate: rotation path animator panel opened")
     }
 
+    /// Display name for a light: its custom name (Timeline ▸ Rename) when set, else the
+    /// default "Light N - Type".  Single source so every light label honors a rename.
+    private func lightDisplayName(_ light: LightConfig, at i: Int) -> String {
+        if let c = light.customName, !c.isEmpty { return c }
+        return "Light \(i + 1) - \(light.type.displayName)"
+    }
+
     /// Human-readable label for a captured track.
     private func pathAnimatorTrackLabel(_ ref: TrackRef) -> String {
         switch ref {
@@ -3928,7 +3935,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             return "Camera \(i + 1)"
         case .light(let i):
             if let lights = viewportView?.lightManager.lights, i >= 0, i < lights.count {
-                return "Light \(i + 1) - \(lights[i].type.displayName)"
+                return lightDisplayName(lights[i], at: i)
             }
             return "Light \(i + 1)"
         case .object(let i):
@@ -4024,8 +4031,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
         if lights {
             for (i, light) in viewport.lightManager.lights.enumerated() {
-                result.append(PathTarget(label: "Light \(i + 1) - \(light.type.displayName)",
-                                         ref: .light(i)))
+                result.append(PathTarget(label: lightDisplayName(light, at: i), ref: .light(i)))
             }
         }
         var seenGroups = Set<Int>()
@@ -5298,7 +5304,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         case .light(let i):
             guard i >= 0, i < vp.lightManager.lights.count, vp.lightManager.lights.count > 1 else { return }
-            title   = "Delete Light \(i + 1) - \(vp.lightManager.lights[i].type.displayName)?"
+            title   = "Delete \(lightDisplayName(vp.lightManager.lights[i], at: i))?"
             perform = { vp.deleteLight(i) }
 
         case .particles(let i):
