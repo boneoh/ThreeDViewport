@@ -1581,7 +1581,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc private func replaceSelectedModel(_ sender: Any) {
         guard let window = window else { return }
 
-        let selectedName = viewportView?.sceneManager.selectedObject?.name ?? "selected model"
+        let selectedName: String = {
+            guard let sm = viewportView?.sceneManager, let obj = sm.selectedObject else { return "selected model" }
+            return obj.groupID != nil ? sm.partName(for: obj) : sm.displayName(for: obj)
+        }()
 
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
@@ -2152,7 +2155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         for (idx, obj) in sm.objects.enumerated() where obj.parentIndex == nil {
             if obj.isEnvelope {
                 let memberAnimated = sm.objects.contains { $0.parentIndex == idx && ownHasKeys($0) }
-                if !ownHasKeys(obj) && !memberAnimated { flagged.append(obj.name) }
+                if !ownHasKeys(obj) && !memberAnimated { flagged.append(sm.displayName(for: obj)) }
             } else if let gid = obj.groupID {
                 guard seenGroups.insert(gid).inserted else { continue }
                 let groupTrack = sm.groupKeyframeTracks[gid]
@@ -2160,7 +2163,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     || sm.objects(inGroup: gid).contains { ownHasKeys($0) }
                 if !groupAnimated { flagged.append(sm.groupName(for: gid)) }
             } else {
-                if !ownHasKeys(obj) { flagged.append(obj.name) }
+                if !ownHasKeys(obj) { flagged.append(sm.displayName(for: obj)) }
             }
         }
         return flagged
@@ -3217,23 +3220,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let i = vp.particleManager.selectedIndex
         guard vp.particleManager.emitters.indices.contains(i) else { return }
         let e = vp.particleManager.emitters[i]
-        // Name by type, disambiguating duplicate types by occurrence (1-based suffix).
-        let occ  = vp.particleManager.emitters[..<i].filter { $0.type == e.type }.count
-        let name = occ > 0 ? "\(e.type.displayName) \(occ + 1)" : e.type.displayName
+        // Custom name (Timeline ▸ Rename) if set, else name by type, disambiguating
+        // duplicate types by occurrence (1-based suffix).
+        let occ     = vp.particleManager.emitters[..<i].filter { $0.type == e.type }.count
+        let derived = occ > 0 ? "\(e.type.displayName) \(occ + 1)" : e.type.displayName
+        let name    = (e.customName?.isEmpty == false) ? e.customName! : derived
         let owner = MarkOwner(category: .effect, id: e.entityID, index: i, name: name, occurrence: occ)
         promptForMark(at: e.position, owner: owner)
     }
 
     /// Mark owner for the currently selected object (the Model Inspector's Add Mark).
-    /// Keyed by raw object name + occurrence so it matches the mark-row grouping and
-    /// the delete-time reconcile (both use raw name, not the decorated display name).
+    /// The mark is keyed by the object's stable id (P2), so `name` is just the default
+    /// mark name / display fallback — use the DISPLAY name so it honors Timeline ▸ Rename.
+    /// `occurrence` stays raw-name based (only the pre-id legacy match path reads it).
     private func objectMarkOwner() -> MarkOwner? {
         guard let vp = viewportView else { return nil }
         let i = vp.sceneManager.selectedIndex
         guard vp.sceneManager.objects.indices.contains(i) else { return nil }
         let obj = vp.sceneManager.objects[i]
         let occ = vp.sceneManager.objects[..<i].filter { $0.name == obj.name }.count
-        return MarkOwner(category: .object, id: obj.entityID, index: i, name: obj.name, occurrence: occ)
+        return MarkOwner(category: .object, id: obj.entityID, index: i,
+                         name: vp.sceneManager.displayName(for: obj), occurrence: occ)
     }
 
     /// Seconds → MM:SS:FF (frames at the timeline's rate), matching the viewport playhead.
@@ -3965,8 +3972,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             }
             return "Light \(i + 1)"
         case .object(let i):
-            if let objs = viewportView?.sceneManager.objects, i >= 0, i < objs.count {
-                return objs[i].name
+            if let sm = viewportView?.sceneManager, i >= 0, i < sm.objects.count {
+                let obj = sm.objects[i]
+                return obj.groupID != nil ? sm.partName(for: obj) : sm.displayName(for: obj)
             }
             return "Object \(i + 1)"
         case .group(let gid):

@@ -107,7 +107,7 @@ struct EffectsGridPanel: View {
 
     private func memberRow(_ obj: SceneObject, indented: Bool) -> some View {
         HStack(spacing: 0) {
-            Text(obj.name)
+            Text(state.displayName(for: obj))
                 .lineLimit(1)
                 .padding(.leading, indented ? indent : 0)
                 .frame(maxWidth: .infinity, alignment: .leading)

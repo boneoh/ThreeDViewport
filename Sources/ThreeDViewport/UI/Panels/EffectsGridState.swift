@@ -61,7 +61,7 @@ final class EffectsGridState: ObservableObject {
                                  name: sm.groupName(for: gid), members: members))
             } else {
                 built.append(Row(id: "o\(ObjectIdentifier(obj))", groupID: nil,
-                                 name: obj.name, members: [obj]))
+                                 name: displayName(for: obj), members: [obj]))
             }
         }
         // Sort rows alphabetically (natural order, so "item2" < "item10").
@@ -70,6 +70,13 @@ final class EffectsGridState: ObservableObject {
         selectedID = sm.selectedObject.map { ObjectIdentifier($0) }
         // Groups start collapsed; the user expands them manually (the collapsed
         // group row still highlights when one of its members is selected).
+    }
+
+    /// Custom-aware display name for a row's object: part name for a grouped part,
+    /// display name for a standalone object (both honor Timeline ▸ Rename).
+    func displayName(for obj: SceneObject) -> String {
+        guard let sm = sceneManager else { return obj.name }
+        return obj.groupID != nil ? sm.partName(for: obj) : sm.displayName(for: obj)
     }
 
     func toggleExpanded(_ gid: Int) {
