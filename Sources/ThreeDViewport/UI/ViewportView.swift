@@ -264,6 +264,8 @@ final class ViewportView: MTKView {
         sceneManager     = SceneManager()
         camera           = CameraController()
         director         = CameraController()
+        director.debugName = "Director POV"   // names it in the [LIMIT] diagnostics
+        director.clampsTargetToBounds = false // editor free-view roams past ±positionBound
         lightManager     = LightManager()
         backgroundConfig = BackgroundConfig()
         timeline         = Timeline()
@@ -911,6 +913,7 @@ final class ViewportView: MTKView {
         camera.target        = s.target
         camera.fovYRadians   = s.fovYRadians
         camera.keyframeTrack = s.keyframeTrack
+        camera.debugName     = s.name           // names the active camera in [LIMIT] diagnostics
         cameraLocked         = s.isLocked
     }
 
@@ -1273,14 +1276,17 @@ final class ViewportView: MTKView {
     /// Called the first time the user enters Scene mode and again on ⌘R.  The
     /// resulting pose persists for the session unless the user explicitly refits.
     func autoFitDirector() {
-        // Seed with the scene camera's eye so we always have at least one point.
-        let camEye = camera.eyePosition
-        var wMin = camEye
-        var wMax = camEye
+        // Frame the actual VISIBLE scene — not the camera.  (The old version seeded the
+        // box with the scene camera's eye and counted hidden objects, so a camera parked
+        // far out, or invisible geometry, dragged the fit center/radius way off.)
+        var wMin = SIMD3<Float>(repeating:  Float.greatestFiniteMagnitude)
+        var wMax = SIMD3<Float>(repeating: -Float.greatestFiniteMagnitude)
+        var hasContent = false
+        func add(_ w: SIMD3<Float>) { wMin = simd_min(wMin, w); wMax = simd_max(wMax, w); hasContent = true }
 
-        // ── Objects: world-space bounding boxes ────────────────────────────────
+        // ── Objects: world-space bounding boxes (visible geometry only) ────────
         for obj in sceneManager.objects {
-            if obj.isEnvelope { continue }   // null node — no geometry to frame
+            if obj.isEnvelope || !obj.isVisible { continue }   // null node / hidden — don't frame
             let groupT = obj.groupID.flatMap { sceneManager.groupTransforms[$0] }
                 ?? matrix_identity_float4x4
             let rendered = groupT * obj.transform
@@ -1296,22 +1302,20 @@ final class ViewportView: MTKView {
             ]
             for c in corners {
                 let w4 = rendered * SIMD4<Float>(c, 1)
-                let w  = SIMD3<Float>(w4.x, w4.y, w4.z)
-                wMin = simd_min(wMin, w)
-                wMax = simd_max(wMax, w)
+                add(SIMD3<Float>(w4.x, w4.y, w4.z))
             }
         }
 
-        // ── Positional lights: their world position ────────────────────────────
-        for light in lightManager.lights {
+        // ── Positional lights: their world position (enabled only) ─────────────
+        for light in lightManager.lights where light.isEnabled {
             switch light.type {
-            case .point, .spot, .laser:
-                wMin = simd_min(wMin, light.position)
-                wMax = simd_max(wMax, light.position)
-            case .ambient, .directional:
-                break   // no position to include
+            case .point, .spot, .laser: add(light.position)
+            case .ambient, .directional: break   // no position to include
             }
         }
+
+        // Nothing visible to frame → center on the scene camera's target, modest radius.
+        if !hasContent { wMin = camera.target; wMax = camera.target }
 
         // ── Derive sphere ──────────────────────────────────────────────────────
         let center     = (wMin + wMax) * 0.5

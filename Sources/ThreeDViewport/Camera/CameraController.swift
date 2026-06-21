@@ -4,6 +4,16 @@ import simd
 // Phase 2 will add keyframe animation support via CameraKeyframe.
 final class CameraController {
 
+    /// Human label for diagnostics (the [LIMIT] message): "Director POV" for the editor
+    /// free-view, or the active scene camera's name for the live render camera.
+    var debugName: String = "Camera"
+
+    /// Whether `target` is clamped to ±positionBound.  TRUE for scene cameras (a camera
+    /// target IS scene content, kept in the same box as objects).  FALSE for the Director
+    /// free-view — it's just the editor's navigation camera, so it must roam freely to
+    /// inspect a scene whose geometry extends past the bound (it's never saved/exported).
+    var clampsTargetToBounds: Bool = true
+
     // Spherical coordinates around `target`
     var yaw: Float   = 0.0
     var pitch: Float = 0.4    // ~23° above horizon
@@ -14,6 +24,7 @@ final class CameraController {
     // Position / Target sliders in the Camera Inspector.
     var target: SIMD3<Float> = SIMD3<Float>(0, 0, 0) {
         didSet {
+            guard clampsTargetToBounds else { return }   // Director POV roams freely
             target = simd_clamp(target,
                                 SIMD3<Float>(repeating: -SceneLimits.positionBound),
                                 SIMD3<Float>(repeating:  SceneLimits.positionBound))
@@ -165,10 +176,21 @@ final class CameraController {
     /// per-axis `didSet` safety clamp instead.)
     @discardableResult
     func translateTarget(by delta: SIMD3<Float>) -> Bool {
+        // Director free-view: no bound — roam anywhere to inspect a large scene.
+        if !clampsTargetToBounds { target += delta; return true }
         let n = target + delta
         let b = SceneLimits.positionBound + 1e-3   // tolerance for a ray-clamped wall touch
         guard abs(n.x) <= b && abs(n.y) <= b && abs(n.z) <= b else {
-            LimitReporter.report("Camera/Director position"); return false
+            let bound = SceneLimits.positionBound
+            let axes  = [(n.x, "X"), (n.y, "Y"), (n.z, "Z")]
+                .filter { abs($0.0) > b }
+                .map { String(format: "%@=%.1f", $0.1, $0.0) }
+                .joined(separator: ", ")
+            LimitReporter.report("\(debugName) move",
+                "target \(LimitReporter.v(target)) eye \(LimitReporter.v(eyePosition)) "
+              + "dist \(String(format: "%.1f", distance)) + delta \(LimitReporter.v(delta)) "
+              + "→ would be \(LimitReporter.v(n)); blocked at ±\(Int(bound)) on \(axes)")
+            return false
         }
         target = n
         return true

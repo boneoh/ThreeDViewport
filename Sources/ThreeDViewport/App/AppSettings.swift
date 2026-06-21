@@ -89,11 +89,12 @@ final class AppSettings: ObservableObject {
         self.loggingEnabled   = loggingEnabled
     }
 
-    /// Push the logging setting into the fast static mirrors.  Call on launch (after
-    /// load) and whenever the toggle changes.
+    /// Push the logging setting into the fast static mirror.  Call on launch (after
+    /// load) and whenever the toggle changes.  Drives ONLY AppLog (errors / warnings /
+    /// [LIMIT] diagnostics); the per-frame perf log is separate, controlled solely by the
+    /// `--perf-log` launch flag so enabling diagnostics no longer floods the console.
     func applyLoggingFlags() {
         AppLog.enabled = loggingEnabled
-        Renderer.perfLoggingEnabled = loggingEnabled
     }
 
     // MARK: - Persistence
