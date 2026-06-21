@@ -24,15 +24,22 @@ generated keyframes are ordinary tracks you can trim, retime, and ease like any 
 
 ## Workflow
 
-1. **Drop position marks** along the route (`N` / Add Position Mark), one per waypoint.
-2. **Open the panel** and pick the **model** to walk in *Model & Gait*.
+1. **Drop position marks** along the route — scrub the playhead to the time you want the
+   model AT each spot, pose/position it, and **Add Mark** (the mark records both the place
+   and the time).  Marks belong to the model you marked, so the picker shows just its own.
+2. **Open the panel** and pick the **model** to walk in *Model & Gait*.  The *Path Marks*
+   list then shows only that model's marks.
 3. **Choose the gait** — Walk / Run / Hop / Swim.
-4. **Build the path** in *Path Marks*: add the marks you want and **put them in the
-   order to be walked** (see below).
+4. **Build the path** in *Path Marks*: include the marks you want.
 5. **Set Speed**, leave **Auto stride** on (or set Stride manually).
-6. **Position the playhead** where the walk should begin — the *Start at playhead*
-   readout shows the start time as `MM:SS:FF`; the walk always begins there.
-7. **Create Keyframes** — bakes the root path and the limb cycle into the tracks.
+6. **Timing** — two modes:
+   - **Use mark times** (default ON): the model hits each mark **at its timestamp**.  Speed
+     is the walking pace between marks; any leftover time becomes a **pause** (it stands)
+     before moving on.  A segment too short for the pace **speeds up** to still arrive on
+     time (noted in the status line).  Marks are taken in time order; the playhead is ignored.
+   - **Off**: a constant-speed walk through the marks in picker order, starting at the
+     playhead (the *Start at playhead* `MM:SS:FF` readout).
+7. **Create Keyframes** — bakes the root path, pauses, and the limb cycle into the tracks.
 
 ## Path Marks — choosing and ordering
 

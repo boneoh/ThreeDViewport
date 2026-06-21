@@ -240,11 +240,12 @@ final class ProjectFile {
         // 6b. Position Marks (opt-in) — re-home onto imported items, place by M, shift by T.
         if options.importMarks { appendImportedMarks(data, by: M, timeOffset: T, srcToHostID: srcToHostID, vp: vp) }
 
-        // 6c. Skip hidden objects: drop any imported standalone object that was Invisible,
-        //     and any imported model/group whose parts are ALL invisible (a partially-
-        //     hidden model is kept intact).  Uses the robust id-keyed deleteObjects, which
-        //     also prunes any marks/schedules that referenced the removed objects.
-        removeHiddenImportedObjects(fromIndex: modelStart, vp: vp)
+        // 6c. Skip EXCLUDED objects: drop any imported standalone object that was Invisible
+        //     OR marked "Import" off (Effects grid), and any imported model/group whose
+        //     parts are ALL excluded (a partially-kept model stays intact).  Uses the
+        //     robust id-keyed deleteObjects, which also prunes any marks/schedules that
+        //     referenced the removed objects.
+        removeExcludedImportedObjects(fromIndex: modelStart, vp: vp)
 
         // 7. Extend the timeline to fit the imported clip.  In HOST time the clip
         //    spans [insertTime, insertTime + length], where length is the slice span
@@ -773,30 +774,33 @@ final class ProjectFile {
         print("[DEBUG] ProjectFile: imported \(added) position mark(s)")
     }
 
-    /// Drops imported objects the user had hidden (Model Inspector ▸ Invisible): standalone
-    /// invisible objects, and model/groups where EVERY part is invisible.  A partially-
-    /// hidden multi-part model is kept intact.  Uses the id-keyed deleteObjects, which also
-    /// prunes any marks/schedules that referenced the removed objects.
-    private static func removeHiddenImportedObjects(fromIndex modelStart: Int, vp: ViewportView) {
+    /// Drops imported objects the user excluded — either hidden (Model Inspector ▸
+    /// Invisible) OR marked "Import" off (Effects grid).  Standalone excluded objects go;
+    /// a model/group goes only when EVERY part is excluded (a partially-kept model stays
+    /// intact).  Uses the id-keyed deleteObjects, which also prunes any marks/schedules
+    /// that referenced the removed objects.
+    private static func removeExcludedImportedObjects(fromIndex modelStart: Int, vp: ViewportView) {
         let objs = vp.sceneManager.objects
         guard modelStart < objs.count else { return }
-        var anyVisible: [Int: Bool] = [:]   // gid → any part visible (imported parts only)
+        // An object is KEPT only if it's both visible AND flagged for import.
+        func kept(_ o: SceneObject) -> Bool { o.isVisible && o.includeInImport }
+        var anyKept: [Int: Bool] = [:]   // gid → any part kept (imported parts only)
         for i in modelStart..<objs.count {
-            if let gid = objs[i].groupID { anyVisible[gid] = (anyVisible[gid] ?? false) || objs[i].isVisible }
+            if let gid = objs[i].groupID { anyKept[gid] = (anyKept[gid] ?? false) || kept(objs[i]) }
         }
         var toDelete = Set<Int>()
         for i in modelStart..<objs.count {
             let o = objs[i]
             if o.isEnvelope { continue }
             if let gid = o.groupID {
-                if anyVisible[gid] == false { toDelete.insert(i) }   // whole-hidden model
-            } else if !o.isVisible {
-                toDelete.insert(i)                                   // standalone hidden object
+                if anyKept[gid] == false { toDelete.insert(i) }   // whole model excluded
+            } else if !kept(o) {
+                toDelete.insert(i)                                // standalone excluded
             }
         }
         if !toDelete.isEmpty {
             vp.deleteObjects(toDelete)
-            print("[DEBUG] ProjectFile: skipped \(toDelete.count) hidden imported object(s)")
+            print("[DEBUG] ProjectFile: skipped \(toDelete.count) excluded imported object(s)")
         }
     }
 
@@ -894,7 +898,8 @@ final class ProjectFile {
                 baseColorFactor:     [bcf.x, bcf.y, bcf.z, bcf.w],
                 opacity:             obj.material.opacity,
                 emissiveStrength:    obj.material.emissiveStrength,
-                importBundleID:      obj.importBundleID
+                importBundleID:      obj.importBundleID,
+                includeInImport:     obj.includeInImport
             )
         }
 
@@ -1772,6 +1777,7 @@ final class ProjectFile {
         obj.occludeWhenHidden = saved.occludeWhenHidden   // v17
         obj.isLocked = saved.isLocked                     // timeline edit lock
         obj.customName = saved.customName                 // v40 Timeline ▸ Rename
+        obj.includeInImport = saved.includeInImport       // Effects grid "Import" flag
         obj.objectClass = ObjectClass(rawValue: saved.objectClass) ?? .background
         obj.feedbackEnabled = saved.feedbackEnabled
         obj.importBundleID  = saved.importBundleID   // Part B (import overrides this later)

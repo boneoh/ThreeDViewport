@@ -1,18 +1,20 @@
 import SwiftUI
 
 // Effects grid: one row per object (envelopes hidden), grouped by groupID with
-// group-level tri-state toggles.  Columns: Visible / Holdout / Class.  These are
-// the per-object controls removed from the Model Inspector — edited here in one
-// place without disturbing the timeline.
+// group-level tri-state toggles.  Columns: Visible / Holdout / Trail / Import / Class.
+// "Import" (default on) excludes an object when this project is imported into another —
+// like a hidden object, but without having to hide it.  These are the per-object controls
+// removed from the Model Inspector — edited here in one place without disturbing the timeline.
 struct EffectsGridPanel: View {
 
     @ObservedObject var state: EffectsGridState
 
-    private let visW:   CGFloat = 52
-    private let holdW:  CGFloat = 60
-    private let feedW:  CGFloat = 64
-    private let classW: CGFloat = 124
-    private let indent: CGFloat = 18
+    private let visW:    CGFloat = 52
+    private let holdW:   CGFloat = 60
+    private let feedW:   CGFloat = 64
+    private let importW: CGFloat = 56
+    private let classW:  CGFloat = 124
+    private let indent:  CGFloat = 18
 
     var body: some View {
         VStack(spacing: 0) {
@@ -54,6 +56,7 @@ struct EffectsGridPanel: View {
             Text("Visible").frame(width: visW)
             Text("Holdout").frame(width: holdW)
             Text("Trail").frame(width: feedW)
+            Text("Import").frame(width: importW)
             Text("Class").frame(width: classW)
         }
         .font(.caption.weight(.semibold))
@@ -90,6 +93,8 @@ struct EffectsGridPanel: View {
                 .frame(width: holdW)
             TriBox(state: state.feedbackState(row)) { v in state.setFeedback(row.members, v) }
                 .frame(width: feedW)
+            TriBox(state: state.importState(row)) { v in state.setImport(row.members, v) }
+                .frame(width: importW)
             classMenu(current: state.classSelection(row)) { state.setClass(row.members, $0) }
                 .frame(width: classW)
         }
@@ -115,6 +120,8 @@ struct EffectsGridPanel: View {
                 .frame(width: holdW)
             TriBox(state: obj.feedbackEnabled ? .on : .off) { v in state.setFeedback([obj], v) }
                 .frame(width: feedW)
+            TriBox(state: obj.includeInImport ? .on : .off) { v in state.setImport([obj], v) }
+                .frame(width: importW)
             classMenu(current: obj.objectClass) { state.setClass([obj], $0) }
                 .frame(width: classW)
         }

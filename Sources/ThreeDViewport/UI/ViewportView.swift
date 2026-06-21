@@ -2246,7 +2246,8 @@ final class ViewportView: MTKView {
                       autoStride: Bool,
                       footLock: Bool,
                       startTime: Double,
-                      plantFeet: Bool) -> [String] {
+                      plantFeet: Bool,
+                      markTimes: [Double]? = nil) -> (missing: [String], spedUp: Int) {
 
         // Parts of this model, indexed by their (unique-within-group) name.
         var partIndexByName: [String: Int] = [:]
@@ -2335,8 +2336,9 @@ final class ViewportView: MTKView {
         let out = GaitGenerator.generate(
             gait: gait, params: params, marks: markPositions, speed: speed,
             strideLength: effectiveStride, startTime: startTime, groundOffset: groundOffset,
-            groupScale: groupScale, legRig: legRig, availableJoints: Set(partIndexByName.keys))
-        guard let firstRoot = out.rootKeys.first else { return out.missingJoints }
+            groupScale: groupScale, legRig: legRig, markTimes: markTimes,
+            availableJoints: Set(partIndexByName.keys))
+        guard let firstRoot = out.rootKeys.first else { return (out.missingJoints, out.spedUpSegments) }
 
         let lo = firstRoot.time - 1e-6
 
@@ -2364,7 +2366,7 @@ final class ViewportView: MTKView {
             onKeyframeStamped?(.object(i))
         }
 
-        return out.missingJoints
+        return (out.missingJoints, out.spedUpSegments)
     }
 
     /// Linear variant: replaces the selected track's keyframes in [start, end] with

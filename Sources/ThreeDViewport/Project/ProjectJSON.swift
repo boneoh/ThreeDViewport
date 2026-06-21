@@ -840,6 +840,8 @@ struct ObjectData: Codable {
     var emissiveStrength: Float  = 0
     // Part B: display-only import-bundle tag.  nil = not from a bundled import.
     var importBundleID:  Int?    = nil
+    // v41: Effects grid "Import" flag.  Default true → older files import everything.
+    var includeInImport: Bool    = true
 
     // Custom decoder so older files without the v15 fields decode cleanly.
     init(from decoder: Decoder) throws {
@@ -862,6 +864,7 @@ struct ObjectData: Codable {
         opacity              = (try? c.decode(Float.self,         forKey: .opacity))             ?? 1
         emissiveStrength     = (try? c.decode(Float.self,         forKey: .emissiveStrength))    ?? 0
         importBundleID       =  try? c.decode(Int.self,           forKey: .importBundleID)
+        includeInImport      = (try? c.decode(Bool.self,          forKey: .includeInImport))     ?? true
     }
 
     init(name: String, keyframes: [KeyframeData],
@@ -874,7 +877,8 @@ struct ObjectData: Codable {
          feedbackEnabled: Bool = true, normalMode: Int = 0,
          metallicFactor: Float = -1, roughnessFactor: Float = -1,
          baseColorFactor: [Float] = [], opacity: Float = 1,
-         emissiveStrength: Float = 0, importBundleID: Int? = nil) {
+         emissiveStrength: Float = 0, importBundleID: Int? = nil,
+         includeInImport: Bool = true) {
         self.name                = name
         self.id                  = id
         self.customName          = customName
@@ -893,6 +897,7 @@ struct ObjectData: Codable {
         self.opacity             = opacity
         self.emissiveStrength    = emissiveStrength
         self.importBundleID      = importBundleID
+        self.includeInImport     = includeInImport
     }
 }
 

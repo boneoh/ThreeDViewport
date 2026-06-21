@@ -17,6 +17,12 @@ final class GaitAnimatorState: ObservableObject {
     @Published var capturedRef: TrackRef? = nil
     @Published var gait:        GaitType = .walk
 
+    /// When on, the marks' timestamps drive timing: walk at the pace between marks and
+    /// dwell (stand) on any leftover time so the model hits each mark at its time; a
+    /// too-short segment speeds up to arrive on time.  Off = constant-speed walk through
+    /// the marks in picker order, starting at the playhead.
+    @Published var useMarkTimes: Bool = true
+
     @Published var speed:  String = "1.5"
     @Published var stride: String = "1.6"
     /// Derive stride from the model's legs + swing so the feet don't skate; disables the
@@ -51,6 +57,8 @@ struct GaitAnimatorPanel: View {
     let create: () -> Void
     /// True when the chosen target's Timeline track is locked → Create is disabled.
     let isTargetLocked: (TrackRef?) -> Bool
+    /// Fires when the Target changes so the marks picker can re-filter to that model.
+    let onTargetChanged: () -> Void
 
     /// Seconds → MM:SS:FF (frames at timeline.frameRate), matching the viewport playhead.
     private func timecode(_ t: Double) -> String {
@@ -98,6 +106,7 @@ struct GaitAnimatorPanel: View {
             GroupBox(label: Text("Model & Gait").font(.headline)) {
                 VStack(alignment: .leading, spacing: 8) {
                     TargetPicker(targets: state.targets, selection: $state.capturedRef)
+                        .onChange(of: state.capturedRef) { _, _ in onTargetChanged() }
                     Picker("Gait", selection: $state.gait) {
                         ForEach(GaitType.allCases) { g in Text(g.label).tag(g) }
                     }
@@ -162,6 +171,12 @@ struct GaitAnimatorPanel: View {
             // ── Parameters ────────────────────────────────────────────────────
             GroupBox(label: Text("Parameters").font(.headline)) {
                 VStack(alignment: .leading, spacing: 8) {
+                    Toggle("Use mark times (pause for slack)", isOn: $state.useMarkTimes)
+                    Text(state.useMarkTimes
+                         ? "Hits each mark at its timestamp; Speed is the walk pace, extra time is a pause."
+                         : "Constant-speed walk through the marks in order, starting at the playhead.")
+                        .font(.caption).foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                     HStack {
                         Text("Speed").frame(width: 110, alignment: .leading)
                         TextField("", text: $state.speed).textFieldStyle(.roundedBorder).frame(width: 80)
@@ -181,6 +196,7 @@ struct GaitAnimatorPanel: View {
                         Text(timecode(timeline.currentTime)).font(.system(.caption, design: .monospaced))
                             .foregroundColor(.secondary)
                     }
+                    .opacity(state.useMarkTimes ? 0.4 : 1)   // ignored in timed mode
                 }
                 .padding(4)
             }

@@ -3748,11 +3748,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             state.capturedRef = nil
         }
         if state.capturedRef == nil { state.capturedRef = state.targets.first?.ref }
-        // Drop marks that no longer exist; default to all when nothing valid remains.
-        let marks = viewport.probeConfig.marks
+        // Show only the marks that belong to the selected target model (their owner is a
+        // part of that group), so the picker is the robot's own path marks.  Fall back to
+        // all marks when the target has none yet (never empty-by-surprise).
+        let allMarks = viewport.probeConfig.marks
+        var marks = allMarks
+        if case .group(let gid)? = state.capturedRef {
+            let owned = allMarks.filter { m in
+                guard let oid = m.owner?.id,
+                      let obj = viewport.sceneManager.objects.first(where: { $0.entityID == oid })
+                else { return false }
+                return obj.groupID == gid
+            }
+            if !owned.isEmpty { marks = owned }
+        }
         state.markList = marks
         // Keep the user's path order, drop marks that are gone, and append any new ones
-        // (so a fresh project defaults to all marks in scene order).
+        // (so a fresh project defaults to all the target's marks in scene order).
         let valid = Set(marks.map { $0.id })
         state.pathMarks = state.pathMarks.filter { valid.contains($0) }
         state.pathMarks += marks.map { $0.id }.filter { !state.pathMarks.contains($0) }
@@ -3792,7 +3804,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             isTargetLocked: { [weak viewport] ref in
                 guard let ref, let viewport else { return false }
                 return viewport.isLocked(ref)
-            }
+            },
+            onTargetChanged: { [weak self] in self?.syncGaitPanelToProject() }
         ))
 
         if let win = window {
@@ -3814,11 +3827,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard case .group(let gid)? = state.capturedRef else {
             state.validationAlert = "Pick a model (group) to walk."; return
         }
-        // Path waypoints, in the user's chosen order.
-        var posByID: [UUID: SIMD3<Float>] = [:]
-        for m in viewport.probeConfig.marks { posByID[m.id] = m.position }
-        let positions = state.pathMarks.compactMap { posByID[$0] }
-        guard positions.count >= 2 else {
+        // The selected marks, in the user's picker order.
+        var markByID: [UUID: ProbeMark] = [:]
+        for m in viewport.probeConfig.marks { markByID[m.id] = m }
+        var selected = state.pathMarks.compactMap { markByID[$0] }
+        guard selected.count >= 2 else {
             state.validationAlert = "Select at least two path marks."; return
         }
         guard let speed = Float(state.speed), speed > 0 else {
@@ -3829,7 +3842,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if !state.autoStride, !(stride > 0) {
             state.validationAlert = "Stride must be a positive number."; return
         }
-        let start = viewport.timeline.currentTime   // always start at the live playhead
+
+        // Timed mode: the marks' timestamps drive timing (walk at pace, dwell on slack);
+        // sort by time so order = schedule.  Otherwise: picker order, start at playhead.
+        var markTimes: [Double]? = nil
+        var start = viewport.timeline.currentTime
+        if state.useMarkTimes {
+            selected.sort { $0.time < $1.time }
+            markTimes = selected.map { $0.time }
+            start     = selected.first?.time ?? start
+        }
+        let positions = selected.map { $0.position }
 
         // Tuning multipliers (default 1.0 when a field is blank/invalid).
         func mul(_ s: String) -> Float { Float(s).map { $0 > 0 ? $0 : 1 } ?? 1 }
@@ -3837,19 +3860,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             .scaled(hip: mul(state.swingMul), knee: mul(state.kneeMul),
                     arm: mul(state.armMul),  bob: mul(state.bobMul))
 
-        let missing = viewport.generateGait(
+        let result = viewport.generateGait(
             groupID: gid, gait: state.gait, params: params, markPositions: positions,
             speed: speed, strideLength: stride, autoStride: state.autoStride,
-            footLock: state.footLock, startTime: start, plantFeet: state.plantFeet)
+            footLock: state.footLock, startTime: start, plantFeet: state.plantFeet,
+            markTimes: markTimes)
+        let missing = result.missing
 
         timelineEditorWC?.editorView.needsDisplay = true
         markDirty()
-        if missing.isEmpty {
-            state.status = "Created \(state.gait.label) along \(positions.count) marks."
-        } else {
-            state.status = "Created \(state.gait.label); missing joints skipped: \(missing.joined(separator: ", "))."
+        var msg = "Created \(state.gait.label) along \(positions.count) marks."
+        if state.useMarkTimes, result.spedUp > 0 {
+            msg += " \(result.spedUp) segment(s) sped up to keep timing."
         }
-        print("[DEBUG] AppDelegate: gait created (missing: \(missing))")
+        if !missing.isEmpty { msg += " Missing joints skipped: \(missing.joined(separator: ", "))." }
+        state.status = msg
+        print("[DEBUG] AppDelegate: gait created (timed: \(state.useMarkTimes), spedUp: \(result.spedUp), missing: \(missing))")
     }
 
     // MARK: - Orbit Path Animator

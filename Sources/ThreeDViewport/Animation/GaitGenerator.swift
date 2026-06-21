@@ -12,6 +12,7 @@ struct GaitGenerator {
         var limbKeys: [String: [TransformKeyframe]]     // partName → per-part track
         var endTime:  Double
         var missingJoints: [String]
+        var spedUpSegments: Int = 0                     // timed mode: segments too short for the pace
     }
 
     /// Geometry for foot-IK (group-local units): leg-segment lengths and the rest hip
@@ -38,6 +39,7 @@ struct GaitGenerator {
                          groundOffset: Float,
                          groupScale: SIMD3<Float>,
                          legRig: LegRig? = nil,
+                         markTimes: [Double]? = nil,   // timed mode: hit mark[i] at markTimes[i]
                          availableJoints: Set<String>) -> Output {
 
         let spline = CatmullRom(points: marks)
@@ -45,11 +47,6 @@ struct GaitGenerator {
         guard total > 1e-4, speed > 1e-4, strideLength > 1e-4 else {
             return Output(rootKeys: [], limbKeys: [:], endTime: startTime, missingJoints: [])
         }
-
-        // Sample density: ~10 keys per stride, with a floor so short paths still cycle.
-        let cycles  = total / strideLength
-        let count   = max(2, Int((cycles * 10).rounded(.up)) + 1)
-        let endTime = startTime + Double(total / speed)
 
         var rootKeys: [TransformKeyframe] = []
         var limbKeys: [String: [TransformKeyframe]] = [:]
@@ -61,12 +58,78 @@ struct GaitGenerator {
 
         let identityQ = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
         let prone     = GaitCycle.bodyOrientation(gait)   // identity for non-swim
-        // Ease INTO the gait from standing at the first mark, and back to standing at
-        // the last, over a fixed TIME window at each end (capped to half the gait so a
-        // short path still reaches a real middle).  `rest` = 1 at the ends → 0 mid-gait.
-        let totalTime:     Float = total / speed
-        let transitionDur: Float = min(1.0, totalTime * 0.5)   // seconds, each end
         func smoothstep(_ x: Float) -> Float { let c = max(0, min(1, x)); return c * c * (3 - 2 * c) }
+
+        // ── Build the timed sample list ────────────────────────────────────────────
+        // Each sample: where on the path (`dist`), when (`time`), how "standing"
+        // (`rest` 1=stand…0=full gait), and local `segSpeed` (drives the turn-lean term).
+        // `rest`=1 at the ends and through any dwell → 0 while moving, so the legs cycle
+        // only when the body actually travels.
+        struct Sample { var dist: Float; var time: Double; var rest: Float; var segSpeed: Float }
+        var samples: [Sample] = []
+        var spedUp = 0
+        let densityPerStride: Float = 10
+
+        if let times = markTimes, times.count == marks.count, marks.count >= 2 {
+            // TIMED mode: arrive at mark[i] at times[i].  pace = walk speed; leftover time
+            // is a dwell (stand) before departing; if a segment is too short for the pace,
+            // speed that segment up so it still arrives on time.
+            let md = spline.markDistances
+            let n  = marks.count
+            var dwell    = [Float](repeating: 0, count: n)         // stand time before leaving mark i
+            var segSpeed = [Float](repeating: speed, count: n - 1)
+            for i in 0..<(n - 1) {
+                let segDist = max(0, md[i + 1] - md[i])
+                let gap     = Float(max(0, times[i + 1] - times[i]))
+                if gap < 1e-4 { segSpeed[i] = max(speed, segDist / 1e-3); continue }   // ~instant
+                let travelAtPace = segDist / speed
+                if travelAtPace <= gap { segSpeed[i] = speed;          dwell[i] = gap - travelAtPace }
+                else                   { segSpeed[i] = segDist / gap;  spedUp += 1 }   // too short → speed up
+            }
+            func push(_ d: Float, _ t: Double, _ r: Float, _ sp: Float) {
+                samples.append(Sample(dist: d, time: t, rest: r, segSpeed: sp))
+            }
+            // Stand at the first mark (through its leading dwell).
+            push(md[0], times[0], 1, speed)
+            if dwell[0] > 1e-3 { push(md[0], times[0] + Double(dwell[0]), 1, speed) }
+            for i in 0..<(n - 1) {
+                let departT = times[i] + Double(dwell[i])
+                let arriveT = times[i + 1]
+                let move    = arriveT - departT
+                let segDist = max(0, md[i + 1] - md[i])
+                let cnt     = max(2, Int((segDist / strideLength * densityPerStride).rounded(.up)) + 1)
+                let einOn   = dwell[i] > 1e-3 || i == 0                 // departing a stand
+                let eoutOn  = dwell[i + 1] > 1e-3 || i + 1 == n - 1     // arriving into a stand
+                let tw      = Float(min(0.6, move * 0.5))
+                for k in 1...max(1, cnt - 1) {                          // k=0 already placed
+                    let f = Float(k) / Float(cnt - 1)
+                    let d = md[i] + f * segDist
+                    let t = departT + move * Double(f)
+                    let elapsed = Float(t - departT), remaining = Float(arriveT - t)
+                    let ein  = (einOn  && tw > 1e-4 && elapsed   < tw) ? smoothstep((tw - elapsed)   / tw) : 0
+                    let eout = (eoutOn && tw > 1e-4 && remaining < tw) ? smoothstep((tw - remaining) / tw) : 0
+                    push(d, t, max(ein, eout), segSpeed[i])
+                }
+                if dwell[i + 1] > 1e-3 { push(md[i + 1], arriveT + Double(dwell[i + 1]), 1, speed) }
+            }
+            if let last = samples.last, last.rest < 1 { push(last.dist, last.time, 1, speed) }
+        } else {
+            // CONSTANT-SPEED mode (unchanged): uniform samples + global ease in/out.
+            let cycles = total / strideLength
+            let count  = max(2, Int((cycles * densityPerStride).rounded(.up)) + 1)
+            let totalTime:     Float = total / speed
+            let transitionDur: Float = min(1.0, totalTime * 0.5)
+            for k in 0..<count {
+                let f    = Float(k) / Float(count - 1)
+                let dist = f * total
+                let time = startTime + Double(dist / speed)
+                let elapsed = dist / speed, remaining = (total - dist) / speed
+                let easeIn = (transitionDur > 1e-4 && elapsed   < transitionDur) ? smoothstep((transitionDur - elapsed)   / transitionDur) : 0
+                let settle = (transitionDur > 1e-4 && remaining < transitionDur) ? smoothstep((transitionDur - remaining) / transitionDur) : 0
+                samples.append(Sample(dist: dist, time: time, rest: max(easeIn, settle), segSpeed: speed))
+            }
+        }
+        let endTime = samples.last?.time ?? startTime
 
         // Turning lean: bank the body into curves ∝ speed²·curvature (a runner leaning
         // into a corner).  Tunable; flip leanGain's sign if it banks the wrong way.
@@ -118,22 +181,14 @@ struct GaitGenerator {
             return (phi, psi - phi)
         }
 
-        for k in 0..<count {
-            let f    = Float(k) / Float(count - 1)
-            let dist = f * total
-            let time = startTime + Double(dist / speed)
+        for sample in samples {
+            let dist = sample.dist
+            let time = sample.time
+            let rest = sample.rest                         // 1 = standing rest, 0 = full gait
+            let segSpeed = sample.segSpeed                 // local speed for the turn-lean
             let pos  = spline.point(atDistance: dist)
             let tan  = spline.tangent(atDistance: dist)
             let phase = (dist / strideLength).truncatingRemainder(dividingBy: 1)
-
-            // Stand→walk at the start and walk→stand at the end.
-            let elapsed   = dist / speed                  // seconds since the first mark
-            let remaining = (total - dist) / speed        // seconds to the last mark
-            let easeIn = (transitionDur > 1e-4 && elapsed   < transitionDur)
-                         ? smoothstep((transitionDur - elapsed)   / transitionDur) : 0
-            let settle = (transitionDur > 1e-4 && remaining < transitionDur)
-                         ? smoothstep((transitionDur - remaining) / transitionDur) : 0
-            let rest = max(easeIn, settle)                // 1 = standing rest, 0 = full gait
 
             // Root: heading (yaw so +Z faces travel) composed with body orientation.
             // Swim swims prone with its center at the mark (yOffset 0) and stands at BOTH
@@ -149,7 +204,7 @@ struct GaitGenerator {
                 while dYaw >  .pi { dYaw -= 2 * .pi }
                 while dYaw < -.pi { dYaw += 2 * .pi }
                 let kappa = dYaw / (2 * leanEps)                  // signed curvature, rad/unit
-                let lean  = max(-maxLean, min(maxLean, leanGain * speed * speed * kappa)) * (1 - rest)
+                let lean  = max(-maxLean, min(maxLean, leanGain * segSpeed * segSpeed * kappa)) * (1 - rest)
                 leanQ = simd_quatf(angle: lean, axis: SIMD3<Float>(0, 0, 1))
             }
             let rotation = heading * leanQ * body
@@ -204,7 +259,7 @@ struct GaitGenerator {
         }
 
         return Output(rootKeys: rootKeys, limbKeys: limbKeys,
-                      endTime: endTime, missingJoints: missing)
+                      endTime: endTime, missingJoints: missing, spedUpSegments: spedUp)
     }
 }
 
@@ -215,6 +270,7 @@ private struct CatmullRom {
     private let pts: [SIMD3<Float>]
     private let arc: [(d: Float, t: Float)]   // cumulative distance → global param t
     let length: Float
+    let markDistances: [Float]                 // cumulative arc length at each input mark
 
     init(points: [SIMD3<Float>]) {
         // Need ≥2; pad ends for tangents.
@@ -240,6 +296,11 @@ private struct CatmullRom {
         }
         arc = table
         length = acc
+        // Cumulative arc length at each original mark: integer param t=i sits at table
+        // index i*stepsPerSeg (param t = step / stepsPerSeg).
+        var mds: [Float] = []
+        for i in 0...segs { mds.append(table[min(i * stepsPerSeg, table.count - 1)].0) }
+        markDistances = mds
     }
 
     /// Global param `t` (0…segments) at a given arc-length distance.

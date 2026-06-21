@@ -87,6 +87,7 @@ final class EffectsGridState: ObservableObject {
         let classes = Set(row.members.map { $0.objectClass })
         return classes.count == 1 ? classes.first : nil
     }
+    func importState(_ row: Row) -> TriState { triState(row.members.map { $0.includeInImport }) }
 
     private func triState(_ flags: [Bool]) -> TriState {
         if flags.allSatisfy({ $0 })  { return .on }
@@ -114,6 +115,12 @@ final class EffectsGridState: ObservableObject {
     // Class only drives the Export All cycle — no live redraw, just mark dirty.
     func setClass(_ members: [SceneObject], _ value: ObjectClass) {
         members.forEach { $0.objectClass = value }
+        onDirty?(); objectWillChange.send()
+    }
+
+    // "Import" only affects what an importing project drops — no live redraw, just dirty.
+    func setImport(_ members: [SceneObject], _ value: Bool) {
+        members.forEach { $0.includeInImport = value }
         onDirty?(); objectWillChange.send()
     }
 

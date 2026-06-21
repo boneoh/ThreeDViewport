@@ -129,6 +129,11 @@ final class SceneObject {
     // Production role for the "Export All" multi-pass cycle (Model Inspector).
     var objectClass: ObjectClass = .background
 
+    // Effects grid ▸ "Import" column.  When OFF, this object is dropped when its project
+    // is IMPORTED into another (like a hidden object), so you can keep it visible/editable
+    // here but exclude it from the master import without toggling visibility.  Default ON.
+    var includeInImport: Bool = true
+
     // Per-object feedback opt-in (Effects grid).  When feedback is active, objects
     // with this ON render into the feedback scene texture (they trail); objects with
     // it OFF are drawn after the feedback composite (crisp, no trail).  Defaults OFF
