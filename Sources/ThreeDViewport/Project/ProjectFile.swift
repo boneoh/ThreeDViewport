@@ -1083,7 +1083,8 @@ final class ProjectFile {
                 easingMode:    (env.keyframeTrack?.easingMode ?? .linear).rawValue,
                 memberIndices: members,
                 importBundleID: env.importBundleID,
-                memberGroups:  memberGroups
+                memberGroups:  memberGroups,
+                isLocked:      env.isLocked
             )
         }
 
@@ -1139,7 +1140,7 @@ final class ProjectFile {
         }
 
         return ProjectData(
-            version:             37,   // v37: Probe/Feedback/Color Grade panel locks
+            version:             41,   // v41: glued-model (envelope) header edit lock
             modelPath:           nil,           // v3+ uses modelPaths instead
             modelPaths:          modelPaths,
             timeline:            timelineData,
@@ -1857,6 +1858,7 @@ final class ProjectFile {
             node.baseTransform  = m
             node.localTransform = m
             node.importBundleID = env.importBundleID   // Part B: keep glued objects nested
+            node.isLocked       = env.isLocked         // v41: glued-model header edit lock
 
             if !env.keyframes.isEmpty {
                 let track = KeyframeTrack()

@@ -358,6 +358,10 @@ struct EnvelopeData: Codable {
     var importBundleID: Int?          = nil
     // Group members glued into this envelope (multi-part models kept intact).
     var memberGroups:  [GroupMemberData] = []
+    // v41 edit lock for the glued-model header.  Optional decode → older files
+    // (no key) load unlocked.  Without this the wrapper's lock was dropped on save,
+    // so a locked glued-model header reopened unlocked.
+    var isLocked:      Bool           = false
 
     init(from decoder: Decoder) throws {
         let c          = try decoder.container(keyedBy: CodingKeys.self)
@@ -368,11 +372,12 @@ struct EnvelopeData: Codable {
         memberIndices  = (try? c.decode([Int].self,         forKey: .memberIndices)) ?? []
         importBundleID =  try? c.decode(Int.self,           forKey: .importBundleID)
         memberGroups   = (try? c.decode([GroupMemberData].self, forKey: .memberGroups)) ?? []
+        isLocked       = (try? c.decode(Bool.self,          forKey: .isLocked))      ?? false
     }
 
     init(name: String, transform: [Float], keyframes: [KeyframeData],
          easingMode: Int, memberIndices: [Int], importBundleID: Int? = nil,
-         memberGroups: [GroupMemberData] = []) {
+         memberGroups: [GroupMemberData] = [], isLocked: Bool = false) {
         self.name          = name
         self.transform     = transform
         self.keyframes     = keyframes
@@ -380,6 +385,7 @@ struct EnvelopeData: Codable {
         self.memberIndices = memberIndices
         self.importBundleID = importBundleID
         self.memberGroups  = memberGroups
+        self.isLocked      = isLocked
     }
 }
 
