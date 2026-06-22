@@ -161,6 +161,22 @@ final class ViewportView: MTKView {
         }
     }
 
+    /// While editing a Position Mark in Probe mode, whether the Probe drives the
+    /// mark's secondary "target" point (camera aim / light aim) instead of its
+    /// primary position.  Toggled with T; reset to the primary point whenever a
+    /// different mark is selected (cycleMark / goToMark / displayMark).
+    var editingMarkTargetPoint = false
+
+    /// The Position Mark the Probe is currently editing: the selected mark, but
+    /// only while in Probe mode with marks visible.  nil = the Probe edits only
+    /// itself (HDR bake / import placement).
+    private var editingMarkIndex: Int? {
+        guard controlMode == .probe, probeConfig.marksVisible,
+              let i = probeConfig.selectedMarkIndex,
+              probeConfig.marks.indices.contains(i) else { return nil }
+        return i
+    }
+
     /// Maps the on/off flag + controlMode to the renderer's motion-vector target.
     private func updateMotionVectorTarget() {
         guard showMotionVectors else { renderer?.motionVectorTarget = .none; return }
@@ -1111,7 +1127,14 @@ final class ViewportView: MTKView {
         case .director:
             overlayState.selectedItemName = "POV"
         case .probe:
-            overlayState.selectedItemName = "Probe"
+            if let i = editingMarkIndex {
+                let m  = probeConfig.marks[i]
+                let pt = m.secondaryPosition != nil
+                    ? (editingMarkTargetPoint ? " — Target" : " — Eye") : ""
+                overlayState.selectedItemName = "Probe → Mark: \(m.name)\(pt)"
+            } else {
+                overlayState.selectedItemName = "Probe"
+            }
         }
         // Solo aids (Scene mode) — show a marker so it's clear the others are
         // hidden by solo, not actually removed from the scene.
@@ -1163,9 +1186,19 @@ final class ViewportView: MTKView {
     /// the scene camera in normal view and the Director POV in Scene mode.
     private func moveProbe(by delta: SIMD3<Float>) {
         if probeConfig.isLocked { beepLocked(); return }   // locked probe — no viewport move
+        let editingMark = editingMarkIndex
         let n = probeConfig.position + delta
-        guard withinPositionBound(n) else { LimitReporter.report("Probe position"); return }
+        // Marks (esp. camera/light eyes) routinely live outside the Probe's ±100
+        // range, so when editing a mark we bypass the bound — the same exemption
+        // as the Director POV.  The SceneLimits ranges themselves are untouched.
+        if editingMark == nil, !withinPositionBound(n) {
+            LimitReporter.report("Probe position"); return
+        }
         probeConfig.position = n
+        if let i = editingMark {
+            if editingMarkTargetPoint { probeConfig.marks[i].secondaryPosition = n }
+            else                      { probeConfig.marks[i].position = n }
+        }
         onProbeEdited?()
     }
 
@@ -2871,6 +2904,39 @@ final class ViewportView: MTKView {
         return true
     }
 
+    /// Inverse of `positionCameraOnFollowSphere`: given a Camera keyframe time on
+    /// the active camera's track, recover the Camera Inspector POV sliders (follow
+    /// target display name + distance / azimuth / elevation in the object's local
+    /// frame) so clicking a follow keyframe in the Timeline mirrors it into the
+    /// panel.  Returns nil for free (non-follow) keyframes.
+    ///
+    /// Primary path uses the keyframe's stored `followForwardLocal` (forward in the
+    /// object's LOCAL frame at stamp time) — `localDir = -followForwardLocal` — so
+    /// the result is independent of where the object currently sits (no race with
+    /// the click's seek/redraw).  Legacy keyframes lacking it fall back to the live
+    /// anchor basis + stored yaw/pitch.
+    func povSliderValues(forCameraKeyframeAt kfTime: Double)
+        -> (name: String, distance: Float, azimuthDeg: Float, elevationDeg: Float)? {
+        guard let track = camera.keyframeTrack,
+              let kf = track.keyframes.first(where: { abs($0.time - kfTime) < 0.001 }),
+              kf.isFollow else { return nil }
+        let obj  = sceneManager.followObject(id: kf.followObjectID, name: kf.followTargetName)
+        let name = obj.map { sceneManager.displayName(for: $0) } ?? kf.followTargetName ?? ""
+
+        let localDir: SIMD3<Float>
+        if let fwdLocal = kf.followForwardLocal {
+            localDir = -fwdLocal                          // outward (anchor → camera), local frame
+        } else if let anchor = obj.flatMap({ sceneManager.worldOrbitAnchor(for: $0) }) {
+            let worldDir = -cameraForward(yaw: kf.yaw, pitch: kf.pitch)
+            localDir = anchor.basis.transpose * worldDir
+        } else {
+            return nil
+        }
+        let el = asin(max(-1, min(1, localDir.y)))
+        let az = atan2(localDir.x, localDir.z)
+        return (name, kf.distance, az * 180 / .pi, el * 180 / .pi)
+    }
+
     /// Stamps a POV-flavoured follow camera keyframe at the current playhead.
     /// First positions the camera on the sphere around `targetName`, then
     /// captures via the existing follow-stamp path with `followUpLocal =
@@ -4275,11 +4341,30 @@ final class ViewportView: MTKView {
                     if sceneModeActive { snapDirectorToProbe() }
                     return
                 }
+                if controlMode == .probe {
+                    // Already in Probe mode — for a DUAL mark (camera eye+aim,
+                    // light pos+aim) T flips the Probe between the primary point
+                    // and the target point, so arrow / drag / wheel edits move
+                    // whichever one the gizmo now sits on.  (Single mark: no-op.)
+                    if let i = editingMarkIndex, probeConfig.marks[i].secondaryPosition != nil {
+                        editingMarkTargetPoint.toggle()
+                        probeConfig.position = editingMarkTargetPoint
+                            ? (probeConfig.marks[i].secondaryPosition ?? probeConfig.marks[i].position)
+                            : probeConfig.marks[i].position
+                        syncOverlayState()
+                        needsDisplay = true
+                    }
+                    return
+                }
                 // T — Probe mode: move the bake Probe with drag / arrow keys / wheel.
                 // Reveal the gizmo so it's visible while positioning.  The Probe isn't
                 // a timeline track, so no onControlModeChanged broadcast (like Director).
                 controlMode = .probe
                 probeConfig.isVisible = true
+                editingMarkTargetPoint = false
+                // If a mark is selected, sit the Probe on it so edits start from
+                // its location (Timeline-click selection doesn't recall the Probe).
+                if let i = editingMarkIndex { probeConfig.position = probeConfig.marks[i].position }
                 syncOverlayState()
                 return
 

@@ -1344,8 +1344,11 @@ final class Renderer: NSObject, MTKViewDelegate {
             let c        = SIMD4<Float>(mark.color, 1)
             let p        = mark.position
 
+            // The selected mark draws its X axis red (red + the mark's green reads
+            // clearly against the other all-green marks).
+            let xColor = selected ? SIMD4<Float>(1, 0.15, 0.15, 1) : c
             var xAxis = [p - SIMD3<Float>(len, 0, 0), p + SIMD3<Float>(len, 0, 0)]
-            drawWidgetLines(encoder: encoder, vertices: &xAxis, viewProjection: vp, color: c)
+            drawWidgetLines(encoder: encoder, vertices: &xAxis, viewProjection: vp, color: xColor)
             var yAxis = [p - SIMD3<Float>(0, len, 0), p + SIMD3<Float>(0, len, 0)]
             drawWidgetLines(encoder: encoder, vertices: &yAxis, viewProjection: vp, color: c)
             var zAxis = [p - SIMD3<Float>(0, 0, len), p + SIMD3<Float>(0, 0, len)]

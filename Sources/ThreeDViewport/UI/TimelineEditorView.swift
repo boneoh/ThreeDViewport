@@ -250,6 +250,11 @@ final class TimelineEditorView: NSView {
     /// viewport to the matching control mode / selection.
     var onLaneSelected: ((TrackRef) -> Void)?
 
+    /// Called when a diamond on a Camera lane is clicked, with the clicked
+    /// keyframe's time, so AppDelegate can mirror a follow keyframe's POV
+    /// (follow target + distance/azimuth/elevation) into the Camera Inspector.
+    var onCameraKeyframeSelected: ((Double) -> Void)?
+
     /// Called when the user picks Delete from a row's right-click menu.  AppDelegate
     /// confirms + performs the deletion and refreshes.
     var onDeleteRow: ((TrackRef) -> Void)?
@@ -725,6 +730,7 @@ final class TimelineEditorView: NSView {
               probe.marks.indices.contains(mi) else { return }
         probe.marksVisible      = true
         probe.selectedMarkIndex = mi
+        viewport?.editingMarkTargetPoint = false        // new mark → edit its primary point
         viewport?.overlayState.markName = probe.marks[mi].name
         viewport?.needsDisplay = true
     }
@@ -1824,6 +1830,10 @@ final class TimelineEditorView: NSView {
             if hit.kfIndex < times.count { timeline?.seek(to: times[hit.kfIndex]) }
             // Clicking a Position-Marks diamond also reveals + selects that mark (step 6).
             if case .mark(let key) = tracks[hit.trackIndex].ref { displayMark(key, kfIndex: hit.kfIndex) }
+            // Clicking a Camera diamond mirrors a follow keyframe's POV into the inspector.
+            if case .camera = tracks[hit.trackIndex].ref, hit.kfIndex < times.count {
+                onCameraKeyframeSelected?(times[hit.kfIndex])
+            }
             onLaneSelected?(tracks[hit.trackIndex].ref)
 
             // Edit mode disabled (under evaluation for removal) — double-click no
@@ -2641,6 +2651,23 @@ final class TimelineEditorView: NSView {
         selectedTrackIndex = trackIndex
         selectedKFIndex    = kfIndex
         needsDisplay       = true
+    }
+
+    /// Highlights the Timeline diamond for the global probe-mark index, so the mark
+    /// the viewport just selected (N / Shift+N) appears selected in the grid like a
+    /// clicked keyframe.  No-op for legacy/probe-only marks (no owner row) or when
+    /// that row isn't currently built (e.g. the Position Marks group is collapsed).
+    func selectMarkDiamond(forMarkIndex globalIndex: Int) {
+        guard let marks = viewport?.probeConfig.marks,
+              marks.indices.contains(globalIndex),
+              let owner = marks[globalIndex].owner else { return }
+        let key    = MarkRowKey(owner)
+        let tracks = buildTracks()
+        guard let ti = tracks.firstIndex(where: { $0.ref == .mark(key) }),
+              let ki = marksForRow(key).firstIndex(where: { $0.index == globalIndex })
+        else { return }
+        multiSelectedDiamonds.removeAll()
+        select(trackIndex: ti, kfIndex: ki)
     }
 
     private func scrubToX(_ x: CGFloat) {

@@ -102,6 +102,19 @@ final class CameraPanelState: ObservableObject {
         if abs(newFocalLength - focalLength) > 1e-3 { focalLength = newFocalLength }
     }
 
+    /// Mirrors a clicked follow keyframe's POV into the panel: follow-target
+    /// dropdown + Distance / Azimuth / Elevation sliders.  Set under `isUpdating`
+    /// so the slider sinks don't re-fire `onPOVLivePreview` (the camera is already
+    /// at this POV from the keyframe seek) or dirty the project.
+    func applyPOV(name: String, distance: Float, azimuthDeg: Float, elevationDeg: Float) {
+        isUpdating = true
+        defer { isUpdating = false }
+        if followTargetName != name        { followTargetName = name }
+        if povDistance      != distance     { povDistance     = distance }
+        if povAzimuth       != azimuthDeg   { povAzimuth      = azimuthDeg }
+        if povElevation     != elevationDeg { povElevation    = elevationDeg }
+    }
+
     private func setupSinks() {
         $position.dropFirst()
             .sink { [weak self] v in

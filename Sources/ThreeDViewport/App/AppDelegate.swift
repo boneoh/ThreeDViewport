@@ -3377,7 +3377,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         probe.selectedMarkIndex = idx
         let mark = probe.marks[idx]
         probe.position = mark.position                 // recall: probe jumps to the mark
+        viewport.editingMarkTargetPoint = false        // new mark → edit its primary point
         viewport.overlayState.markName = mark.name
+        timelineEditorWC?.editorView.selectMarkDiamond(forMarkIndex: idx)
         markDirty()
     }
 
@@ -3421,7 +3423,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         probe.selectedMarkIndex = index
         let mark = probe.marks[index]
         probe.position = mark.position
+        viewport.editingMarkTargetPoint = false        // new mark → edit its primary point
         viewport.overlayState.markName = mark.name
+        timelineEditorWC?.editorView.selectMarkDiamond(forMarkIndex: index)
         markDirty()
     }
 
@@ -4801,6 +4805,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 // highlight the lane — no viewport control mode here.
                 break
             }
+        }
+
+        // Clicking a Camera diamond mirrors a follow keyframe's POV (target +
+        // distance/azimuth/elevation) into the Camera Inspector so the user can
+        // make small adjustments and re-stamp.  Free keyframes leave the sticky
+        // POV values untouched (povSliderValues returns nil).
+        wc.editorView.onCameraKeyframeSelected = { [weak viewport] kfTime in
+            guard let viewport = viewport,
+                  let pov = viewport.povSliderValues(forCameraKeyframeAt: kfTime) else { return }
+            viewport.cameraPanelState.applyPOV(name: pov.name,
+                                               distance: pov.distance,
+                                               azimuthDeg: pov.azimuthDeg,
+                                               elevationDeg: pov.elevationDeg)
         }
 
         // Right-click ▸ Delete on a grid row.
