@@ -2227,6 +2227,15 @@ final class TimelineEditorView: NSView {
             break
         }
 
+        // Model-scale reset: the group/root lane (where a model's scale lives) or a
+        // standalone object lane.  Replaces the scale on every keyframe with one value.
+        if scaleResettableTrack(for: ref) != nil {
+            let item = NSMenuItem(title: "Set Keyframe Scale…",
+                                  action: #selector(setKeyframeScaleMenuAction(_:)), keyEquivalent: "")
+            item.target = self; item.representedObject = ref
+            menu.addItem(item)
+        }
+
         // Keyframe diamond under the cursor → coordinate-channel paste (light/fog/particles).
         if let hit = hitTestDiamond(at: pt, tracks: tracks), let clip = coordinateClipboard {
             let dref = tracks[hit.trackIndex].ref
@@ -2347,6 +2356,58 @@ final class TimelineEditorView: NSView {
         needsDisplay = true
         viewport?.syncOverlayState()       // refresh the HUD if this row is selected
         if case .camera = ref { viewport?.syncCameraListToPanel() }   // dropdown follows
+    }
+
+    /// The keyframe track a "Set Keyframe Scale…" command would rewrite: a model's
+    /// group/root lane (where the model's overall scale lives) or a standalone
+    /// (non-grouped) object's own lane.  nil otherwise — in particular for a glued/
+    /// grouped PART lane, whose rotation-only keyframes must stay at scale 1 so a
+    /// stray click can't distort the rig.
+    private func scaleResettableTrack(for ref: TrackRef) -> KeyframeTrack? {
+        switch ref {
+        case .group(let gid):
+            guard let t = sceneManager?.groupKeyframeTracks[gid], !t.keyframes.isEmpty else { return nil }
+            return t
+        case .object(let i):
+            guard let obj = sceneManager?.objects[safe: i], obj.groupID == nil,
+                  let t = obj.keyframeTrack, !t.keyframes.isEmpty else { return nil }
+            return t
+        default:
+            return nil
+        }
+    }
+
+    /// Replaces the scale on EVERY keyframe of a lane with one uniform value entered by
+    /// the user.  Position / rotation / opacity are untouched — for resetting a gait
+    /// model's overall size in one shot (incl. keyframes whose scale was overwritten).
+    @objc private func setKeyframeScaleMenuAction(_ sender: NSMenuItem) {
+        guard let ref = sender.representedObject as? TrackRef,
+              let track = scaleResettableTrack(for: ref) else { return }
+        let current = track.keyframes.first?.scale.x ?? 1
+
+        let alert = NSAlert()
+        alert.messageText     = "Set Keyframe Scale"
+        alert.informativeText = "Replaces the scale on every keyframe of this lane with one "
+                              + "uniform value. Position and rotation are left unchanged."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 120, height: 24))
+        field.stringValue     = String(format: "%.3f", current)
+        alert.accessoryView   = field
+        alert.addButton(withTitle: "Set")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        guard let v = Float(field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            NSSound.beep(); return
+        }
+        let clamped = min(max(v, SceneLimits.scaleRange.lowerBound), SceneLimits.scaleRange.upperBound)
+        for k in track.keyframes.indices {
+            track.keyframes[k].scale = SIMD3<Float>(clamped, clamped, clamped)
+        }
+        NSApp.sendAction(#selector(AppDelegate.markDirtyFromUI), to: nil, from: self)
+        invalidateTrackCache()
+        viewport?.needsDisplay = true      // re-evaluate the lane → model resizes
+        needsDisplay = true
     }
 
     /// Applies a custom display name to a row (empty string clears the override).
