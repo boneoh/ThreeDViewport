@@ -1425,6 +1425,76 @@ final class ViewportView: MTKView {
     }
 
     /// Scene-mode only: aim the Director at the bake Probe from the current viewing
+    // ── Gait pace rehearsal (probe preview) ──────────────────────────────────
+    // Flies the probe along the gait's timed root path on a wall-clock timer so the
+    // user can confirm mark timing/speed before baking.  Independent of the timeline
+    // playhead; changes no keyframes.
+    private var rehearseTimer:     Timer? = nil
+    private var rehearsePath:      [(t: Double, pos: SIMD3<Float>)] = []
+    private var rehearseStartWall: CFTimeInterval = 0
+    private var rehearseFirstT:    Double = 0
+    private var rehearseLastT:     Double = 0
+
+    /// Begins replaying `path` (gait root keys: time + world position) on the probe.
+    func startProbeRehearsal(path: [(t: Double, pos: SIMD3<Float>)]) {
+        stopProbeRehearsal()
+        guard path.count >= 2 else { return }
+        rehearsePath      = path
+        rehearseFirstT    = path.first!.t
+        rehearseLastT     = path.last!.t
+        rehearseStartWall = CACurrentMediaTime()
+        probeConfig.isVisible = true
+        probeConfig.position  = path.first!.pos
+        gaitState.isRehearsing = true
+        needsDisplay = true
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+            self?.tickProbeRehearsal()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        rehearseTimer = timer
+        print("[DEBUG] ViewportView: probe rehearsal started (\(path.count) samples, "
+            + String(format: "%.2f", rehearseLastT - rehearseFirstT) + "s)")
+    }
+
+    /// Stops the rehearsal (timer off, flag cleared).  Leaves the probe where it is.
+    func stopProbeRehearsal() {
+        rehearseTimer?.invalidate()
+        rehearseTimer = nil
+        rehearsePath  = []
+        if gaitState.isRehearsing { gaitState.isRehearsing = false }
+    }
+
+    private func tickProbeRehearsal() {
+        guard !rehearsePath.isEmpty else { stopProbeRehearsal(); return }
+        let t = rehearseFirstT + (CACurrentMediaTime() - rehearseStartWall)
+        if t >= rehearseLastT {
+            probeConfig.position = rehearsePath.last!.pos
+            needsDisplay = true
+            stopProbeRehearsal()
+            gaitState.status = "Rehearsal complete."
+            return
+        }
+        probeConfig.position = rehearsePositionAt(t)
+        needsDisplay = true
+    }
+
+    /// Linearly interpolates the probe position along the rehearsal path at time `t`.
+    /// Dwell samples (equal positions, advancing time) hold the probe still — the pause.
+    private func rehearsePositionAt(_ t: Double) -> SIMD3<Float> {
+        guard let first = rehearsePath.first, let last = rehearsePath.last else { return .zero }
+        if t <= first.t { return first.pos }
+        if t >= last.t  { return last.pos }
+        for i in 0..<(rehearsePath.count - 1) {
+            let a = rehearsePath[i], b = rehearsePath[i + 1]
+            if t >= a.t && t <= b.t {
+                let span = b.t - a.t
+                let f = span > 1e-9 ? Float((t - a.t) / span) : 0
+                return a.pos + (b.pos - a.pos) * f
+            }
+        }
+        return last.pos
+    }
+
     /// angle, pulled in close so you can see / fine-tune the Probe.  Reveals the
     /// gizmo if hidden.  One-shot — dolly (⌘− / scroll) from here to adjust.
     func snapDirectorToProbe() {

@@ -3791,7 +3791,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
 
         if let panel = gaitPanel {
-            panel.isVisible ? panel.orderOut(nil) : panel.makeKeyAndOrderFront(nil)
+            if panel.isVisible {
+                viewport.stopProbeRehearsal()   // don't leave the probe flying when hidden
+                panel.orderOut(nil)
+            } else {
+                panel.makeKeyAndOrderFront(nil)
+            }
             return
         }
 
@@ -3812,6 +3817,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             state: state,
             timeline: viewport.timeline,
             create: { [weak self] in self?.gaitCreate() },
+            rehearse: { [weak self] in self?.gaitRehearse() },
             isTargetLocked: { [weak viewport] ref in
                 guard let ref, let viewport else { return false }
                 return viewport.isLocked(ref)
@@ -3887,6 +3893,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if !missing.isEmpty { msg += " Missing joints skipped: \(missing.joined(separator: ", "))." }
         state.status = msg
         print("[DEBUG] AppDelegate: gait created (timed: \(state.useMarkTimes), spedUp: \(result.spedUp), missing: \(missing))")
+    }
+
+    /// Probe pace rehearsal: flies the probe along the selected marks at the gait's timed
+    /// pace (pauses on slack, speed-ups on tight segments) so the user can confirm timing
+    /// before baking.  Reuses GaitGenerator's root path — no target model or keyframes needed.
+    private func gaitRehearse() {
+        guard let viewport = viewportView else { return }
+        let state = viewport.gaitState
+
+        // Toggle off if already running.
+        if state.isRehearsing { viewport.stopProbeRehearsal(); return }
+
+        // Gather marks in time order (rehearsal is timed-mode only).
+        var markByID: [UUID: ProbeMark] = [:]
+        for m in viewport.probeConfig.marks { markByID[m.id] = m }
+        var selected = state.pathMarks.compactMap { markByID[$0] }
+        guard selected.count >= 2 else {
+            state.validationAlert = "Select at least two path marks to rehearse."; return
+        }
+        guard let speed = Float(state.speed), speed > 0 else {
+            state.validationAlert = "Speed must be a positive number."; return
+        }
+        selected.sort { $0.time < $1.time }
+        let positions = selected.map { $0.position }
+        let markTimes = selected.map { $0.time }
+
+        // Stride only affects sample density / bob phase here, not the root path timing.
+        let stride = (Float(state.stride).map { $0 > 0 ? $0 : 1.6 }) ?? 1.6
+        func mul(_ s: String) -> Float { Float(s).map { $0 > 0 ? $0 : 1 } ?? 1 }
+        let params = GaitParams.defaults(for: state.gait)
+            .scaled(hip: mul(state.swingMul), knee: mul(state.kneeMul),
+                    arm: mul(state.armMul),  bob: mul(state.bobMul))
+
+        let out = GaitGenerator.generate(
+            gait: state.gait, params: params, marks: positions, speed: speed,
+            strideLength: stride, startTime: markTimes.first ?? 0, groundOffset: 0,
+            groupScale: SIMD3<Float>(1, 1, 1), legRig: nil, markTimes: markTimes,
+            availableJoints: [])
+        let path: [(t: Double, pos: SIMD3<Float>)] = out.rootKeys.map { ($0.time, $0.translation) }
+        guard path.count >= 2 else {
+            state.validationAlert = "Couldn't build a path from these marks."; return
+        }
+        viewport.startProbeRehearsal(path: path)
+        state.status = "Rehearsing pace along \(positions.count) marks…"
     }
 
     // MARK: - Orbit Path Animator

@@ -47,6 +47,10 @@ final class GaitAnimatorState: ObservableObject {
 
     @Published var status: String = ""
     @Published var validationAlert: String? = nil
+
+    /// True while the probe is replaying the timed pace (the "Rehearse Pace" preview).
+    /// Set by ViewportView so the button can toggle to "Stop Rehearsal".
+    @Published var isRehearsing: Bool = false
 }
 
 struct GaitAnimatorPanel: View {
@@ -55,6 +59,8 @@ struct GaitAnimatorPanel: View {
     @ObservedObject var timeline: Timeline
 
     let create: () -> Void
+    /// Starts (or stops) the probe pace rehearsal — previews mark timing/speed.
+    let rehearse: () -> Void
     /// True when the chosen target's Timeline track is locked → Create is disabled.
     let isTargetLocked: (TrackRef?) -> Bool
     /// Fires when the Target changes so the marks picker can re-filter to that model.
@@ -175,6 +181,15 @@ struct GaitAnimatorPanel: View {
                     Text(state.useMarkTimes
                          ? "Hits each mark at its timestamp; Speed is the walk pace, extra time is a pause."
                          : "Constant-speed walk through the marks in order, starting at the playhead.")
+                        .font(.caption).foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    // Probe pace preview — confirm mark timing/speed before baking the gait.
+                    Button(action: rehearse) {
+                        Text(state.isRehearsing ? "Stop Rehearsal" : "Rehearse Pace")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .disabled(!state.useMarkTimes)
+                    Text("Flies the probe along the marks at the gait's pace (with pauses) — no keyframes changed.")
                         .font(.caption).foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     HStack {
