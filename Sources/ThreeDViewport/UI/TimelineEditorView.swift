@@ -730,7 +730,8 @@ final class TimelineEditorView: NSView {
               probe.marks.indices.contains(mi) else { return }
         probe.marksVisible      = true
         probe.selectedMarkIndex = mi
-        viewport?.editingMarkTargetPoint = false        // new mark → edit its primary point
+        probe.position = probe.marks[mi].position        // probe follows the click (inspector sliders track it)
+        viewport?.editingMarkTargetPoint = false        // edit its primary point
         viewport?.overlayState.markName = probe.marks[mi].name
         viewport?.needsDisplay = true
     }

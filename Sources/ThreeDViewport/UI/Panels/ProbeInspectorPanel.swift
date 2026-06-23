@@ -7,11 +7,23 @@ struct ProbeInspectorPanel: View {
 
     @ObservedObject var probe:     ProbeConfig
     @ObservedObject var clipboard: CoordinateClipboard
-    /// Prompts for a name + colour and saves the current probe position as a mark.
+    /// Adds a new mark (no selection) or updates the selected mark (commits the probe's
+    /// position and lets the name/colour be edited).  AppDelegate branches on selection.
     var onMarkPosition: () -> Void = {}
     /// Called when the gizmo's visibility toggle changes, so the project can be
     /// marked dirty and the state persisted.
     var onVisibilityChanged: () -> Void = {}
+
+    /// True when a valid mark is currently selected (drives the button's mode).
+    private var hasSelectedMark: Bool {
+        probe.selectedMarkIndex.map { probe.marks.indices.contains($0) } ?? false
+    }
+
+    /// Name of the selected mark, or "" when none is selected.
+    private var selectedMarkName: String {
+        guard let i = probe.selectedMarkIndex, probe.marks.indices.contains(i) else { return "" }
+        return probe.marks[i].name
+    }
 
     var body: some View {
         ScrollView {
@@ -60,11 +72,20 @@ struct ProbeInspectorPanel: View {
                     Spacer()
                     Text("\(probe.marks.count)").font(.caption).foregroundStyle(.secondary)
                 }
+                // Selected mark name (blank when none selected).
+                HStack {
+                    Text("Selected").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Text(selectedMarkName).font(.caption)
+                }
+                // Morphing button: adds a new mark, or updates the selected one in place
+                // (commits the probe position, keeps category/time, lets you edit name/colour).
                 Button(action: onMarkPosition) {
-                    Label("Mark Position", systemImage: "mappin.and.ellipse")
+                    Label(hasSelectedMark ? "Update Mark…" : "Mark Position",
+                          systemImage: hasSelectedMark ? "mappin.circle" : "mappin.and.ellipse")
                         .frame(maxWidth: .infinity)
                 }
-                .disabled(probe.isLocked)   // no new marks while locked
+                .disabled(probe.isLocked)   // no mark edits while locked
                 Toggle(isOn: $probe.marksVisible) {
                     Text("Show marks (viewport + export)")
                         .font(.caption)
@@ -73,8 +94,9 @@ struct ProbeInspectorPanel: View {
                 .toggleStyle(.switch)
                 .tint(.green)
                 .environment(\.controlActiveState, .active)
-                Text("K toggles marks · N / Shift+N cycles (moves the probe to the mark) "
-                    + "· Delete removes the selected mark.")
+                Text("K toggles marks · N / Shift+N cycles (probe + playhead jump to the mark) "
+                    + "· Delete removes the selected mark. “Update Mark…” saves the probe’s "
+                    + "position into the selected mark and edits its name/colour.")
                     .font(.caption2).foregroundStyle(.secondary)
 
                 Divider()

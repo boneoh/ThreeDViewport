@@ -3172,7 +3172,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         panel.contentView = FirstClickHostingView(rootView: ProbeInspectorPanel(
             probe: viewport.probeConfig, clipboard: viewport.coordinateClipboard,
-            onMarkPosition: { [weak self] in self?.promptForMark() },
+            onMarkPosition: { [weak self] in self?.markOrUpdate() },
             onVisibilityChanged: { [weak self] in self?.markDirty() }))
 
         if let win = window {
@@ -3261,24 +3261,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         return "\(owner.name) \(n)"
     }
 
-    /// Opens the Mark Position dialog and appends a mark.
+    /// Probe inspector button: with no mark selected, adds a new mark; with one selected,
+    /// updates it in place (commits the probe's position, keeps category/time/owner, lets
+    /// the name/colour be edited) — no duplicate, no lost category/name.
+    private func markOrUpdate() {
+        guard let viewport = viewportView else { return }
+        let probe = viewport.probeConfig
+        if let i = probe.selectedMarkIndex, probe.marks.indices.contains(i) {
+            promptForMark(editing: i)
+        } else {
+            promptForMark()
+        }
+    }
+
+    /// Opens the Mark Position dialog.  Appends a new mark, OR — when `editing` is a valid
+    /// mark index — updates that mark in place (position from the probe, keeping its time /
+    /// category / owner / secondary; only name + colour are editable).
     /// - `markPosition`: world point to save (nil = the probe's current position).
     /// - `owner` / `category`: the item this mark belongs to (drives name + colour + Timeline row).
     /// - `secondary`: optional second point (a camera mark's aim/target).
     private func promptForMark(at markPosition: SIMD3<Float>? = nil,
                                owner: MarkOwner? = nil,
-                               secondary: SIMD3<Float>? = nil) {
+                               secondary: SIMD3<Float>? = nil,
+                               editing: Int? = nil) {
         guard let viewport = viewportView else { return }
         let probe    = viewport.probeConfig
+        let editMark = editing.flatMap { probe.marks.indices.contains($0) ? probe.marks[$0] : nil }
         let pos      = markPosition ?? probe.position
-        let category = owner?.category
-        let time     = viewport.timeline.currentTime
+        // When editing, owner/category/time come from the existing mark, not the params.
+        let effOwner = editMark?.owner ?? owner
+        let category = effOwner?.category
+        let time     = editMark?.time ?? viewport.timeline.currentTime
 
         let alert = NSAlert()
-        alert.messageText     = "Mark Position"
-        alert.informativeText = "Name this mark and choose a colour. It's saved at "
-            + (markPosition == nil ? "the probe's current position." : "the item's current position.")
-        alert.addButton(withTitle: "Add")
+        alert.messageText     = editMark != nil ? "Update Mark" : "Mark Position"
+        alert.informativeText = editMark != nil
+            ? "Updates this mark to the probe's current position. Edit its name or colour below."
+            : "Name this mark and choose a colour. It's saved at "
+              + (markPosition == nil ? "the probe's current position." : "the item's current position.")
+        alert.addButton(withTitle: editMark != nil ? "Save" : "Add")
         alert.addButton(withTitle: "Cancel")
 
         // Accessory: read-only Time + Category rows, then editable Name + Colour.
@@ -3292,13 +3313,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let catVal  = NSTextField(labelWithString: category?.displayName ?? "—")
         catVal.frame = NSRect(x: 68, y: 54, width: 180, height: 20)
         let nameField = NSTextField(frame: NSRect(x: 68, y: 28, width: 184, height: 24))
-        nameField.stringValue = defaultMarkName(for: owner, marks: probe.marks)
+        nameField.stringValue = editMark?.name ?? defaultMarkName(for: owner, marks: probe.marks)
         let well = NSColorWell(frame: NSRect(x: 68, y: 0, width: 48, height: 24))
-        // Default colour by category; the probe path keeps the last-used colour.
-        well.color = category.map { NSColor(srgbRed: CGFloat($0.defaultColor.x),
-                                            green:   CGFloat($0.defaultColor.y),
-                                            blue:    CGFloat($0.defaultColor.z), alpha: 1) }
-            ?? lastMarkColor
+        // Editing → the mark's own colour; new mark → category default, else last-used.
+        if let m = editMark {
+            well.color = NSColor(srgbRed: CGFloat(m.color.x), green: CGFloat(m.color.y),
+                                 blue: CGFloat(m.color.z), alpha: 1)
+        } else {
+            well.color = category.map { NSColor(srgbRed: CGFloat($0.defaultColor.x),
+                                                green:   CGFloat($0.defaultColor.y),
+                                                blue:    CGFloat($0.defaultColor.z), alpha: 1) }
+                ?? lastMarkColor
+        }
         accessory.addSubview(label("Time:",     78)); accessory.addSubview(timeVal)
         accessory.addSubview(label("Category:", 54)); accessory.addSubview(catVal)
         accessory.addSubview(label("Name:",     30)); accessory.addSubview(nameField)
@@ -3315,15 +3341,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let color = SIMD3<Float>(Float(rgb.redComponent), Float(rgb.greenComponent), Float(rgb.blueComponent))
         lastMarkColor = well.color
         let trimmed = nameField.stringValue.trimmingCharacters(in: .whitespaces)
-        let name    = trimmed.isEmpty ? defaultMarkName(for: owner, marks: probe.marks) : trimmed
+        let name    = trimmed.isEmpty ? (editMark?.name ?? defaultMarkName(for: owner, marks: probe.marks)) : trimmed
 
-        probe.marks.append(ProbeMark(name: name, position: pos, color: color,
-                                     time: time, owner: owner, secondaryPosition: secondary))
-        probe.selectedMarkIndex = probe.marks.count - 1
-        probe.marksVisible = true   // reveal so the new mark is visible immediately
+        if let idx = editing, probe.marks.indices.contains(idx) {
+            // Update in place — preserve time / owner / secondary.
+            probe.marks[idx].name     = name
+            probe.marks[idx].color    = color
+            probe.marks[idx].position = pos
+            probe.selectedMarkIndex   = idx
+            print("[DEBUG] AppDelegate: updated mark '\(name)' → \(pos)")
+        } else {
+            probe.marks.append(ProbeMark(name: name, position: pos, color: color,
+                                         time: time, owner: owner, secondaryPosition: secondary))
+            probe.selectedMarkIndex = probe.marks.count - 1
+            print("[DEBUG] AppDelegate: added mark '\(name)' at \(pos) t=\(time) owner=\(String(describing: owner))")
+        }
+        probe.marksVisible = true   // reveal so the mark is visible immediately
         markDirty()
         syncGaitPanelToProject()    // keep the Gait panel's mark list current
-        print("[DEBUG] AppDelegate: added mark '\(name)' at \(pos) t=\(time) owner=\(String(describing: owner))")
     }
 
     /// Toggles visibility of all marks (K key / menu).
@@ -3370,16 +3405,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let viewport = viewportView else { return }
         let probe = viewport.probeConfig
         guard !probe.marks.isEmpty else { return }
-        probe.marksVisible = true
         let n   = probe.marks.count
         let cur = probe.selectedMarkIndex ?? (step > 0 ? -1 : 0)
         let idx = ((cur + step) % n + n) % n
-        probe.selectedMarkIndex = idx
-        let mark = probe.marks[idx]
-        probe.position = mark.position                 // recall: probe jumps to the mark
-        viewport.editingMarkTargetPoint = false        // new mark → edit its primary point
+        selectMark(index: idx)
+    }
+
+    /// Selects mark `index` and syncs everything to it: reveals + highlights it, moves the
+    /// probe to it (so the inspector sliders + name label follow), scrubs the playhead to
+    /// the mark's time, and selects its Timeline diamond.  Shared by N/Shift+N and the menu.
+    func selectMark(index: Int) {
+        guard let viewport = viewportView else { return }
+        let probe = viewport.probeConfig
+        guard probe.marks.indices.contains(index) else { return }
+        probe.marksVisible      = true
+        probe.selectedMarkIndex = index
+        let mark = probe.marks[index]
+        probe.position = mark.position                 // probe jumps to the mark (inspector follows)
+        viewport.editingMarkTargetPoint = false        // edit its primary point
         viewport.overlayState.markName = mark.name
-        timelineEditorWC?.editorView.selectMarkDiamond(forMarkIndex: idx)
+        viewport.timeline.seek(to: mark.time)          // scrub the playhead to the mark
+        timelineEditorWC?.editorView.selectMarkDiamond(forMarkIndex: index)
         markDirty()
     }
 
@@ -3416,17 +3462,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     /// Selects mark `index` and recalls the probe to it (Marks ▸ Go To Mark).
     private func goToMark(index: Int) {
-        guard let viewport = viewportView else { return }
-        let probe = viewport.probeConfig
-        guard probe.marks.indices.contains(index) else { return }
-        probe.marksVisible      = true
-        probe.selectedMarkIndex = index
-        let mark = probe.marks[index]
-        probe.position = mark.position
-        viewport.editingMarkTargetPoint = false        // new mark → edit its primary point
-        viewport.overlayState.markName = mark.name
-        timelineEditorWC?.editorView.selectMarkDiamond(forMarkIndex: index)
-        markDirty()
+        selectMark(index: index)
     }
 
     /// Deletes mark `index` (Marks ▸ Delete Mark).
