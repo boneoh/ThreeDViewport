@@ -133,19 +133,21 @@ final class ModelInspectorState: ObservableObject {
 
         // Prefer a group root (parentIndex == nil) as the position anchor so the
         // field shows the model's overall position, not an arbitrary child part.
+        // For a lone child part, the anchor is that part (shown in its LOCAL frame).
         anchor   = newTargets.first(where: { $0.parentIndex == nil }) ?? first
-        position = anchor.map { worldPos(of: $0) } ?? .zero
+        position = anchor.map { displayPos(of: $0) } ?? .zero
         // Fresh selection: canonical Euler (no continuity hint to bias toward).
-        rotation = anchor.map { TransformMath.eulerFromMatrix(worldMatrix(of: $0)) } ?? .zero
-        scale    = anchor.map { worldScl(of: $0) } ?? SIMD3<Float>(1, 1, 1)
+        rotation = anchor.map { TransformMath.eulerFromMatrix(displayMatrix(of: $0)) } ?? .zero
+        scale    = anchor.map { displayScl(of: $0) } ?? SIMD3<Float>(1, 1, 1)
 
         // Editing is allowed for a single non-grouped root (writes obj.transform),
-        // and for any uniform-group selection (translates / rotates the roots).
+        // any uniform-group selection (translates / rotates the roots), and a single
+        // child part (poses it in its local frame).
         let allSameGroup        = first.groupID != nil
                                && newTargets.allSatisfy { $0.groupID == first.groupID }
         let singleNonGroupRoot  = newTargets.count == 1
                                && first.parentIndex == nil && first.groupID == nil
-        canEditPosition = singleNonGroupRoot || allSameGroup
+        canEditPosition = singleNonGroupRoot || allSameGroup || isSinglePart
         canEditRotation = canEditPosition
         canEditScale    = canEditPosition
         // The name is editable only for a standalone object (renaming a model's
@@ -153,6 +155,33 @@ final class ModelInspectorState: ObservableObject {
         canEditName     = singleNonGroupRoot
 
         canAddToFavorites = favoritesEligible?(newTargets) ?? false
+    }
+
+    /// True when exactly one hierarchical CHILD part is selected (`parentIndex != nil`).
+    /// Such a part is posed in its LOCAL frame (relative to its parent) and keyframes its
+    /// OWN track — not the group.  A whole-model selection (the root + its parts) and a
+    /// standalone object both report false.
+    var isSinglePart: Bool {
+        targets.count == 1 && (targets.first?.parentIndex != nil)
+    }
+
+    /// Position shown in the fields: a child part's LOCAL translation, else world.
+    private func displayPos(of obj: SceneObject) -> SIMD3<Float> {
+        if isSinglePart {
+            let t = obj.localTransform.columns.3
+            return SIMD3<Float>(t.x, t.y, t.z)
+        }
+        return worldPos(of: obj)
+    }
+
+    /// Rotation matrix shown in the fields: a child part's LOCAL transform, else world.
+    private func displayMatrix(of obj: SceneObject) -> matrix_float4x4 {
+        isSinglePart ? obj.localTransform : worldMatrix(of: obj)
+    }
+
+    /// Scale shown in the fields: a child part's LOCAL scale, else world-effective.
+    private func displayScl(of obj: SceneObject) -> SIMD3<Float> {
+        isSinglePart ? TransformMath.scale(of: obj.localTransform) : worldScl(of: obj)
     }
 
     /// World position of `obj` as drawn (group transform × transform), via the
@@ -189,17 +218,17 @@ final class ModelInspectorState: ObservableObject {
         guard !(isPlaying?() ?? false) else { return }
         guard !(isExporting?() ?? false) else { return }   // avoid racing the export thread
         guard hasSelection, let obj = anchor else { return }
-        let p = worldPos(of: obj)
+        let p = displayPos(of: obj)
         if p != position {
             isUpdating = true; position = p; isUpdating = false
         }
         // Continuity read-back: pick the Euler representation nearest the current
         // displayed angles so X = ±90° doesn't snap Y/Z to an equivalent triple.
-        let r = TransformMath.eulerFromMatrix(worldMatrix(of: obj), near: rotation)
+        let r = TransformMath.eulerFromMatrix(displayMatrix(of: obj), near: rotation)
         if r != rotation {
             isUpdating = true; rotation = r; isUpdating = false
         }
-        let s = worldScl(of: obj)
+        let s = displayScl(of: obj)
         if s != scale {
             isUpdating = true; scale = s; isUpdating = false
         }
@@ -265,28 +294,34 @@ final class ModelInspectorState: ObservableObject {
                 onRedraw?(); onDirty?()
             }.store(in: &cancellables)
 
-        // Position — non-grouped objects edit obj.transform directly; grouped
-        // selections delegate to AppDelegate (translates the group's root parts so
-        // the change persists in obj.transform like single-object edits do).
+        // Position — a whole-model (group root) selection delegates to AppDelegate; a
+        // single child part edits its LOCAL translation (relative to its parent); a
+        // standalone object edits obj.transform directly.
         $position.dropFirst()
             .sink { [weak self] v in
                 guard let self, !isUpdating, canEditPosition, let obj = anchor else { return }
-                if obj.groupID != nil {
+                if obj.parentIndex == nil, obj.groupID != nil {
                     setGroupWorldPosition?(obj, v)
+                } else if obj.parentIndex != nil {
+                    obj.localTransform.columns.3 = SIMD4<Float>(v.x, v.y, v.z, 1)
                 } else {
                     obj.transform.columns.3 = SIMD4<Float>(v.x, v.y, v.z, 1)
                 }
                 onRedraw?(); onDirty?()
             }.store(in: &cancellables)
 
-        // Rotation — non-grouped objects rebuild obj.transform's upper-3×3 from
-        // the new Euler (preserving scale + translation); grouped selections
-        // delegate to AppDelegate so the whole model rotates around the anchor.
+        // Rotation — whole model delegates to AppDelegate (rotates around the anchor);
+        // a single child part rebuilds its LOCAL rotation (preserving local scale +
+        // translation) so it poses like an FK joint; a standalone object edits world.
         $rotation.dropFirst()
             .sink { [weak self] euler in
                 guard let self, !isUpdating, canEditRotation, let obj = anchor else { return }
-                if obj.groupID != nil {
+                if obj.parentIndex == nil, obj.groupID != nil {
                     setGroupWorldRotation?(obj, euler)
+                } else if obj.parentIndex != nil {
+                    let s = TransformMath.scale(of: obj.localTransform)
+                    let R = TransformMath.matrixFromEuler(euler)
+                    obj.localTransform = TransformMath.applying(rotation: R, scale: s, to: obj.localTransform)
                 } else {
                     let s = TransformMath.scale(of: obj.transform)
                     let R = TransformMath.matrixFromEuler(euler)
@@ -295,15 +330,17 @@ final class ModelInspectorState: ObservableObject {
                 onRedraw?(); onDirty?()
             }.store(in: &cancellables)
 
-        // Scale — non-grouped objects rebuild obj.transform's upper-3×3 from
-        // the existing pure rotation and the new per-axis scale (preserving
-        // translation); grouped selections delegate to AppDelegate so the
-        // whole model scales about the anchor.
+        // Scale — whole model delegates to AppDelegate (scales about the anchor); a
+        // single child part rebuilds its LOCAL scale (preserving local rotation +
+        // translation); a standalone object edits world.
         $scale.dropFirst()
             .sink { [weak self] s in
                 guard let self, !isUpdating, canEditScale, let obj = anchor else { return }
-                if obj.groupID != nil {
+                if obj.parentIndex == nil, obj.groupID != nil {
                     setGroupWorldScale?(obj, s)
+                } else if obj.parentIndex != nil {
+                    let R = TransformMath.pureRotation(of: obj.localTransform)
+                    obj.localTransform = TransformMath.applying(rotation: R, scale: s, to: obj.localTransform)
                 } else {
                     let R = TransformMath.pureRotation(of: obj.transform)
                     obj.transform = TransformMath.applying(rotation: R, scale: s, to: obj.transform)

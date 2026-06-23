@@ -2983,7 +2983,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         state.onAutoStamp = { [weak viewport] in
             guard let viewport,
                   let selected = viewport.sceneManager.selectedObject else { return }
-            if let gid = selected.groupID {
+            // A whole-model (group root) selection stamps the group track; a child part
+            // or standalone object stamps its own object track.
+            if selected.parentIndex == nil, let gid = selected.groupID {
                 guard let track = viewport.sceneManager.groupKeyframeTracks[gid],
                       !track.keyframes.isEmpty else { return }
                 viewport.addGroupKeyframeAtCurrentTime(for: gid)
@@ -2996,8 +2998,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // Transform/opacity slider edit → auto-keyframe-on-edit (gated by its settings).
         state.onSliderEdited = { [weak viewport] in
             guard let viewport, let selected = viewport.sceneManager.selectedObject else { return }
-            let ref: TrackRef = selected.groupID.map { .group($0) }
-                              ?? .object(viewport.sceneManager.selectedIndex)
+            let ref: TrackRef
+            if selected.parentIndex == nil, let gid = selected.groupID { ref = .group(gid) }
+            else { ref = .object(viewport.sceneManager.selectedIndex) }
             viewport.autoKeyframeOnEdit(ref)
         }
 
