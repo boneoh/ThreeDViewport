@@ -818,7 +818,14 @@ final class ViewportView: MTKView {
         case .object(let i):
             return i >= 0 && i < sceneManager.objects.count && sceneManager.objects[i].isLocked
         case .group(let gid):
-            return sceneManager.objects.first(where: { $0.groupID == gid })?.isLocked ?? false
+            // "Model Position" (root-path) track — its own independent lock, so freeing a
+            // part doesn't expose the whole-model motion to Model-mode moves.
+            return sceneManager.groupTrackLocked[gid] ?? false
+        case .model(let gid):
+            // Model header reads as locked only when the root path AND every part are locked.
+            let members = sceneManager.objects.filter { $0.groupID == gid }
+            return (sceneManager.groupTrackLocked[gid] ?? false)
+                && !members.isEmpty && members.allSatisfy { $0.isLocked }
         case .importBundle: return false
         case .mark: return probeConfig.isLocked   // marks edit-lock follows the probe
         case .category(let cat):
@@ -861,6 +868,11 @@ final class ViewportView: MTKView {
                 }
             }
         case .group(let gid):
+            // "Model Position" (root-path) track — only its own lock; parts unaffected.
+            sceneManager.groupTrackLocked[gid] = locked
+        case .model(let gid):
+            // Whole model — root path AND every part.
+            sceneManager.groupTrackLocked[gid] = locked
             for obj in sceneManager.objects where obj.groupID == gid { obj.isLocked = locked }
         case .importBundle: break
         case .mark: probeConfig.isLocked = locked   // marks edit-lock follows the probe
@@ -901,6 +913,10 @@ final class ViewportView: MTKView {
         for i in lightManager.lights.indices { lightManager.lights[i].isLocked = locked }
         particleManager.emitters.forEach { $0.isLocked = locked }
         sceneManager.objects.forEach { $0.isLocked = locked }
+        // Root-path ("Model Position") tracks for every multi-part model.
+        for gid in Set(sceneManager.objects.compactMap { $0.groupID }) {
+            sceneManager.groupTrackLocked[gid] = locked
+        }
     }
 
     // MARK: - Cameras (Phase 1)
@@ -2081,7 +2097,7 @@ final class ViewportView: MTKView {
         case .particles(let i):
             guard i >= 0, i < particleManager.emitters.count else { return [] }
             return particleManager.emitters[i].keyframeTrack?.keyframes.map { $0.time } ?? []
-        case .mark, .importBundle, .category:
+        case .mark, .importBundle, .category, .model:
             return []
         }
     }
@@ -2097,7 +2113,7 @@ final class ViewportView: MTKView {
         case .fog:              addFogKeyframeAtCurrentTime()
         case .particles(let i): addParticleKeyframeAtCurrentTime(forEmitterAt: i)
         case .cameraCuts:       break
-        case .mark, .importBundle, .category: break
+        case .mark, .importBundle, .category, .model: break
         }
     }
 

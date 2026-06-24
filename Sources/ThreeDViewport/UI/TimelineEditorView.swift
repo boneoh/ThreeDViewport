@@ -78,7 +78,8 @@ enum TrackRef: Equatable, Hashable {
     case category(TimelineCategory)   // Phase 4: Cameras / Lights / Effects header
     case object(Int)   // index into sceneManager.objects
     case light(Int)    // index into LightManager.lights
-    case group(Int)    // groupID — multi-part model header row
+    case model(Int)    // groupID — multi-part model HEADER row (collapse/name/whole-model lock)
+    case group(Int)    // groupID — the model's root-path ("Model Position") track row
     case fog            // the fog volume (single instance)
     case particles(Int) // index into ParticleManager.emitters
     case importBundle(Int) // import-bundle ID — display-only collapsible header (Part B)
@@ -940,11 +941,15 @@ final class TimelineEditorView: NSView {
             case .light(let idx):
                 result.append(TrackRow(name: lightLaneName(idx), ref: .light(idx), indentLevel: level))
             case .group(let gid):
+                // A multi-part model: a collapsible HEADER (.model) with a "Model Position"
+                // root-path track row (.group) plus one row per part, nested one level in.
                 let gName = sceneManager?.groupName(for: gid) ?? "Group"
                 let parts = groupOrder[gid] ?? []
-                result.append(TrackRow(name: gName, ref: .group(gid),
+                result.append(TrackRow(name: gName, ref: .model(gid),
                                        isGroupHeader: true, indentLevel: level))
-                if expandedHeaders.contains(.group(gid)) {
+                if expandedHeaders.contains(.model(gid)) {
+                    result.append(TrackRow(name: "Model Position", ref: .group(gid),
+                                           indentLevel: level + 1))
                     let sorted = parts.sorted { $0.obj.name.localizedStandardCompare($1.obj.name) == .orderedAscending }
                     for pair in sorted {
                         result.append(TrackRow(name: sceneManager?.partName(for: pair.obj) ?? pair.obj.name,
@@ -1070,6 +1075,8 @@ final class TimelineEditorView: NSView {
             return []   // display-only header — no track of its own
         case .category:
             return []   // category header — no track of its own
+        case .model:
+            return []   // model header — the root-path track lives on its .group row
         }
     }
 
@@ -2217,9 +2224,9 @@ final class TimelineEditorView: NSView {
             }
         }
 
-        // Nameable rows (camera / object / model / light / effect) → Rename… (#5).
+        // Nameable rows (camera / object / model header / light / effect) → Rename… (#5).
         switch ref {
-        case .camera, .object, .group, .light, .particles:
+        case .camera, .object, .model, .light, .particles:
             let item = NSMenuItem(title: "Rename…",
                                   action: #selector(renameRowMenuAction(_:)), keyEquivalent: "")
             item.target = self; item.representedObject = RenameRowRequest(ref: ref)
@@ -2281,7 +2288,8 @@ final class TimelineEditorView: NSView {
         case .category:      return nil
         case .cameraCuts:    return nil
         case .mark:          return nil   // delete individual mark diamonds, not the row
-        case .group:         return "Delete Model"
+        case .model:         return "Delete Model"
+        case .group:         return nil   // "Model Position" row — delete the model via its header
         case .object(let i):
             guard let obj = sceneManager?.objects[safe: i] else { return nil }
             if obj.isEnvelope     { return "Delete Glued Model" }
@@ -2420,7 +2428,7 @@ final class TimelineEditorView: NSView {
             viewport?.cameras[safe: i]?.name = name.isEmpty ? "Camera \(i + 1)" : name
         case .object(let i):
             sceneManager?.objects[safe: i]?.customName = custom
-        case .group(let gid):
+        case .group(let gid), .model(let gid):
             if let custom { sceneManager?.groupCustomNames[gid] = custom }
             else          { sceneManager?.groupCustomNames.removeValue(forKey: gid) }
         case .light(let i):
@@ -2827,7 +2835,7 @@ final class TimelineEditorView: NSView {
             else { return }
             track.retimeKeyframe(at: idx, to: toTime)
 
-        case .importBundle, .category:
+        case .importBundle, .category, .model:
             return   // display-only header — no track
         }
     }
@@ -2862,7 +2870,7 @@ final class TimelineEditorView: NSView {
                 particleManager?.emitters[safe: i]?.keyframeTrack?.moveKeyframes(from: from, to: to)
             case .mark(let key):
                 for (f, t) in zip(from, to) { retimeMark(key, fromTime: f, toTime: t) }
-            case .importBundle, .category:
+            case .importBundle, .category, .model:
                 break   // display-only header — no track
             }
         }
@@ -2913,7 +2921,7 @@ final class TimelineEditorView: NSView {
             particleManager?.emitters[safe: i]?.keyframeTrack?.removeKeyframe(at: ki)
         case .mark(let key):
             deleteMark(at: markIndex(for: key, kfIndex: ki))
-        case .importBundle, .category:
+        case .importBundle, .category, .model:
             break   // display-only header — no track
         }
         selectedKFIndex = nil
@@ -2963,7 +2971,7 @@ final class TimelineEditorView: NSView {
             track.removeKeyframe(at: idx)
         case .mark(let key):
             deleteMark(at: markIndex(for: key, atTime: time))
-        case .importBundle, .category:
+        case .importBundle, .category, .model:
             return   // display-only header — no track
         }
     }
@@ -2980,7 +2988,7 @@ final class TimelineEditorView: NSView {
         case .fog:            onInsertFogKeyframe?()
         case .particles(let i): onInsertParticleKeyframe?(i)
         case .mark:           return   // marks are added via the panels' Add Mark buttons
-        case .importBundle, .category: return   // display-only header — no track
+        case .importBundle, .category, .model: return   // display-only header — no track
         case .cameraCuts:     return   // cuts are added via the lane / Camera panel
         }
         // The stamp call above triggers ViewportView.onKeyframeStamped, which
@@ -3153,7 +3161,7 @@ final class TimelineEditorView: NSView {
         case .group(let gid):   return (sceneManager?.groupName(for: gid), nil)
         case .light(let i):     return (nil, i)
         case .particles(let i): return (nil, i)
-        case .mark, .importBundle, .category: return (nil, nil)   // not cross-instance copyable
+        case .mark, .importBundle, .category, .model: return (nil, nil)   // not cross-instance copyable
         }
     }
 
@@ -3326,7 +3334,7 @@ final class TimelineEditorView: NSView {
                 case .particles(let i):
                     guard let kf = particleManager?.emitters[safe: i]?.keyframeTrack?.keyframes[safe: d.kfIndex] else { continue }
                     entries.append((.particles(kf), t, ref))
-                case .mark, .importBundle, .category:
+                case .mark, .importBundle, .category, .model:
                     continue   // marks copy single-only; headers have no track
                 }
             }
@@ -3386,7 +3394,7 @@ final class TimelineEditorView: NSView {
                 print("[DEBUG] TimelineEditorView: Cmd+C — copied mark '\(m.name)'")
             }
             return
-        case .importBundle, .category:
+        case .importBundle, .category, .model:
             return   // display-only header — no track
         }
         if let clip = clipboardKeyframe {
@@ -3702,7 +3710,7 @@ final class TimelineEditorView: NSView {
                 action  = #selector(easingPopupTrackChanged(_:))
                 tag     = 0
                 current = mode
-            case .mark, .importBundle, .category:
+            case .mark, .importBundle, .category, .model:
                 continue   // marks / headers — no easing popup
             }
 
@@ -3731,19 +3739,20 @@ final class TimelineEditorView: NSView {
         }
 
         // ── Per-row lock toggles (padlock), flush to the label column's right edge ──
-        // One per lockable TOP-LEVEL row: camera, fog, each light/emitter, standalone
-        // objects, and model/group headers.  Model PART rows are skipped — the model
-        // header locks the whole model.  Import-bundle headers are skipped.
+        // One per lockable row: camera, fog, each light/emitter, objects (standalone AND
+        // multi-mesh model PARTS), and model/group headers.  Locking a part also locks its
+        // children (cascade-down); unlocking frees just that part — so you can lock the
+        // model header, then free one part to edit it.  Import-bundle headers are skipped.
         let lockW: CGFloat = lockToggleW
         let lockH: CGFloat = 18
         let lockX: CGFloat = labelOriginX + labelWidth - lockW - 3
         for (trackIndex, row) in tracks.enumerated() {
             switch row.ref {
             case .object(let i):
-                guard i < sm.objects.count, sm.objects[i].groupID == nil else { continue } // skip parts
+                guard i < sm.objects.count else { continue }   // bounds only — parts included
             case .importBundle, .cameraCuts, .mark:
                 continue   // marks edit-lock follows the probe, not a per-row toggle
-            case .camera, .fog, .light, .particles, .group, .category:
+            case .camera, .fog, .light, .particles, .group, .model, .category:
                 break
             }
             let lockY = laneTop(trackIndex) + (laneHeight - lockH) / 2
@@ -3814,7 +3823,7 @@ final class TimelineEditorView: NSView {
         case .fog:              return fogSettings?.keyframeTrack?.easingMode
         case .particles(let i): return particleManager?.emitters[safe: i]?.keyframeTrack?.easingMode
         case .cameraCuts:       return nil
-        case .mark, .importBundle, .category: return nil   // marks / headers — no easing
+        case .mark, .importBundle, .category, .model: return nil   // marks / headers — no easing
         }
     }
 
@@ -3828,7 +3837,7 @@ final class TimelineEditorView: NSView {
         case .fog:              fogSettings?.keyframeTrack?.easingMode = mode
         case .particles(let i): particleManager?.emitters[safe: i]?.keyframeTrack?.easingMode = mode
         case .cameraCuts:       break
-        case .mark, .importBundle, .category: break   // marks / headers — no easing
+        case .mark, .importBundle, .category, .model: break   // marks / headers — no easing
         }
     }
 }

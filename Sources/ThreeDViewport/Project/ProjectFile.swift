@@ -1140,7 +1140,7 @@ final class ProjectFile {
         }
 
         return ProjectData(
-            version:             41,   // v41: glued-model (envelope) header edit lock
+            version:             42,   // v42: per-model root-path ("Model Position") track lock
             modelPath:           nil,           // v3+ uses modelPaths instead
             modelPaths:          modelPaths,
             timeline:            timelineData,
@@ -1199,6 +1199,7 @@ final class ProjectFile {
                                            isLocked:     vp.probeConfig.isLocked),
             groupBaseTransforms: captureGroupBaseTransforms(from: vp),
             groupCustomNames:    captureGroupCustomNames(from: vp),
+            groupTrackLocks:     captureGroupTrackLocks(from: vp),
             cameraEasingMode:    (cam.keyframeTrack?.easingMode ?? .linear).rawValue,
             lightEasingModes:    lm.keyframeTracks.map { ($0?.easingMode ?? .linear).rawValue },
             fogEasingMode:       (vp.fogSettings.keyframeTrack?.easingMode ?? .linear).rawValue,
@@ -1509,6 +1510,10 @@ final class ProjectFile {
         // ── Model/group custom names (v40 Timeline ▸ Rename) ──────────────────
         vp.sceneManager.groupCustomNames = [:]
         applyGroupCustomNames(data.groupCustomNames ?? [], to: vp)
+
+        // ── Model-position (root-path) track locks (v42) ──────────────────────
+        vp.sceneManager.groupTrackLocked = [:]
+        applyGroupTrackLocks(data.groupTrackLocks ?? [], to: vp)
 
         // ── Rate-marker schedules (v35) ───────────────────────────────────────
         // Restore the editable Spin / Orbit markers.  The baked keyframes they
@@ -2202,6 +2207,38 @@ final class ProjectFile {
         for e in entries {
             if let gid = gidForKey["\(e.sourceFileName)#\(e.occurrence)"] {
                 vp.sceneManager.groupCustomNames[gid] = e.name
+            }
+        }
+    }
+
+    /// Snapshot each multi-part model's root-path ("Model Position") track lock (v42),
+    /// keyed by source filename + occurrence.  Only locked tracks are written.
+    private static func captureGroupTrackLocks(from vp: ViewportView) -> [GroupTrackLockData] {
+        let occByGid = groupOccurrences(vp.sceneManager.objects)
+        var out: [GroupTrackLockData] = []
+        for (gid, locked) in vp.sceneManager.groupTrackLocked where locked {
+            guard let fileName = vp.sceneManager.objects
+                .first(where: { $0.groupID == gid })?.sourceURL?.lastPathComponent
+            else { continue }
+            out.append(GroupTrackLockData(sourceFileName: fileName,
+                                          occurrence: occByGid[gid] ?? 0, locked: true))
+        }
+        return out
+    }
+
+    /// Reconnects saved root-path track locks to the runtime group IDs (by filename + occurrence).
+    private static func applyGroupTrackLocks(_ entries: [GroupTrackLockData], to vp: ViewportView) {
+        let occByGid = groupOccurrences(vp.sceneManager.objects)
+        var gidForKey: [String: Int] = [:]
+        var seen = Set<Int>()
+        for obj in vp.sceneManager.objects {
+            guard let gid = obj.groupID, seen.insert(gid).inserted,
+                  let fn = obj.sourceURL?.lastPathComponent else { continue }
+            gidForKey["\(fn)#\(occByGid[gid] ?? 0)"] = gid
+        }
+        for e in entries {
+            if let gid = gidForKey["\(e.sourceFileName)#\(e.occurrence)"] {
+                vp.sceneManager.groupTrackLocked[gid] = e.locked
             }
         }
     }

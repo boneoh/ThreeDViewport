@@ -53,6 +53,12 @@ final class SceneManager {
     // system writes it by evaluating groupKeyframeTracks.
     var groupTransforms:     [Int: matrix_float4x4] = [:]
 
+    // Edit lock for a multi-part model's ROOT-PATH ("Model Position") track, kept
+    // independent of the per-part `isLocked` flags so one part can be freed for editing
+    // while the whole-model motion stays protected.  groupID → locked.  Persisted by
+    // (sourceFileName, occurrence) like the other group-level data.
+    var groupTrackLocked:    [Int: Bool] = [:]
+
     // ── Group ↔ Envelope (Glue of multi-part models) ─────────────────────────
     // A group whose placement is driven by an envelope (Glue).  The group keeps its
     // parts / keyframes / single modelPath; the renderer sets

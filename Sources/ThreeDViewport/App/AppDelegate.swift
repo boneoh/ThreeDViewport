@@ -4571,7 +4571,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             viewport.timeline.seek(to: kfTime)
 
             switch ref {
-            case .cameraCuts, .mark:
+            case .cameraCuts, .mark, .model:
                 return
             case .camera(let ci):
                 // Make the clicked camera active so the live controller edits its track.
@@ -4874,9 +4874,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             case .light(let i):
                 viewport.lightManager.selectedIndex = i
                 viewport.setControlMode(.light)
-            case .group(let gid):
-                // Clicking a group header row selects the first part of the group
-                // and switches the viewport to Model mode so the whole group moves together.
+            case .group(let gid), .model(let gid):
+                // Clicking the model header or its "Model Position" row selects the first
+                // part and switches to Model mode so the whole model moves together.
                 if let idx = viewport.sceneManager.objects.firstIndex(where: { $0.groupID == gid }) {
                     viewport.sceneManager.selectedIndex = idx
                 }
@@ -5413,9 +5413,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let perform: () -> Void
 
         switch ref {
-        case .cameraCuts:
-            return
-        case .group(let gid):
+        case .cameraCuts, .group:
+            return   // "Model Position" row isn't deletable; delete the model via its header
+        case .model(let gid):
             title   = "Delete \"\(sm.groupName(for: gid))\"?"
             let set = Set(sm.objects.indices.filter { sm.objects[$0].groupID == gid })
             perform = { vp.deleteObjects(set) }

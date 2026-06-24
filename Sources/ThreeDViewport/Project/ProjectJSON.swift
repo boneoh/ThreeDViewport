@@ -76,6 +76,9 @@ struct ProjectData: Codable {
     /// v40: user-chosen model/group names (Timeline ▸ Rename).  Optional → older files
     /// decode to nil = no custom group names.
     var groupCustomNames:       [GroupCustomNameData]? = nil
+    /// v42: per-model root-path ("Model Position") track edit locks.  Optional → older
+    /// files decode to nil = no model-position locks.
+    var groupTrackLocks:        [GroupTrackLockData]? = nil
     /// v34: Glue envelopes — geometryless null nodes that parent member objects so
     /// they animate as a unit.  Empty for older files, which load unchanged.
     var envelopes:              [EnvelopeData] = []
@@ -129,6 +132,7 @@ struct ProjectData: Codable {
          probe:               ProbeData               = ProbeData(),
          groupBaseTransforms: [GroupBaseTransformData] = [],
          groupCustomNames:    [GroupCustomNameData]?   = nil,
+         groupTrackLocks:     [GroupTrackLockData]?    = nil,
          cameraEasingMode:    Int                     = 0,
          lightEasingModes:    [Int]                   = [],
          fogEasingMode:       Int                     = 0,
@@ -172,6 +176,7 @@ struct ProjectData: Codable {
         self.probe               = probe
         self.groupBaseTransforms = groupBaseTransforms
         self.groupCustomNames    = groupCustomNames
+        self.groupTrackLocks     = groupTrackLocks
         self.cameraEasingMode    = cameraEasingMode
         self.lightEasingModes    = lightEasingModes
         self.fogEasingMode       = fogEasingMode
@@ -229,6 +234,7 @@ struct ProjectData: Codable {
         probe               = (try? c.decode(ProbeData.self,             forKey: .probe))               ?? ProbeData()
         groupBaseTransforms = (try? c.decode([GroupBaseTransformData].self, forKey: .groupBaseTransforms)) ?? []
         groupCustomNames    =  try? c.decode([GroupCustomNameData].self,    forKey: .groupCustomNames)
+        groupTrackLocks     =  try? c.decode([GroupTrackLockData].self,     forKey: .groupTrackLocks)
         cameraEasingMode    = (try? c.decode(Int.self,   forKey: .cameraEasingMode))    ?? 0
         lightEasingModes    = (try? c.decode([Int].self, forKey: .lightEasingModes))    ?? []
         fogEasingMode       = (try? c.decode(Int.self,   forKey: .fogEasingMode))       ?? 0
@@ -1167,5 +1173,26 @@ struct GroupCustomNameData: Codable {
         sourceFileName = (try? c.decode(String.self, forKey: .sourceFileName)) ?? ""
         occurrence     = (try? c.decode(Int.self,    forKey: .occurrence))     ?? 0
         name           = (try? c.decode(String.self, forKey: .name))           ?? ""
+    }
+}
+
+// v42: edit lock for a multi-part model's root-path ("Model Position") track, kept
+// separate from the per-part object locks.  Keyed by source filename + occurrence so it
+// reconnects to the runtime group ID on load (like group tracks / names).
+struct GroupTrackLockData: Codable {
+    var sourceFileName: String
+    var occurrence:     Int = 0
+    var locked:         Bool = false
+
+    init(sourceFileName: String, occurrence: Int = 0, locked: Bool) {
+        self.sourceFileName = sourceFileName
+        self.occurrence     = occurrence
+        self.locked         = locked
+    }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        sourceFileName = (try? c.decode(String.self, forKey: .sourceFileName)) ?? ""
+        occurrence     = (try? c.decode(Int.self,    forKey: .occurrence))     ?? 0
+        locked         = (try? c.decode(Bool.self,   forKey: .locked))         ?? false
     }
 }
