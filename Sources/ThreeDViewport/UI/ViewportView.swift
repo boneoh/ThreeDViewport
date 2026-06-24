@@ -3146,6 +3146,7 @@ final class ViewportView: MTKView {
         exporter.marksVisible       = probeConfig.marksVisible
         exporter.feedbackSettings   = feedbackSettings
         exporter.colorGradeSettings = colorGradeSettings
+        exporter.fxaaEnabled        = renderer?.fxaaEnabled ?? true   // match the viewport
         // FX (fog + weather particles) belong to the Background class: include them
         // only in passes that show Background (Full, Scene).  Solo/Matte passes pass
         // includeFX=false so the actor/macguffin matte stays clean.

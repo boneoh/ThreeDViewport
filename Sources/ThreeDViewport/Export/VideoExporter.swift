@@ -198,6 +198,10 @@ final class VideoExporter {
     // Color grade settings — nil or identity = no grade pass during export
     var colorGradeSettings: ColorGradeSettings?
 
+    // Final-pass FXAA, matching the viewport.  Applied only to COLOUR passes; matte
+    // (.blackWhite) passes skip it so their coverage-key edges stay crisp.
+    var fxaaEnabled: Bool = true
+
     // Fog settings — nil = no fog during export
     var fogSettings: FogSettings?
     // (Fog volume pipeline now lives in ScenePipeline.)
@@ -409,7 +413,8 @@ final class VideoExporter {
         let pipelineDepth = (feedbackSettings?.isEnabled == true) ? 1 : 2
         let needGrade     = (colorGradeSettings.map { !$0.isIdentity } ?? false)
         let needLumaAlpha = (codec == .proRes4444 && colorMode == .color)
-        let needIntermediate = needGrade || needLumaAlpha
+        let needFXAA      = (fxaaEnabled && colorMode == .color)   // matte passes stay crisp
+        let needIntermediate = needGrade || needLumaAlpha || needFXAA
         var slots: [(color: MTLTexture, staging: MTLTexture,
                      depth: MTLTexture, grade: MTLTexture?)] = []
         for _ in 0..<pipelineDepth {
@@ -1073,6 +1078,19 @@ final class VideoExporter {
             }
             scenePipeline.encodeColorGrade(commandBuffer: commandBuffer,
                                            source: gTex, dest: colorTex, settings: settings)
+        }
+
+        // ── FXAA (colour passes only) ─────────────────────────────────────────
+        // Matches the viewport.  Runs after grade (so it smooths the graded image) and
+        // before luma-alpha (so the 4444 luma key is derived from the AA'd RGB).  Matte
+        // (.blackWhite) passes are skipped so their coverage-key edges stay sharp.
+        if fxaaEnabled, colorMode == .color, let gTex = gradeTex {
+            if let blit = commandBuffer.makeBlitCommandEncoder() {
+                blit.copy(from: colorTex, to: gTex)
+                blit.endEncoding()
+            }
+            scenePipeline.encodeFXAA(commandBuffer: commandBuffer,
+                                     source: gTex, dest: colorTex)
         }
 
         // ── Luma alpha (ProRes 4444 color passes) ─────────────────────────────

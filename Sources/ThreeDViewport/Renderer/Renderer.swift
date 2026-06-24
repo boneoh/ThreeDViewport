@@ -141,6 +141,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     var particleManager: ParticleManager?
     // (Particle pipeline + seed buffer now live in ScenePipeline.)
     private var gradeTexture:  MTLTexture?   // intermediate; rebuilt on size change
+    private var fxaaTexture:   MTLTexture?   // FXAA input copy; rebuilt on size change
+    /// Final-pass anti-aliasing in the viewport.  On by default.
+    var fxaaEnabled: Bool = true
 
     // MARK: - Laser hit effect
 
@@ -446,8 +449,9 @@ final class Renderer: NSObject, MTKViewDelegate {
         let fh = min(Int(size.height), 1080)
         feedbackProcessor?.resize(width: fw, height: fh,
                                   length: feedbackSettings?.length ?? 10)
-        // Rebuild grade intermediate texture at the new drawable size.
+        // Rebuild post-process intermediate textures at the new drawable size.
         rebuildGradeTexture(width: Int(size.width), height: Int(size.height))
+        rebuildFxaaTexture(width: Int(size.width), height: Int(size.height))
     }
 
     private func rebuildGradeTexture(width: Int, height: Int) {
@@ -458,6 +462,16 @@ final class Renderer: NSObject, MTKViewDelegate {
         desc.storageMode = .private
         gradeTexture = device.makeTexture(descriptor: desc)
         print("[DEBUG] Renderer: gradeTexture rebuilt \(width)×\(height)")
+    }
+
+    private func rebuildFxaaTexture(width: Int, height: Int) {
+        guard width > 0, height > 0 else { return }
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
+        desc.usage       = [.shaderRead, .renderTarget]
+        desc.storageMode = .private
+        fxaaTexture = device.makeTexture(descriptor: desc)
+        print("[DEBUG] Renderer: fxaaTexture rebuilt \(width)×\(height)")
     }
 
     /// (Re)builds the sampleable scene depth texture the fog volume pass reads.
@@ -1075,6 +1089,22 @@ final class Renderer: NSObject, MTKViewDelegate {
                                                 source: gradeTex,
                                                 dest:   drawable.texture,
                                                 settings: settings)
+            }
+        }
+
+        // ── FXAA — the truly last pass, smoothing the final composited image ──
+        if fxaaEnabled {
+            let w = drawable.texture.width, h = drawable.texture.height
+            if fxaaTexture == nil || fxaaTexture?.width != w || fxaaTexture?.height != h {
+                rebuildFxaaTexture(width: w, height: h)
+            }
+            if let fxTex = fxaaTexture {
+                if let blit = commandBuffer.makeBlitCommandEncoder() {
+                    blit.copy(from: drawable.texture, to: fxTex)
+                    blit.endEncoding()
+                }
+                scenePipeline?.encodeFXAA(commandBuffer: commandBuffer,
+                                          source: fxTex, dest: drawable.texture)
             }
         }
 

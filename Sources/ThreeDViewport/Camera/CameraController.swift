@@ -40,7 +40,9 @@ final class CameraController {
     var keyframeTrack: CameraKeyframeTrack?
 
     var fovYRadians: Float = 27.0 * Float.pi / 180.0   // 27° ≈ 50mm full-frame equivalent
-    let nearPlane: Float   = 0.01
+    // near:far of 0.1:2000 keeps the depth buffer precise enough to avoid Z-fighting
+    // at moderate distance.  (At 0.01 the 200,000:1 ratio crushed precision → flicker.)
+    let nearPlane: Float   = 0.1
     let farPlane: Float    = 2000.0
 
     /// When true, the renderer (and exporter) skip `applyCameraFollow` and leave

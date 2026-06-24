@@ -69,6 +69,9 @@ final class ScenePipeline {
     // Color grade (fullscreen post, no depth, no blend)
     let colorGradePipelineState: MTLRenderPipelineState?
 
+    // FXAA (fullscreen post anti-aliasing, no depth, no blend)
+    let fxaaPipelineState: MTLRenderPipelineState?
+
     // Static, deterministic weather-particle seed pool (positions + phase), shared
     // by both drivers so live and export sample the identical particle layout.
     private let particleSeedBuffer: MTLBuffer?
@@ -301,6 +304,25 @@ final class ScenePipeline {
             print("[DEBUG] ScenePipeline: color_grade shaders not found")
         }
 
+        // ── FXAA pipeline (fullscreen pass, no depth) ─────────────────────────
+        var fxaa: MTLRenderPipelineState? = nil
+        if let fxaaVertFn = library.makeFunction(name: "color_grade_vertex"),
+           let fxaaFragFn = library.makeFunction(name: "fxaa_fragment") {
+            let fxaaDesc = MTLRenderPipelineDescriptor()
+            fxaaDesc.label                           = "FXAA"
+            fxaaDesc.vertexFunction                  = fxaaVertFn
+            fxaaDesc.fragmentFunction                = fxaaFragFn
+            fxaaDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
+            do {
+                fxaa = try device.makeRenderPipelineState(descriptor: fxaaDesc)
+                print("[DEBUG] ScenePipeline: FXAA pipeline created")
+            } catch {
+                print("[DEBUG] ScenePipeline: FXAA pipeline failed — " + error.localizedDescription)
+            }
+        } else {
+            print("[DEBUG] ScenePipeline: fxaa shader not found")
+        }
+
         self.backgroundPipelineState = background
         self.backgroundDepthState    = backgroundDepth
         self.skyboxPipelineState     = skybox
@@ -311,6 +333,7 @@ final class ScenePipeline {
         self.particleFXPipelineState = particleFX
         self.fogVolumePipelineState  = fogVolume
         self.colorGradePipelineState = colorGrade
+        self.fxaaPipelineState       = fxaa
     }
 
     // MARK: - Pass encoders
@@ -576,6 +599,27 @@ final class ScenePipeline {
         let gammaExp = 1.0 / max(settings.gamma, 0.01)
         var params = SIMD3<Float>(settings.brightness, settings.contrast, gammaExp)
         enc.setFragmentBytes(&params, length: MemoryLayout<SIMD3<Float>>.stride, index: 0)
+        enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        enc.endEncoding()
+    }
+
+    /// Full-screen FXAA pass: samples `source` and writes anti-aliased pixels to `dest`.
+    /// Run as the very last pass before present so it smooths the complete composite.
+    func encodeFXAA(commandBuffer: MTLCommandBuffer,
+                    source:        MTLTexture,
+                    dest:          MTLTexture) {
+        guard let pipeline = fxaaPipelineState else { return }
+        let passDesc = MTLRenderPassDescriptor()
+        passDesc.colorAttachments[0].texture     = dest
+        passDesc.colorAttachments[0].loadAction  = .dontCare   // every pixel overwritten
+        passDesc.colorAttachments[0].storeAction = .store
+        guard let enc = commandBuffer.makeRenderCommandEncoder(descriptor: passDesc) else { return }
+        enc.setRenderPipelineState(pipeline)
+        enc.setCullMode(.none)
+        enc.setFragmentTexture(source, index: 0)
+        var invRes = SIMD2<Float>(1.0 / Float(max(1, source.width)),
+                                  1.0 / Float(max(1, source.height)))
+        enc.setFragmentBytes(&invRes, length: MemoryLayout<SIMD2<Float>>.stride, index: 0)
         enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         enc.endEncoding()
     }
