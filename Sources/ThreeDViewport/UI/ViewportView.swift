@@ -1446,13 +1446,21 @@ final class ViewportView: MTKView {
     // user can confirm mark timing/speed before baking.  Independent of the timeline
     // playhead; changes no keyframes.
     private var rehearseTimer:     Timer? = nil
-    private var rehearsePath:      [(t: Double, pos: SIMD3<Float>)] = []
+    private var rehearsePath:      [(t: Double, pos: SIMD3<Float>, rot: simd_quatf)] = []
     private var rehearseStartWall: CFTimeInterval = 0
     private var rehearseFirstT:    Double = 0
     private var rehearseLastT:     Double = 0
 
-    /// Begins replaying `path` (gait root keys: time + world position) on the probe.
-    func startProbeRehearsal(path: [(t: Double, pos: SIMD3<Float>)]) {
+    /// Euler° (for the probe gizmo arrow) of a rotation quaternion.
+    private func probeEuler(_ q: simd_quatf) -> SIMD3<Float> {
+        TransformMath.eulerFromMatrix(simd_float4x4(q))
+    }
+
+    /// Begins replaying `path` (gait root keys: time + world position + facing quaternion)
+    /// on the probe — the gizmo's facing arrow turns at stands to preview the mark facings.
+    /// Rotations are slerped (shortest-path) like real playback, so the arrow never swings
+    /// the long way around at heading wraps.
+    func startProbeRehearsal(path: [(t: Double, pos: SIMD3<Float>, rot: simd_quatf)]) {
         stopProbeRehearsal()
         guard path.count >= 2 else { return }
         rehearsePath      = path
@@ -1461,6 +1469,7 @@ final class ViewportView: MTKView {
         rehearseStartWall = CACurrentMediaTime()
         probeConfig.isVisible = true
         probeConfig.position  = path.first!.pos
+        probeConfig.rotation  = probeEuler(path.first!.rot)
         gaitState.isRehearsing = true
         needsDisplay = true
         let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
@@ -1485,30 +1494,35 @@ final class ViewportView: MTKView {
         let t = rehearseFirstT + (CACurrentMediaTime() - rehearseStartWall)
         if t >= rehearseLastT {
             probeConfig.position = rehearsePath.last!.pos
+            probeConfig.rotation = probeEuler(rehearsePath.last!.rot)
             needsDisplay = true
             stopProbeRehearsal()
             gaitState.status = "Rehearsal complete."
             return
         }
-        probeConfig.position = rehearsePositionAt(t)
+        let s = rehearseSampleAt(t)
+        probeConfig.position = s.pos
+        probeConfig.rotation = probeEuler(s.rot)
         needsDisplay = true
     }
 
-    /// Linearly interpolates the probe position along the rehearsal path at time `t`.
-    /// Dwell samples (equal positions, advancing time) hold the probe still — the pause.
-    private func rehearsePositionAt(_ t: Double) -> SIMD3<Float> {
-        guard let first = rehearsePath.first, let last = rehearsePath.last else { return .zero }
-        if t <= first.t { return first.pos }
-        if t >= last.t  { return last.pos }
+    /// Interpolates the probe pose along the rehearsal path at time `t`: position lerped,
+    /// facing SLERPED (shortest-path) so the arrow never swings the long way at heading
+    /// wraps.  Dwell samples (equal pose, advancing time) hold the probe still — the pause.
+    private func rehearseSampleAt(_ t: Double) -> (pos: SIMD3<Float>, rot: simd_quatf) {
+        let identity = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+        guard let first = rehearsePath.first, let last = rehearsePath.last else { return (.zero, identity) }
+        if t <= first.t { return (first.pos, first.rot) }
+        if t >= last.t  { return (last.pos, last.rot) }
         for i in 0..<(rehearsePath.count - 1) {
             let a = rehearsePath[i], b = rehearsePath[i + 1]
             if t >= a.t && t <= b.t {
                 let span = b.t - a.t
                 let f = span > 1e-9 ? Float((t - a.t) / span) : 0
-                return a.pos + (b.pos - a.pos) * f
+                return (a.pos + (b.pos - a.pos) * f, simd_slerp(a.rot, b.rot, f))
             }
         }
-        return last.pos
+        return (last.pos, last.rot)
     }
 
     /// angle, pulled in close so you can see / fine-tune the Probe.  Reveals the
@@ -2366,7 +2380,8 @@ final class ViewportView: MTKView {
                       footLock: Bool,
                       startTime: Double,
                       plantFeet: Bool,
-                      markTimes: [Double]? = nil) -> (missing: [String], spedUp: Int) {
+                      markTimes: [Double]? = nil,
+                      markRotations: [SIMD3<Float>?]? = nil) -> (missing: [String], spedUp: Int) {
 
         // Parts of this model, indexed by their (unique-within-group) name.
         var partIndexByName: [String: Int] = [:]
@@ -2456,6 +2471,7 @@ final class ViewportView: MTKView {
             gait: gait, params: params, marks: markPositions, speed: speed,
             strideLength: effectiveStride, startTime: startTime, groundOffset: groundOffset,
             groupScale: groupScale, legRig: legRig, markTimes: markTimes,
+            markRotations: markRotations,
             availableJoints: Set(partIndexByName.keys))
         guard let firstRoot = out.rootKeys.first else { return (out.missingJoints, out.spedUpSegments) }
 

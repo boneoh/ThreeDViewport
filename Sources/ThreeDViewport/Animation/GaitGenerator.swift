@@ -40,12 +40,27 @@ struct GaitGenerator {
                          groupScale: SIMD3<Float>,
                          legRig: LegRig? = nil,
                          markTimes: [Double]? = nil,   // timed mode: hit mark[i] at markTimes[i]
+                         markRotations: [SIMD3<Float>?]? = nil,  // per-mark target facing (Euler°)
                          availableJoints: Set<String>) -> Output {
 
         let spline = CatmullRom(points: marks)
         let total  = spline.length
         guard total > 1e-4, speed > 1e-4, strideLength > 1e-4 else {
             return Output(rootKeys: [], limbKeys: [:], endTime: startTime, missingJoints: [])
+        }
+
+        // Per-mark target facing as a quaternion (nil = no target → use travel heading).
+        // The model turns to this while STANDING at that mark (dwell / start / end).
+        func eulerToQuat(_ e: SIMD3<Float>) -> simd_quatf {
+            let r = e * (.pi / 180)
+            let qx = simd_quatf(angle: r.x, axis: SIMD3<Float>(1, 0, 0))
+            let qy = simd_quatf(angle: r.y, axis: SIMD3<Float>(0, 1, 0))
+            let qz = simd_quatf(angle: r.z, axis: SIMD3<Float>(0, 0, 1))
+            return qy * qx * qz   // matches TransformMath.matrixFromEuler (Ry·Rx·Rz)
+        }
+        let markQuat: [simd_quatf?] = (0..<marks.count).map { i in
+            guard let rots = markRotations, i < rots.count, let e = rots[i] else { return nil }
+            return eulerToQuat(e)
         }
 
         var rootKeys: [TransformKeyframe] = []
@@ -65,7 +80,8 @@ struct GaitGenerator {
         // (`rest` 1=stand…0=full gait), and local `segSpeed` (drives the turn-lean term).
         // `rest`=1 at the ends and through any dwell → 0 while moving, so the legs cycle
         // only when the body actually travels.
-        struct Sample { var dist: Float; var time: Double; var rest: Float; var segSpeed: Float }
+        struct Sample { var dist: Float; var time: Double; var rest: Float; var segSpeed: Float
+                        var targetRot: simd_quatf? = nil }   // facing to blend toward while standing
         var samples: [Sample] = []
         var spedUp = 0
         let densityPerStride: Float = 10
@@ -86,12 +102,12 @@ struct GaitGenerator {
                 if travelAtPace <= gap { segSpeed[i] = speed;          dwell[i] = gap - travelAtPace }
                 else                   { segSpeed[i] = segDist / gap;  spedUp += 1 }   // too short → speed up
             }
-            func push(_ d: Float, _ t: Double, _ r: Float, _ sp: Float) {
-                samples.append(Sample(dist: d, time: t, rest: r, segSpeed: sp))
+            func push(_ d: Float, _ t: Double, _ r: Float, _ sp: Float, _ tr: simd_quatf? = nil) {
+                samples.append(Sample(dist: d, time: t, rest: r, segSpeed: sp, targetRot: tr))
             }
-            // Stand at the first mark (through its leading dwell).
-            push(md[0], times[0], 1, speed)
-            if dwell[0] > 1e-3 { push(md[0], times[0] + Double(dwell[0]), 1, speed) }
+            // Stand at the first mark (through its leading dwell) → face mark 0.
+            push(md[0], times[0], 1, speed, markQuat[0])
+            if dwell[0] > 1e-3 { push(md[0], times[0] + Double(dwell[0]), 1, speed, markQuat[0]) }
             for i in 0..<(n - 1) {
                 let departT = times[i] + Double(dwell[i])
                 let arriveT = times[i + 1]
@@ -108,11 +124,14 @@ struct GaitGenerator {
                     let elapsed = Float(t - departT), remaining = Float(arriveT - t)
                     let ein  = (einOn  && tw > 1e-4 && elapsed   < tw) ? smoothstep((tw - elapsed)   / tw) : 0
                     let eout = (eoutOn && tw > 1e-4 && remaining < tw) ? smoothstep((tw - remaining) / tw) : 0
-                    push(d, t, max(ein, eout), segSpeed[i])
+                    // Turn toward whichever stand is nearer: the departure mark (ein) or
+                    // the arrival mark (eout).  The stronger ease wins; rest carries the blend.
+                    let target: simd_quatf? = (eout >= ein) ? markQuat[i + 1] : markQuat[i]
+                    push(d, t, max(ein, eout), segSpeed[i], target)
                 }
-                if dwell[i + 1] > 1e-3 { push(md[i + 1], arriveT + Double(dwell[i + 1]), 1, speed) }
+                if dwell[i + 1] > 1e-3 { push(md[i + 1], arriveT + Double(dwell[i + 1]), 1, speed, markQuat[i + 1]) }
             }
-            if let last = samples.last, last.rest < 1 { push(last.dist, last.time, 1, speed) }
+            if let last = samples.last, last.rest < 1 { push(last.dist, last.time, 1, speed, markQuat[n - 1]) }
         } else {
             // CONSTANT-SPEED mode (unchanged): uniform samples + global ease in/out.
             let cycles = total / strideLength
@@ -126,7 +145,10 @@ struct GaitGenerator {
                 let elapsed = dist / speed, remaining = (total - dist) / speed
                 let easeIn = (transitionDur > 1e-4 && elapsed   < transitionDur) ? smoothstep((transitionDur - elapsed)   / transitionDur) : 0
                 let settle = (transitionDur > 1e-4 && remaining < transitionDur) ? smoothstep((transitionDur - remaining) / transitionDur) : 0
-                samples.append(Sample(dist: dist, time: time, rest: max(easeIn, settle), segSpeed: speed))
+                // Face the first mark at the start stand, the last mark at the end stand.
+                let target: simd_quatf? = (settle >= easeIn) ? markQuat[marks.count - 1] : markQuat[0]
+                samples.append(Sample(dist: dist, time: time, rest: max(easeIn, settle),
+                                      segSpeed: speed, targetRot: target))
             }
         }
         let endTime = samples.last?.time ?? startTime
@@ -207,7 +229,13 @@ struct GaitGenerator {
                 let lean  = max(-maxLean, min(maxLean, leanGain * segSpeed * segSpeed * kappa)) * (1 - rest)
                 leanQ = simd_quatf(angle: lean, axis: SIMD3<Float>(0, 0, 1))
             }
-            let rotation = heading * leanQ * body
+            var rotation = heading * leanQ * body
+            // Turn toward the mark's target facing while standing (rest = blend amount):
+            // rest 0 (walking) = travel heading; rest 1 (standing) = the target.  Marks
+            // with no target rotation leave the travel heading unchanged.
+            if let target = sample.targetRot, rest > 1e-4 {
+                rotation = simd_slerp(rotation, target, rest)
+            }
             let yOffset  = (gait == .swim) ? groundOffset * rest : groundOffset
             let y        = pos.y + yOffset + GaitCycle.bob(gait, phase: phase, params) * (1 - rest)
             let bobbed   = SIMD3<Float>(pos.x, y, pos.z)

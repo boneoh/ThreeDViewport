@@ -1327,8 +1327,10 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     /// Draws the bake probe as an RGB axis-cross gizmo at its world position.
     /// Live viewport only (the exporter never calls this), so it stays out of renders.
-    /// Line segments for a facing arrow (shaft + 2 barbs) pointing along the −Z
-    /// (glTF forward) of `euler` (degrees), from `p`, of the given world length.
+    /// Line segments for a facing arrow (shaft + 2 barbs) pointing along the +Z of
+    /// `euler` (degrees), from `p`, of the given world length.  +Z is the gait's
+    /// forward (its heading maps local +Z onto the travel direction), so the arrow
+    /// reads as the model's facing.
     private func facingArrowLines(at p: SIMD3<Float>, euler: SIMD3<Float>,
                                   length: Float) -> [SIMD3<Float>] {
         let R = TransformMath.matrixFromEuler(euler)
@@ -1336,7 +1338,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             let r = R * SIMD4<Float>(v, 0)
             return simd_normalize(SIMD3<Float>(r.x, r.y, r.z))
         }
-        let fwd   = dir(SIMD3<Float>(0, 0, -1))
+        let fwd   = dir(SIMD3<Float>(0, 0, 1))
         let right = dir(SIMD3<Float>(1, 0, 0))
         let tip   = p + fwd * length
         let barb  = length * 0.3

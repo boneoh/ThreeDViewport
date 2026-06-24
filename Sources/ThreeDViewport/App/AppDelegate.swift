@@ -246,6 +246,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             // Re-sync open Spin/Orbit panels so a deleted-then-readded object can't
             // leave the old object's rate markers cached in the panel (P3 follow-up).
             self.refreshPathAnimatorsAfterSceneChange()
+            // Keep the Probe Inspector's instance dropdown current when objects are
+            // added / removed (preserves the current selection if it still exists).
+            self.probeRefreshInstances()
+            self.probeRefreshMarks()
         }
 
         // Viewport / timeline selection change → highlight the timeline lane AND
@@ -3285,13 +3289,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         var opts: [ProbeInstanceOption] = []
         switch st.selectedType {
         case .object:
-            var seenGroups = Set<Int>()
+            // Multi-part models: list every part under the model's name (so a child part
+            // like foot_l is selectable for its plant-feet marks).  Standalone objects sit
+            // at the top level.
+            var emittedGroups = Set<Int>()
             for obj in vp.sceneManager.objects where !obj.isEnvelope {
                 if let gid = obj.groupID {
-                    guard seenGroups.insert(gid).inserted else { continue }
-                    let root = vp.sceneManager.objects.first { $0.groupID == gid && $0.parentIndex == nil } ?? obj
-                    opts.append(ProbeInstanceOption(id: root.entityID,
-                                                    name: vp.sceneManager.groupName(for: gid)))
+                    guard emittedGroups.insert(gid).inserted else { continue }
+                    let modelName = vp.sceneManager.groupName(for: gid)
+                    let parts = vp.sceneManager.objects
+                        .filter { $0.groupID == gid }
+                        .map { (id: $0.entityID, name: vp.sceneManager.partName(for: $0)) }
+                        .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+                    for part in parts {
+                        opts.append(ProbeInstanceOption(id: part.id, name: part.name, group: modelName))
+                    }
                 } else if obj.parentIndex == nil {
                     opts.append(ProbeInstanceOption(id: obj.entityID,
                                                     name: vp.sceneManager.displayName(for: obj)))
@@ -3343,7 +3355,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             guard let i = sm.objects.firstIndex(where: { $0.entityID == id }) else { return nil }
             let obj = sm.objects[i]
             let occ = sm.objects[..<i].filter { $0.name == obj.name }.count
-            let name = obj.groupID.map { sm.groupName(for: $0) } ?? sm.displayName(for: obj)
+            // A part keys its Timeline row / default name by its part name; a standalone
+            // object by its display name.
+            let name = obj.groupID != nil ? sm.partName(for: obj) : sm.displayName(for: obj)
             return MarkOwner(category: .object, id: id, index: i, name: name, occurrence: occ)
         case .camera:
             guard let i = vp.cameras.firstIndex(where: { $0.entityID == id }) else { return nil }
@@ -4075,6 +4089,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             start     = selected.first?.time ?? start
         }
         let positions = selected.map { $0.position }
+        // Per-mark target facing (Euler°, nil where unset) — the model turns to it while
+        // standing at that mark (Phase 2).
+        let rotations = selected.map { $0.rotation }
 
         // Tuning multipliers (default 1.0 when a field is blank/invalid).
         func mul(_ s: String) -> Float { Float(s).map { $0 > 0 ? $0 : 1 } ?? 1 }
@@ -4086,7 +4103,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             groupID: gid, gait: state.gait, params: params, markPositions: positions,
             speed: speed, strideLength: stride, autoStride: state.autoStride,
             footLock: state.footLock, startTime: start, plantFeet: state.plantFeet,
-            markTimes: markTimes)
+            markTimes: markTimes, markRotations: rotations)
         let missing = result.missing
 
         timelineEditorWC?.editorView.needsDisplay = true
@@ -4123,6 +4140,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         selected.sort { $0.time < $1.time }
         let positions = selected.map { $0.position }
         let markTimes = selected.map { $0.time }
+        let rotations = selected.map { $0.rotation }   // turn the probe at stands too
 
         // Stride only affects sample density / bob phase here, not the root path timing.
         let stride = (Float(state.stride).map { $0 > 0 ? $0 : 1.6 }) ?? 1.6
@@ -4135,8 +4153,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             gait: state.gait, params: params, marks: positions, speed: speed,
             strideLength: stride, startTime: markTimes.first ?? 0, groundOffset: 0,
             groupScale: SIMD3<Float>(1, 1, 1), legRig: nil, markTimes: markTimes,
-            availableJoints: [])
-        let path: [(t: Double, pos: SIMD3<Float>)] = out.rootKeys.map { ($0.time, $0.translation) }
+            markRotations: rotations, availableJoints: [])
+        // Carry the root facing as a quaternion so the probe's arrow slerps (shortest-path)
+        // between samples — no wide swing at heading wraps.
+        let path: [(t: Double, pos: SIMD3<Float>, rot: simd_quatf)] = out.rootKeys.map {
+            ($0.time, $0.translation, $0.rotation)
+        }
         guard path.count >= 2 else {
             state.validationAlert = "Couldn't build a path from these marks."; return
         }

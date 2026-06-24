@@ -5,6 +5,7 @@ import simd
 struct ProbeInstanceOption: Identifiable, Hashable {
     let id: UUID        // owning entity id
     let name: String
+    var group: String = ""   // section header (a model's name for its parts; "" = top level)
 }
 
 /// One existing mark of the selected instance.
@@ -50,6 +51,18 @@ struct ProbeInspectorPanel: View {
     /// True when a real (non-"New") mark is selected — enables Update.
     private var hasSelectedMark: Bool { state.selectedMarkID != nil }
 
+    /// Instances grouped into sections (a model's name heads its parts; "" = top level),
+    /// preserving first-appearance order.
+    private var instanceSections: [(title: String, items: [ProbeInstanceOption])] {
+        var order: [String] = []
+        var map: [String: [ProbeInstanceOption]] = [:]
+        for opt in state.instances {
+            if map[opt.group] == nil { order.append(opt.group); map[opt.group] = [] }
+            map[opt.group]?.append(opt)
+        }
+        return order.map { (title: $0, items: map[$0] ?? []) }
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
@@ -85,7 +98,15 @@ struct ProbeInspectorPanel: View {
 
                 Picker("Item", selection: $state.selectedInstanceID) {
                     if state.instances.isEmpty { Text("—").tag(UUID?.none) }
-                    ForEach(state.instances) { opt in Text(opt.name).tag(Optional(opt.id)) }
+                    ForEach(instanceSections, id: \.title) { sec in
+                        if sec.title.isEmpty {
+                            ForEach(sec.items) { opt in Text(opt.name).tag(Optional(opt.id)) }
+                        } else {
+                            Section(sec.title) {
+                                ForEach(sec.items) { opt in Text(opt.name).tag(Optional(opt.id)) }
+                            }
+                        }
+                    }
                 }
                 .disabled(state.instances.isEmpty)
                 .onChange(of: state.selectedInstanceID) { _, _ in
@@ -123,11 +144,12 @@ struct ProbeInspectorPanel: View {
                 // ── Rotation / facing (Object marks only) ─────────────────────
                 if state.selectedType == .object {
                     Group {
-                        Text("Rotation (facing)").font(.headline)
+                        Text("Model Facing").font(.headline)
                         SliderRow(label: "X", value: $probe.rotation.x, range: rotationRange, format: "%.0f°")
                         SliderRow(label: "Y", value: $probe.rotation.y, range: rotationRange, format: "%.0f°")
                         SliderRow(label: "Z", value: $probe.rotation.z, range: rotationRange, format: "%.0f°")
-                        Text("The direction the model faces while standing at this mark during gait.")
+                        Text("The whole model's body direction while standing at this mark during "
+                            + "gait — applied to the model root, not the selected part.")
                             .font(.caption2).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
