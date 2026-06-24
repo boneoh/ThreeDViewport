@@ -58,6 +58,9 @@ struct ProbeMark: Identifiable {
     var owner:    MarkOwner? = nil
     /// Optional second point — a camera mark's aim/target (eye is `position`).
     var secondaryPosition: SIMD3<Float>? = nil
+    /// Optional target facing (Euler degrees, YXZ) for an OBJECT mark — the direction
+    /// the model holds while standing at this mark during gait.  nil = use travel heading.
+    var rotation: SIMD3<Float>? = nil
 }
 
 /// Editor-only bake probe: the world-space point the scene is captured from when
@@ -67,6 +70,9 @@ struct ProbeMark: Identifiable {
 final class ProbeConfig: ObservableObject {
     /// World-space probe position (the capture origin).
     @Published var position:  SIMD3<Float> = .zero
+    /// Probe orientation (Euler degrees, YXZ) — the facing authored into an Object
+    /// mark's target rotation; drawn as a forward arrow on the gizmo.
+    @Published var rotation:  SIMD3<Float> = .zero
     /// Whether the probe's gizmo is drawn in the viewport.
     @Published var isVisible: Bool         = false
 

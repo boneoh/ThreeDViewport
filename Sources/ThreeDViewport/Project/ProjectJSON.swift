@@ -426,6 +426,8 @@ struct MarkData: Codable {
     var ownerOccurrence: Int?   = nil
     // Secondary point (camera aim/target); nil for single-point marks.
     var sx2: Float? = nil; var sy2: Float? = nil; var sz2: Float? = nil
+    // v42: target facing (Euler degrees) for an OBJECT mark; nil = no target rotation.
+    var rx: Float? = nil; var ry: Float? = nil; var rz: Float? = nil
 }
 
 // v23: One atmosphere keyframe (fog volume or particle emitter).  Mirrors

@@ -759,6 +759,8 @@ final class ProjectFile {
                   let raw = md.ownerCategory, let cat = MarkCategory(rawValue: raw) else { continue }
             var secondary: SIMD3<Float>? = nil
             if let x = md.sx2, let y = md.sy2, let z = md.sz2 { secondary = point(x, y, z) }
+            var rot: SIMD3<Float>? = nil
+            if let x = md.rx, let y = md.ry, let z = md.rz { rot = SIMD3<Float>(x, y, z) }
             let owner = MarkOwner(category: cat, id: hostID, index: 0,
                                   name: md.ownerName ?? cat.displayName, occurrence: 0)
             vp.probeConfig.marks.append(ProbeMark(
@@ -767,7 +769,8 @@ final class ProjectFile {
                 color:    SIMD3<Float>(md.r, md.g, md.b),
                 time:     (md.time ?? 0) + T,
                 owner:    owner,
-                secondaryPosition: secondary))
+                secondaryPosition: secondary,
+                rotation: rot))
             added += 1
         }
         if added > 0 { vp.probeConfig.marksVisible = true }
@@ -1192,7 +1195,10 @@ final class ProjectFile {
                                                         ownerOccurrence: $0.owner?.occurrence,
                                                         sx2: $0.secondaryPosition?.x,
                                                         sy2: $0.secondaryPosition?.y,
-                                                        sz2: $0.secondaryPosition?.z)
+                                                        sz2: $0.secondaryPosition?.z,
+                                                        rx: $0.rotation?.x,
+                                                        ry: $0.rotation?.y,
+                                                        rz: $0.rotation?.z)
                                            },
                                            marksVisible: vp.probeConfig.marksVisible,
                                            visible:      vp.probeConfig.isVisible,
@@ -1552,12 +1558,15 @@ final class ProjectFile {
             }
             var secondary: SIMD3<Float>? = nil
             if let x = md.sx2, let y = md.sy2, let z = md.sz2 { secondary = SIMD3<Float>(x, y, z) }
+            var rot: SIMD3<Float>? = nil
+            if let x = md.rx, let y = md.ry, let z = md.rz { rot = SIMD3<Float>(x, y, z) }
             return ProbeMark(name: md.name,
                              position: SIMD3<Float>(md.px, md.py, md.pz),
                              color:    SIMD3<Float>(md.r, md.g, md.b),
                              time:     md.time ?? 0,
                              owner:    owner,
-                             secondaryPosition: secondary)
+                             secondaryPosition: secondary,
+                             rotation: rot)
         }
         vp.probeConfig.marksVisible = data.probe.marksVisible ?? false
         vp.probeConfig.isVisible    = data.probe.visible ?? false

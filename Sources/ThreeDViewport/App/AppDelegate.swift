@@ -31,6 +31,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var modelInspectorPanel: NSPanel?
     private var modelInspectorState: ModelInspectorState?
 
+    // Probe inspector mark-editor state (type ▸ instance ▸ mark dropdowns).
+    private let probeInspectorState = ProbeInspectorState()
+
     // Effects grid window (per-object visible / holdout / class).
     private var effectsGridWC:    EffectsGridWindowController?
     private var effectsGridState: EffectsGridState?
@@ -3173,9 +3176,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.level                  = .normal    // don't float above other applications
         panel.hidesOnDeactivate  = false
 
+        // Wire the mark-editor state and seed its lists for the current selection.
+        let pstate = probeInspectorState
+        pstate.onTypeChanged     = { [weak self] in self?.probeTypeChanged() }
+        pstate.onInstanceChanged = { [weak self] in self?.probeInstanceChanged() }
+        pstate.onMarkChanged     = { [weak self] in self?.probeMarkChanged() }
+        pstate.onAddMark         = { [weak self] in self?.probeAddMark() }
+        pstate.onUpdateMark      = { [weak self] in self?.probeUpdateMark() }
+        probeRefreshInstances()
+        probeRefreshMarks()
+
         panel.contentView = FirstClickHostingView(rootView: ProbeInspectorPanel(
-            probe: viewport.probeConfig, clipboard: viewport.coordinateClipboard,
-            onMarkPosition: { [weak self] in self?.markOrUpdate() },
+            probe: viewport.probeConfig, state: pstate, clipboard: viewport.coordinateClipboard,
             onVisibilityChanged: { [weak self] in self?.markDirty() }))
 
         if let win = window {
@@ -3264,17 +3276,147 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         return "\(owner.name) \(n)"
     }
 
-    /// Probe inspector button: with no mark selected, adds a new mark; with one selected,
-    /// updates it in place (commits the probe's position, keeps category/time/owner, lets
-    /// the name/colour be edited) — no duplicate, no lost category/name.
-    private func markOrUpdate() {
-        guard let viewport = viewportView else { return }
-        let probe = viewport.probeConfig
-        if let i = probe.selectedMarkIndex, probe.marks.indices.contains(i) {
-            promptForMark(editing: i)
-        } else {
-            promptForMark()
+    // MARK: - Probe Inspector mark editor (type ▸ instance ▸ mark)
+
+    /// Rebuilds the instance dropdown for the selected mark type.
+    private func probeRefreshInstances() {
+        guard let vp = viewportView else { return }
+        let st = probeInspectorState
+        var opts: [ProbeInstanceOption] = []
+        switch st.selectedType {
+        case .object:
+            var seenGroups = Set<Int>()
+            for obj in vp.sceneManager.objects where !obj.isEnvelope {
+                if let gid = obj.groupID {
+                    guard seenGroups.insert(gid).inserted else { continue }
+                    let root = vp.sceneManager.objects.first { $0.groupID == gid && $0.parentIndex == nil } ?? obj
+                    opts.append(ProbeInstanceOption(id: root.entityID,
+                                                    name: vp.sceneManager.groupName(for: gid)))
+                } else if obj.parentIndex == nil {
+                    opts.append(ProbeInstanceOption(id: obj.entityID,
+                                                    name: vp.sceneManager.displayName(for: obj)))
+                }
+            }
+        case .camera:
+            opts = vp.cameras.map { ProbeInstanceOption(id: $0.entityID, name: $0.name) }
+        case .light:
+            opts = vp.lightManager.lights.enumerated().map {
+                ProbeInstanceOption(id: $0.element.entityID, name: lightDisplayName($0.element, at: $0.offset))
+            }
+        case .effect:
+            opts = vp.particleManager.emitters.enumerated().map {
+                ProbeInstanceOption(id: $0.element.entityID,
+                                    name: ($0.element.customName?.isEmpty == false)
+                                          ? $0.element.customName! : $0.element.type.displayName)
+            }
         }
+        let wasUpdating = st.isUpdating
+        st.isUpdating = true
+        st.instances = opts
+        if st.selectedInstanceID == nil || !opts.contains(where: { $0.id == st.selectedInstanceID }) {
+            st.selectedInstanceID = opts.first?.id
+        }
+        st.isUpdating = wasUpdating
+    }
+
+    /// Rebuilds the mark dropdown for the selected instance.
+    private func probeRefreshMarks() {
+        guard let vp = viewportView else { return }
+        let st = probeInspectorState
+        let id = st.selectedInstanceID
+        let opts = vp.probeConfig.marks
+            .filter { $0.owner?.id == id }
+            .map { ProbeMarkOption(id: $0.id, name: $0.name) }
+        let wasUpdating = st.isUpdating
+        st.isUpdating = true
+        st.marks = opts
+        if !opts.contains(where: { $0.id == st.selectedMarkID }) { st.selectedMarkID = nil }
+        st.isUpdating = wasUpdating
+    }
+
+    /// MarkOwner for the currently selected type + instance, or nil.
+    private func probeResolveOwner() -> MarkOwner? {
+        guard let vp = viewportView, let id = probeInspectorState.selectedInstanceID else { return nil }
+        let sm = vp.sceneManager
+        switch probeInspectorState.selectedType {
+        case .object:
+            guard let i = sm.objects.firstIndex(where: { $0.entityID == id }) else { return nil }
+            let obj = sm.objects[i]
+            let occ = sm.objects[..<i].filter { $0.name == obj.name }.count
+            let name = obj.groupID.map { sm.groupName(for: $0) } ?? sm.displayName(for: obj)
+            return MarkOwner(category: .object, id: id, index: i, name: name, occurrence: occ)
+        case .camera:
+            guard let i = vp.cameras.firstIndex(where: { $0.entityID == id }) else { return nil }
+            return MarkOwner(category: .camera, id: id, index: i, name: vp.cameras[i].name)
+        case .light:
+            guard let i = vp.lightManager.lights.firstIndex(where: { $0.entityID == id }) else { return nil }
+            return MarkOwner(category: .light, id: id, index: i,
+                             name: lightDisplayName(vp.lightManager.lights[i], at: i))
+        case .effect:
+            guard let i = vp.particleManager.emitters.firstIndex(where: { $0.entityID == id }) else { return nil }
+            let e = vp.particleManager.emitters[i]
+            let name = (e.customName?.isEmpty == false) ? e.customName! : e.type.displayName
+            return MarkOwner(category: .effect, id: id, index: i, name: name)
+        }
+    }
+
+    private func probeTypeChanged() {
+        probeRefreshInstances()
+        probeRefreshMarks()
+    }
+
+    private func probeInstanceChanged() {
+        probeInspectorState.isUpdating = true
+        probeInspectorState.selectedMarkID = nil   // back to "＋ New" for a fresh instance
+        probeInspectorState.isUpdating = false
+        probeRefreshMarks()
+    }
+
+    /// Mark dropdown changed → load the chosen mark's pose into the probe (or leave the
+    /// probe as-is for "＋ New").
+    private func probeMarkChanged() {
+        guard let vp = viewportView else { return }
+        let probe = vp.probeConfig
+        guard let mid = probeInspectorState.selectedMarkID,
+              let idx = probe.marks.firstIndex(where: { $0.id == mid }) else { return }
+        let m = probe.marks[idx]
+        probe.selectedMarkIndex = idx
+        probe.position = m.position
+        probe.rotation = m.rotation ?? .zero
+        probe.marksVisible = true
+        vp.overlayState.markName = m.name
+        vp.timeline.seek(to: m.time)
+        timelineEditorWC?.editorView.selectMarkDiamond(forMarkIndex: idx)
+        markDirty()
+    }
+
+    /// Add Mark — opens the name/colour dialog and appends a new mark on the selected
+    /// instance at the probe's current pose (position + rotation for Object marks).
+    private func probeAddMark() {
+        guard let vp = viewportView, let owner = probeResolveOwner() else { return }
+        let rot: SIMD3<Float>? = (owner.category == .object) ? vp.probeConfig.rotation : nil
+        promptForMark(owner: owner, rotation: rot)
+        probeRefreshMarks()
+        // Select the freshly-added mark (last one for this instance).
+        if let last = probeInspectorState.marks.last {
+            probeInspectorState.isUpdating = true
+            probeInspectorState.selectedMarkID = last.id
+            probeInspectorState.isUpdating = false
+        }
+    }
+
+    /// Update Mark — commits the probe's current pose (position + rotation for Object
+    /// marks) into the selected mark, keeping its name / colour / time / owner.
+    private func probeUpdateMark() {
+        guard let vp = viewportView,
+              let mid = probeInspectorState.selectedMarkID,
+              let idx = vp.probeConfig.marks.firstIndex(where: { $0.id == mid }) else { return }
+        vp.probeConfig.marks[idx].position = vp.probeConfig.position
+        if vp.probeConfig.marks[idx].owner?.category == .object {
+            vp.probeConfig.marks[idx].rotation = vp.probeConfig.rotation
+        }
+        markDirty()
+        print("[DEBUG] AppDelegate: updated mark '\(vp.probeConfig.marks[idx].name)' from probe pose")
     }
 
     /// Opens the Mark Position dialog.  Appends a new mark, OR — when `editing` is a valid
@@ -3286,6 +3428,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private func promptForMark(at markPosition: SIMD3<Float>? = nil,
                                owner: MarkOwner? = nil,
                                secondary: SIMD3<Float>? = nil,
+                               rotation: SIMD3<Float>? = nil,
                                editing: Int? = nil) {
         guard let viewport = viewportView else { return }
         let probe    = viewport.probeConfig
@@ -3345,17 +3488,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         lastMarkColor = well.color
         let trimmed = nameField.stringValue.trimmingCharacters(in: .whitespaces)
         let name    = trimmed.isEmpty ? (editMark?.name ?? defaultMarkName(for: owner, marks: probe.marks)) : trimmed
+        // Object marks may carry a target facing, supplied by the caller (the Probe
+        // Inspector passes the probe's rotation; per-entity Add Mark passes nil).
+        let rot: SIMD3<Float>? = (effOwner?.category == .object) ? rotation : nil
 
         if let idx = editing, probe.marks.indices.contains(idx) {
             // Update in place — preserve time / owner / secondary.
             probe.marks[idx].name     = name
             probe.marks[idx].color    = color
             probe.marks[idx].position = pos
+            if effOwner?.category == .object { probe.marks[idx].rotation = rot }
             probe.selectedMarkIndex   = idx
             print("[DEBUG] AppDelegate: updated mark '\(name)' → \(pos)")
         } else {
             probe.marks.append(ProbeMark(name: name, position: pos, color: color,
-                                         time: time, owner: owner, secondaryPosition: secondary))
+                                         time: time, owner: owner,
+                                         secondaryPosition: secondary, rotation: rot))
             probe.selectedMarkIndex = probe.marks.count - 1
             print("[DEBUG] AppDelegate: added mark '\(name)' at \(pos) t=\(time) owner=\(String(describing: owner))")
         }
@@ -3425,11 +3573,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         probe.selectedMarkIndex = index
         let mark = probe.marks[index]
         probe.position = mark.position                 // probe jumps to the mark (inspector follows)
+        probe.rotation = mark.rotation ?? .zero        // load its facing into the rotation sliders
         viewport.editingMarkTargetPoint = false        // edit its primary point
         viewport.overlayState.markName = mark.name
         viewport.timeline.seek(to: mark.time)          // scrub the playhead to the mark
         timelineEditorWC?.editorView.selectMarkDiamond(forMarkIndex: index)
+        syncProbeInspector(toMarkIndex: index)         // keep the type/instance/mark dropdowns in step
         markDirty()
+    }
+
+    /// Points the Probe Inspector's type ▸ instance ▸ mark dropdowns at the given mark,
+    /// so cycling marks (N/Shift+N) or clicking a Timeline diamond updates the editor too.
+    private func syncProbeInspector(toMarkIndex index: Int) {
+        guard let vp = viewportView, vp.probeConfig.marks.indices.contains(index) else { return }
+        let mark = vp.probeConfig.marks[index]
+        guard let owner = mark.owner else { return }
+        let st = probeInspectorState
+        st.isUpdating = true
+        if st.selectedType != owner.category { st.selectedType = owner.category }
+        probeRefreshInstances()
+        st.selectedInstanceID = owner.id
+        probeRefreshMarks()
+        st.selectedMarkID = mark.id
+        st.isUpdating = false
     }
 
     /// Deletes the currently selected mark (Delete/Backspace, gated to when marks

@@ -1327,6 +1327,26 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     /// Draws the bake probe as an RGB axis-cross gizmo at its world position.
     /// Live viewport only (the exporter never calls this), so it stays out of renders.
+    /// Line segments for a facing arrow (shaft + 2 barbs) pointing along the −Z
+    /// (glTF forward) of `euler` (degrees), from `p`, of the given world length.
+    private func facingArrowLines(at p: SIMD3<Float>, euler: SIMD3<Float>,
+                                  length: Float) -> [SIMD3<Float>] {
+        let R = TransformMath.matrixFromEuler(euler)
+        func dir(_ v: SIMD3<Float>) -> SIMD3<Float> {
+            let r = R * SIMD4<Float>(v, 0)
+            return simd_normalize(SIMD3<Float>(r.x, r.y, r.z))
+        }
+        let fwd   = dir(SIMD3<Float>(0, 0, -1))
+        let right = dir(SIMD3<Float>(1, 0, 0))
+        let tip   = p + fwd * length
+        let barb  = length * 0.3
+        var v: [SIMD3<Float>] = []
+        v.append(p);   v.append(tip)
+        v.append(tip); v.append(tip - fwd * barb + right * barb * 0.6)
+        v.append(tip); v.append(tip - fwd * barb - right * barb * 0.6)
+        return v
+    }
+
     private func drawProbeGizmo(encoder: MTLRenderCommandEncoder) {
         guard let probe = probeConfig, probe.isVisible,
               let pipeline = widgetPipelineState else { return }
@@ -1352,6 +1372,11 @@ final class Renderer: NSObject, MTKViewDelegate {
         var sphere = SceneWidgets.sphereWireframe(center: p, radius: len * 0.18)
         drawWidgetLines(encoder: encoder, vertices: &sphere, viewProjection: vp,
                         color: SIMD4<Float>(1.0, 1.0, 1.0, 1.0))
+
+        // Facing arrow (yellow) — shows the orientation authored into an Object mark.
+        var arrow = facingArrowLines(at: p, euler: probe.rotation, length: len * 1.3)
+        drawWidgetLines(encoder: encoder, vertices: &arrow, viewProjection: vp,
+                        color: SIMD4<Float>(1.0, 0.85, 0.2, 1.0))
     }
 
     /// Draws the saved position marks: each a smaller, single-colour axis-cross +
@@ -1386,6 +1411,12 @@ final class Renderer: NSObject, MTKViewDelegate {
 
             var sphere = SceneWidgets.sphereWireframe(center: p, radius: len * 0.25)
             drawWidgetLines(encoder: encoder, vertices: &sphere, viewProjection: vp, color: c)
+
+            // Object mark facing arrow (the target rotation the model holds at this mark).
+            if let rot = mark.rotation {
+                var arrow = facingArrowLines(at: p, euler: rot, length: len * 4)
+                drawWidgetLines(encoder: encoder, vertices: &arrow, viewProjection: vp, color: c)
+            }
 
             // Dual mark (camera eye→aim, or aimed light pos→target): draw the secondary
             // point in a DISTINCT style — a hollow ring (no axis cross), dimmed, with a
