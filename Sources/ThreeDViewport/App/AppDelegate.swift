@@ -3386,13 +3386,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         probeRefreshMarks()
     }
 
-    /// Mark dropdown changed → load the chosen mark's pose into the probe (or leave the
-    /// probe as-is for "＋ New").
+    /// Mark dropdown changed → load the chosen mark's pose into the probe.  Selecting
+    /// "＋ New Mark" RELEASES the selected mark so arrow-key / drag probe moves no longer
+    /// drag the old mark — the probe can be freely positioned for a fresh mark.
     private func probeMarkChanged() {
         guard let vp = viewportView else { return }
         let probe = vp.probeConfig
         guard let mid = probeInspectorState.selectedMarkID,
-              let idx = probe.marks.firstIndex(where: { $0.id == mid }) else { return }
+              let idx = probe.marks.firstIndex(where: { $0.id == mid }) else {
+            probe.selectedMarkIndex = nil          // "＋ New" → detach from any mark
+            vp.overlayState.markName = nil
+            return
+        }
         let m = probe.marks[idx]
         probe.selectedMarkIndex = idx
         probe.position = m.position
@@ -3409,14 +3414,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private func probeAddMark() {
         guard let vp = viewportView, let owner = probeResolveOwner() else { return }
         let rot: SIMD3<Float>? = (owner.category == .object) ? vp.probeConfig.rotation : nil
+        let before = vp.probeConfig.marks.count
         promptForMark(owner: owner, rotation: rot)
+        // Only re-select if a mark was actually added — a cancelled dialog or the
+        // duplicate-time warning aborts, and we must leave the dropdown on "＋ New Mark"
+        // (and the playhead) untouched.
+        guard vp.probeConfig.marks.count > before, let added = vp.probeConfig.marks.last else { return }
         probeRefreshMarks()
-        // Select the freshly-added mark (last one for this instance).
-        if let last = probeInspectorState.marks.last {
-            probeInspectorState.isUpdating = true
-            probeInspectorState.selectedMarkID = last.id
-            probeInspectorState.isUpdating = false
-        }
+        probeInspectorState.isUpdating = true
+        probeInspectorState.selectedMarkID = added.id
+        probeInspectorState.isUpdating = false
     }
 
     /// Update Mark — commits the probe's current pose (position + rotation for Object
@@ -3452,6 +3459,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let effOwner = editMark?.owner ?? owner
         let category = effOwner?.category
         let time     = editMark?.time ?? viewport.timeline.currentTime
+
+        // Adding a NEW mark for an item that already has one at this time (within a frame)
+        // is almost always the "playhead still sitting on the mark you just navigated to"
+        // mistake — it makes duplicate-time marks that scramble the gait.  Warn + abort so
+        // the user can re-scrub instead.
+        if editing == nil, let ownerID = effOwner?.id {
+            let tol = 1.0 / Double(max(1, Int(viewport.timeline.frameRate)))
+            if let dup = probe.marks.first(where: { $0.owner?.id == ownerID && abs($0.time - time) < tol }) {
+                let warn = NSAlert()
+                warn.messageText     = "A mark already exists here"
+                warn.informativeText = "“\(dup.name)” is already at \(markTimecode(time)). "
+                    + "Scrub the playhead to a different time, then add the new mark."
+                warn.addButton(withTitle: "OK")
+                warn.runModal()
+                return
+            }
+        }
 
         let alert = NSAlert()
         alert.messageText     = editMark != nil ? "Update Mark" : "Mark Position"
@@ -3570,10 +3594,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let viewport = viewportView else { return }
         let probe = viewport.probeConfig
         guard !probe.marks.isEmpty else { return }
-        let n   = probe.marks.count
-        let cur = probe.selectedMarkIndex ?? (step > 0 ? -1 : 0)
-        let idx = ((cur + step) % n + n) % n
-        selectMark(index: idx)
+        // Cycle in TIMELINE order (by mark time), not array/creation order — so a mark
+        // added mid-stream sits where its time puts it, not last.  Ties break by index.
+        let order = probe.marks.indices.sorted { a, b in
+            probe.marks[a].time != probe.marks[b].time
+                ? probe.marks[a].time < probe.marks[b].time
+                : a < b
+        }
+        let n   = order.count
+        let pos = probe.selectedMarkIndex.flatMap { order.firstIndex(of: $0) } ?? (step > 0 ? -1 : 0)
+        let next = ((pos + step) % n + n) % n
+        selectMark(index: order[next])
     }
 
     /// Selects mark `index` and syncs everything to it: reveals + highlights it, moves the
@@ -3992,12 +4023,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             }
             if !owned.isEmpty { marks = owned }
         }
+        // Order the marks by their timeline position (not creation order), so the Path
+        // Marks list reads in walk order and marks added later land in the right place.
+        marks.sort { $0.time < $1.time }
         state.markList = marks
-        // Keep the user's path order, drop marks that are gone, and append any new ones
-        // (so a fresh project defaults to all the target's marks in scene order).
+        // Keep the user's path order + drop marks that are gone; INSERT any new marks at
+        // their time-sorted position (a fresh project then defaults to full time order).
         let valid = Set(marks.map { $0.id })
+        let timeByID = Dictionary(marks.map { ($0.id, $0.time) }, uniquingKeysWith: { a, _ in a })
         state.pathMarks = state.pathMarks.filter { valid.contains($0) }
-        state.pathMarks += marks.map { $0.id }.filter { !state.pathMarks.contains($0) }
+        for m in marks where !state.pathMarks.contains(m.id) {
+            let insertAt = state.pathMarks.firstIndex { (timeByID[$0] ?? 0) > m.time } ?? state.pathMarks.count
+            state.pathMarks.insert(m.id, at: insertAt)
+        }
     }
 
     @objc private func showGaitAnimator(_ sender: Any) {
@@ -4162,8 +4200,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard path.count >= 2 else {
             state.validationAlert = "Couldn't build a path from these marks."; return
         }
-        viewport.startProbeRehearsal(path: path)
-        state.status = "Rehearsing pace along \(positions.count) marks…"
+        // De-select any position mark before rehearsing: clear the Timeline diamond
+        // highlight and reset the Probe Inspector's Mark dropdown to "＋ New Mark".
+        timelineEditorWC?.editorView.clearDiamondSelection()
+        probeInspectorState.isUpdating = true
+        probeInspectorState.selectedMarkID = nil
+        probeInspectorState.isUpdating = false
+        viewport.startProbeRehearsal(path: path)   // also clears probeConfig.selectedMarkIndex
+        state.status = "Rehearsing \(positions.count) marks (playback)…"
     }
 
     // MARK: - Orbit Path Animator

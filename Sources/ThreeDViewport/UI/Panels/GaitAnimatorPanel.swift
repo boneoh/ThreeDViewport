@@ -66,6 +66,10 @@ struct GaitAnimatorPanel: View {
     /// Fires when the Target changes so the marks picker can re-filter to that model.
     let onTargetChanged: () -> Void
 
+    /// Keeps keyboard focus on the Rehearse button after a click (instead of the Speed
+    /// field), so Space/Enter re-toggles it and other keys forward to the viewport.
+    @FocusState private var rehearseFocused: Bool
+
     /// Seconds → MM:SS:FF (frames at timeline.frameRate), matching the viewport playhead.
     private func timecode(_ t: Double) -> String {
         let fr          = max(1, Int(timeline.frameRate))
@@ -184,11 +188,16 @@ struct GaitAnimatorPanel: View {
                         .font(.caption).foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     // Probe pace preview — confirm mark timing/speed before baking the gait.
-                    Button(action: rehearse) {
+                    // Grab focus on click so the Speed field stops eating keystrokes and
+                    // Space/Enter re-toggles while other keys forward to the viewport.
+                    Button(action: { rehearse(); rehearseFocused = true }) {
                         Text(state.isRehearsing ? "Stop Rehearsal" : "Rehearse Pace")
                             .frame(maxWidth: .infinity)
                     }
                     .disabled(!state.useMarkTimes)
+                    .keyboardShortcut(.defaultAction)   // Return toggles, regardless of focus
+                    .focusable()
+                    .focused($rehearseFocused)
                     Text("Flies the probe along the marks at the gait's pace (with pauses) — no keyframes changed.")
                         .font(.caption).foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -229,10 +238,11 @@ struct GaitAnimatorPanel: View {
                 .padding(4)
             }
 
+            // Click-only (no Return default): Create Keyframes is destructive (it rebakes,
+            // wiping keyframes from the gait start onward), so Return drives Rehearse instead.
             Button(action: create) {
                 Text("Create Keyframes").frame(maxWidth: .infinity)
             }
-            .keyboardShortcut(.defaultAction)
             .disabled(isTargetLocked(state.capturedRef))
 
             if !state.status.isEmpty {

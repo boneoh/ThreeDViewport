@@ -1441,35 +1441,43 @@ final class ViewportView: MTKView {
     }
 
     /// Scene-mode only: aim the Director at the bake Probe from the current viewing
-    // ── Gait pace rehearsal (probe preview) ──────────────────────────────────
-    // Flies the probe along the gait's timed root path on a wall-clock timer so the
-    // user can confirm mark timing/speed before baking.  Independent of the timeline
-    // playhead; changes no keyframes.
+    // ── Gait pace rehearsal (ranged playback) ────────────────────────────────
+    // Plays the timeline from the gait's first mark (A) to its last (B), then stops —
+    // so the playhead scrubs (showing where the next edit goes) AND every object
+    // animates (multi-character interaction previews correctly).  The probe also flies
+    // the planned gait path, sampled at the live playhead, so a pre-bake pacing preview
+    // still works.  Changes no keyframes.
     private var rehearseTimer:     Timer? = nil
     private var rehearsePath:      [(t: Double, pos: SIMD3<Float>, rot: simd_quatf)] = []
-    private var rehearseStartWall: CFTimeInterval = 0
     private var rehearseFirstT:    Double = 0
     private var rehearseLastT:     Double = 0
+    private var rehearseSavedLooping: Bool? = nil   // restored when the rehearsal ends
 
     /// Euler° (for the probe gizmo arrow) of a rotation quaternion.
     private func probeEuler(_ q: simd_quatf) -> SIMD3<Float> {
         TransformMath.eulerFromMatrix(simd_float4x4(q))
     }
 
-    /// Begins replaying `path` (gait root keys: time + world position + facing quaternion)
-    /// on the probe — the gizmo's facing arrow turns at stands to preview the mark facings.
-    /// Rotations are slerped (shortest-path) like real playback, so the arrow never swings
-    /// the long way around at heading wraps.
+    /// Begins the rehearsal: seek to A (first path key), play to B (last), then stop.
+    /// `path` is the gait root path (time + world position + facing quaternion) used to
+    /// fly the probe in sync with the playhead.  Deselects any mark so it isn't edited.
     func startProbeRehearsal(path: [(t: Double, pos: SIMD3<Float>, rot: simd_quatf)]) {
         stopProbeRehearsal()
         guard path.count >= 2 else { return }
-        rehearsePath      = path
-        rehearseFirstT    = path.first!.t
-        rehearseLastT     = path.last!.t
-        rehearseStartWall = CACurrentMediaTime()
+        rehearsePath   = path
+        rehearseFirstT = path.first!.t
+        rehearseLastT  = path.last!.t
+        // Release any selected mark so the rehearsal doesn't drag/highlight it.
+        probeConfig.selectedMarkIndex = nil
+        overlayState.markName = nil
         probeConfig.isVisible = true
         probeConfig.position  = path.first!.pos
         probeConfig.rotation  = probeEuler(path.first!.rot)
+        // Ranged playback A → B: disable looping so it actually stops at B.
+        rehearseSavedLooping = timeline.isLooping
+        timeline.isLooping = false
+        timeline.seek(to: rehearseFirstT)
+        timeline.play()
         gaitState.isRehearsing = true
         needsDisplay = true
         let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
@@ -1477,27 +1485,35 @@ final class ViewportView: MTKView {
         }
         RunLoop.main.add(timer, forMode: .common)
         rehearseTimer = timer
-        print("[DEBUG] ViewportView: probe rehearsal started (\(path.count) samples, "
-            + String(format: "%.2f", rehearseLastT - rehearseFirstT) + "s)")
+        print("[DEBUG] ViewportView: rehearsal playback "
+            + String(format: "%.2f→%.2fs", rehearseFirstT, rehearseLastT))
     }
 
-    /// Stops the rehearsal (timer off, flag cleared).  Leaves the probe where it is.
+    /// Stops the rehearsal: pauses playback, restores looping, clears the flag.  Leaves
+    /// the playhead where it stopped (≈ B) so the user sees the next edit point.
     func stopProbeRehearsal() {
         rehearseTimer?.invalidate()
         rehearseTimer = nil
         rehearsePath  = []
-        if gaitState.isRehearsing { gaitState.isRehearsing = false }
+        if let saved = rehearseSavedLooping { timeline.isLooping = saved; rehearseSavedLooping = nil }
+        if gaitState.isRehearsing {
+            timeline.pause()
+            gaitState.isRehearsing = false
+        }
     }
 
     private func tickProbeRehearsal() {
         guard !rehearsePath.isEmpty else { stopProbeRehearsal(); return }
-        let t = rehearseFirstT + (CACurrentMediaTime() - rehearseStartWall)
-        if t >= rehearseLastT {
-            probeConfig.position = rehearsePath.last!.pos
-            probeConfig.rotation = probeEuler(rehearsePath.last!.rot)
-            needsDisplay = true
+        let t = timeline.currentTime   // driven by playback now (not wall-clock)
+        // Reached the end, or playback wrapped/jumped out of the range → finish.
+        if t >= rehearseLastT - 1e-4 || t < rehearseFirstT - 0.25 {
+            let last = rehearsePath.last!
+            timeline.seek(to: rehearseLastT)          // land exactly on B (next edit point)
+            probeConfig.position = last.pos
+            probeConfig.rotation = probeEuler(last.rot)
             stopProbeRehearsal()
             gaitState.status = "Rehearsal complete."
+            needsDisplay = true
             return
         }
         let s = rehearseSampleAt(t)

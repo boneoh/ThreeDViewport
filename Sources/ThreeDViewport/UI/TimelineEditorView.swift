@@ -2723,6 +2723,12 @@ final class TimelineEditorView: NSView {
         needsDisplay       = true
     }
 
+    /// Clears any selected keyframe/diamond highlight (e.g. when a rehearsal deselects marks).
+    func clearDiamondSelection() {
+        multiSelectedDiamonds.removeAll()
+        select(trackIndex: nil, kfIndex: nil)
+    }
+
     /// Highlights the Timeline diamond for the global probe-mark index, so the mark
     /// the viewport just selected (N / Shift+N) appears selected in the grid like a
     /// clicked keyframe.  No-op for legacy/probe-only marks (no owner row) or when
