@@ -20,8 +20,11 @@ struct Interpolation {
         return a + (b - a) * t
     }
 
-    // Spherical linear interpolation for quaternions
+    // Spherical linear interpolation for quaternions, always along the SHORT arc.
+    // simd_slerp does NOT pick the shorter arc when the two quaternions are in opposite
+    // hemispheres (e.g. a heading crossing ±180°), so flip `b` into `a`'s hemisphere
+    // first — otherwise a gait turn could spin ~358° the long way.
     static func slerp(from a: simd_quatf, to b: simd_quatf, t: Float) -> simd_quatf {
-        return simd_slerp(a, b, t)
+        return simd_slerp(a, EasingMode.qFlip(b, like: a), t)
     }
 }

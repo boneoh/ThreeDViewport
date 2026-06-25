@@ -253,7 +253,8 @@ struct GaitGenerator {
             // rest 0 (walking) = travel heading; rest 1 (standing) = the target.  Marks
             // with no target rotation leave the travel heading unchanged.
             if let target = sample.targetRot, rest > 1e-4 {
-                rotation = simd_slerp(rotation, target, rest)
+                // qFlip so the model turns to the target the SHORT way (no long-way spin).
+                rotation = simd_slerp(rotation, EasingMode.qFlip(target, like: rotation), rest)
             }
             let yOffset  = (gait == .swim) ? groundOffset * rest : groundOffset
             let y        = pos.y + yOffset + GaitCycle.bob(gait, phase: phase, params) * (1 - rest)
