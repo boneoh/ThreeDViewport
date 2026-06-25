@@ -4078,6 +4078,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             rehearse: { [weak self] in self?.gaitRehearse() },
             isTargetLocked: { [weak viewport] ref in
                 guard let ref, let viewport else { return false }
+                // A gait rebakes the whole model, so only block it when the WHOLE model is
+                // locked (the .model header lock) — not when just the "Model Position" track
+                // (.group) is locked to protect the root path while editing a part.
+                if case .group(let gid) = ref { return viewport.isLocked(.model(gid)) }
                 return viewport.isLocked(ref)
             },
             onTargetChanged: { [weak self] in self?.syncGaitPanelToProject() }
