@@ -30,6 +30,25 @@ struct GaitGenerator {
     /// - strideLength: distance covered by one full gait cycle (both feet step once).
     /// - groupScale:   keep the model's current scale on the root keyframes.
     /// - availableJoints: part names present in the target model (for missing-joint report).
+    /// Paced timing: derive each mark's time from a fixed start (the first mark), the walk
+    /// `speed`, and per-mark `pauses` (seconds spent standing at a mark after arriving),
+    /// measured along the path spline.  `t[i] = t[i-1] + pauses[i-1] + segmentDistance/speed`.
+    /// Returns one time per input position (count == positions.count).
+    static func pacedTimes(positions: [SIMD3<Float>], pauses: [Double],
+                           speed: Float, startTime: Double) -> [Double] {
+        let n = positions.count
+        guard n >= 1 else { return [] }
+        guard n >= 2, speed > 1e-4 else { return Array(repeating: startTime, count: n) }
+        let md = CatmullRom(points: positions).markDistances
+        var times = [Double](repeating: startTime, count: n)
+        for i in 1..<n {
+            let seg       = Double(max(0, md[i] - md[i - 1]))
+            let pausePrev = (i - 1 < pauses.count) ? max(0, pauses[i - 1]) : 0
+            times[i] = times[i - 1] + pausePrev + seg / Double(speed)
+        }
+        return times
+    }
+
     static func generate(gait: GaitType,
                          params: GaitParams,
                          marks: [SIMD3<Float>],

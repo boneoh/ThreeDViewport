@@ -770,7 +770,8 @@ final class ProjectFile {
                 time:     (md.time ?? 0) + T,
                 owner:    owner,
                 secondaryPosition: secondary,
-                rotation: rot))
+                rotation: rot,
+                pauseDuration: md.pause ?? 0))
             added += 1
         }
         if added > 0 { vp.probeConfig.marksVisible = true }
@@ -1143,7 +1144,7 @@ final class ProjectFile {
         }
 
         return ProjectData(
-            version:             42,   // v42: per-model root-path ("Model Position") track lock
+            version:             43,   // v43: paced gait timing — per-mark pause durations
             modelPath:           nil,           // v3+ uses modelPaths instead
             modelPaths:          modelPaths,
             timeline:            timelineData,
@@ -1198,7 +1199,8 @@ final class ProjectFile {
                                                         sz2: $0.secondaryPosition?.z,
                                                         rx: $0.rotation?.x,
                                                         ry: $0.rotation?.y,
-                                                        rz: $0.rotation?.z)
+                                                        rz: $0.rotation?.z,
+                                                        pause: $0.pauseDuration)
                                            },
                                            marksVisible: vp.probeConfig.marksVisible,
                                            visible:      vp.probeConfig.isVisible,
@@ -1566,7 +1568,8 @@ final class ProjectFile {
                              time:     md.time ?? 0,
                              owner:    owner,
                              secondaryPosition: secondary,
-                             rotation: rot)
+                             rotation: rot,
+                             pauseDuration: md.pause ?? 0)
         }
         vp.probeConfig.marksVisible = data.probe.marksVisible ?? false
         vp.probeConfig.isVisible    = data.probe.visible ?? false

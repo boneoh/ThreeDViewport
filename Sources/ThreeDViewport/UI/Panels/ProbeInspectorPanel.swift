@@ -45,11 +45,27 @@ struct ProbeInspectorPanel: View {
     @ObservedObject var clipboard: CoordinateClipboard
     /// Marked dirty + state persisted when the gizmo visibility toggle changes.
     var onVisibilityChanged: () -> Void = {}
+    /// Marks the project dirty after a per-mark Pause edit.
+    var onPauseEdited: () -> Void = {}
 
     private let rotationRange: ClosedRange<Float> = -180...180
 
     /// True when a real (non-"New") mark is selected — enables Update.
     private var hasSelectedMark: Bool { state.selectedMarkID != nil }
+
+    /// Live binding to the selected mark's gait pause (seconds); 0 when none selected.
+    private var pauseBinding: Binding<Double> {
+        Binding(
+            get: {
+                guard let i = probe.selectedMarkIndex, probe.marks.indices.contains(i) else { return 0 }
+                return probe.marks[i].pauseDuration
+            },
+            set: { v in
+                guard let i = probe.selectedMarkIndex, probe.marks.indices.contains(i) else { return }
+                probe.marks[i].pauseDuration = max(0, v)
+                onPauseEdited()
+            })
+    }
 
     /// Instances grouped into sections (a model's name heads its parts; "" = top level),
     /// preserving first-appearance order.
@@ -154,6 +170,24 @@ struct ProbeInspectorPanel: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     .disabled(probe.isLocked)
+
+                    // Gait pause: how long the model stands at THIS mark before walking on.
+                    Group {
+                        HStack {
+                            Text("Pause").font(.headline)
+                            Spacer()
+                            TextField("", value: pauseBinding, format: .number)
+                                .textFieldStyle(.roundedBorder).frame(width: 70)
+                                .multilineTextAlignment(.trailing)
+                            Text("s").font(.caption).foregroundStyle(.secondary)
+                        }
+                        Text(hasSelectedMark
+                             ? "Seconds the model waits here before walking to the next mark."
+                             : "Select a mark to set its pause.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .disabled(probe.isLocked || !hasSelectedMark)
                 }
 
                 // ── Add / Update ──────────────────────────────────────────────

@@ -428,6 +428,8 @@ struct MarkData: Codable {
     var sx2: Float? = nil; var sy2: Float? = nil; var sz2: Float? = nil
     // v42: target facing (Euler degrees) for an OBJECT mark; nil = no target rotation.
     var rx: Float? = nil; var ry: Float? = nil; var rz: Float? = nil
+    // v43: gait pause (seconds) at this mark; nil/absent = 0 (no pause).
+    var pause: Double? = nil
 }
 
 // v23: One atmosphere keyframe (fog volume or particle emitter).  Mirrors

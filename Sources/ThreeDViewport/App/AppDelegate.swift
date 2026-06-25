@@ -3192,7 +3192,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         panel.contentView = FirstClickHostingView(rootView: ProbeInspectorPanel(
             probe: viewport.probeConfig, state: pstate, clipboard: viewport.coordinateClipboard,
-            onVisibilityChanged: { [weak self] in self?.markDirty() }))
+            onVisibilityChanged: { [weak self] in self?.markDirty() },
+            onPauseEdited:       { [weak self] in self?.markDirty() }))
 
         if let win = window {
             let winFrame  = win.frame
@@ -4101,10 +4102,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard case .group(let gid)? = state.capturedRef else {
             state.validationAlert = "Pick a model (group) to walk."; return
         }
-        // The selected marks, in the user's picker order.
+        // The selected marks, in the user's PATH order (the walk sequence).
         var markByID: [UUID: ProbeMark] = [:]
         for m in viewport.probeConfig.marks { markByID[m.id] = m }
-        var selected = state.pathMarks.compactMap { markByID[$0] }
+        let selected = state.pathMarks.compactMap { markByID[$0] }
         guard selected.count >= 2 else {
             state.validationAlert = "Select at least two path marks."; return
         }
@@ -4117,19 +4118,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             state.validationAlert = "Stride must be a positive number."; return
         }
 
-        // Timed mode: the marks' timestamps drive timing (walk at pace, dwell on slack);
-        // sort by time so order = schedule.  Otherwise: picker order, start at playhead.
-        var markTimes: [Double]? = nil
-        var start = viewport.timeline.currentTime
-        if state.useMarkTimes {
-            selected.sort { $0.time < $1.time }
-            markTimes = selected.map { $0.time }
-            start     = selected.first?.time ?? start
-        }
+        // Paced timing: derive each mark's time from the first mark + speed + per-mark
+        // pauses, in path order, and write them back so the Timeline reflects the schedule.
+        let markTimes = applyPacedTimes(pathMarks: selected, speed: speed)
+        let start     = markTimes.first ?? viewport.timeline.currentTime
         let positions = selected.map { $0.position }
-        // Per-mark target facing (Euler°, nil where unset) — the model turns to it while
-        // standing at that mark (Phase 2).
-        let rotations = selected.map { $0.rotation }
+        let rotations = selected.map { $0.rotation }   // per-mark target facing (Euler°)
 
         // Tuning multipliers (default 1.0 when a field is blank/invalid).
         func mul(_ s: String) -> Float { Float(s).map { $0 > 0 ? $0 : 1 } ?? 1 }
@@ -4147,12 +4141,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         timelineEditorWC?.editorView.needsDisplay = true
         markDirty()
         var msg = "Created \(state.gait.label) along \(positions.count) marks."
-        if state.useMarkTimes, result.spedUp > 0 {
-            msg += " \(result.spedUp) segment(s) sped up to keep timing."
-        }
         if !missing.isEmpty { msg += " Missing joints skipped: \(missing.joined(separator: ", "))." }
         state.status = msg
-        print("[DEBUG] AppDelegate: gait created (timed: \(state.useMarkTimes), spedUp: \(result.spedUp), missing: \(missing))")
+        print("[DEBUG] AppDelegate: gait created (paced, missing: \(missing))")
+    }
+
+    /// Recomputes paced mark times (anchored at the first path mark, + speed + per-mark
+    /// pauses, along the path spline) and writes them back to probeConfig.marks so the
+    /// Timeline reflects the schedule.  Returns the times in path order.
+    @discardableResult
+    private func applyPacedTimes(pathMarks: [ProbeMark], speed: Float) -> [Double] {
+        guard let vp = viewportView, !pathMarks.isEmpty else { return [] }
+        let positions = pathMarks.map { $0.position }
+        let pauses    = pathMarks.map { $0.pauseDuration }
+        let start     = pathMarks.first?.time ?? 0
+        let times = GaitGenerator.pacedTimes(positions: positions, pauses: pauses,
+                                             speed: speed, startTime: start)
+        var changed = false
+        for (i, m) in pathMarks.enumerated() where i < times.count {
+            if let idx = vp.probeConfig.marks.firstIndex(where: { $0.id == m.id }),
+               vp.probeConfig.marks[idx].time != times[i] {
+                vp.probeConfig.marks[idx].time = times[i]
+                changed = true
+            }
+        }
+        if changed { markDirty() }
+        return times
     }
 
     /// Probe pace rehearsal: flies the probe along the selected marks at the gait's timed
@@ -4168,16 +4182,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // Gather marks in time order (rehearsal is timed-mode only).
         var markByID: [UUID: ProbeMark] = [:]
         for m in viewport.probeConfig.marks { markByID[m.id] = m }
-        var selected = state.pathMarks.compactMap { markByID[$0] }
+        let selected = state.pathMarks.compactMap { markByID[$0] }   // PATH order
         guard selected.count >= 2 else {
             state.validationAlert = "Select at least two path marks to rehearse."; return
         }
         guard let speed = Float(state.speed), speed > 0 else {
             state.validationAlert = "Speed must be a positive number."; return
         }
-        selected.sort { $0.time < $1.time }
+        // Paced timing: derive + write the schedule (so the Timeline + playback match).
+        let markTimes = applyPacedTimes(pathMarks: selected, speed: speed)
         let positions = selected.map { $0.position }
-        let markTimes = selected.map { $0.time }
         let rotations = selected.map { $0.rotation }   // turn the probe at stands too
 
         // Stride only affects sample density / bob phase here, not the root path timing.

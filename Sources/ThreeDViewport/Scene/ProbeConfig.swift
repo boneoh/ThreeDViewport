@@ -61,6 +61,9 @@ struct ProbeMark: Identifiable {
     /// Optional target facing (Euler degrees, YXZ) for an OBJECT mark — the direction
     /// the model holds while standing at this mark during gait.  nil = use travel heading.
     var rotation: SIMD3<Float>? = nil
+    /// Gait pause (seconds) — how long the model stands at this mark after arriving,
+    /// before walking on.  Paced timing derives mark times from speed + these pauses.
+    var pauseDuration: Double = 0
 }
 
 /// Editor-only bake probe: the world-space point the scene is captured from when

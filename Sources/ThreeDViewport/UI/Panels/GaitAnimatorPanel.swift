@@ -17,12 +17,6 @@ final class GaitAnimatorState: ObservableObject {
     @Published var capturedRef: TrackRef? = nil
     @Published var gait:        GaitType = .walk
 
-    /// When on, the marks' timestamps drive timing: walk at the pace between marks and
-    /// dwell (stand) on any leftover time so the model hits each mark at its time; a
-    /// too-short segment speeds up to arrive on time.  Off = constant-speed walk through
-    /// the marks in picker order, starting at the playhead.
-    @Published var useMarkTimes: Bool = true
-
     @Published var speed:  String = "1.5"
     @Published var stride: String = "1.6"
     /// Derive stride from the model's legs + swing so the feet don't skate; disables the
@@ -55,7 +49,7 @@ final class GaitAnimatorState: ObservableObject {
 
 struct GaitAnimatorPanel: View {
     @ObservedObject var state: GaitAnimatorState
-    /// Live timeline so the "Start at playhead" timecode tracks the playhead.
+    /// Live timeline (kept for transport context; paced timing derives mark times).
     @ObservedObject var timeline: Timeline
 
     let create: () -> Void
@@ -69,17 +63,6 @@ struct GaitAnimatorPanel: View {
     /// Keeps keyboard focus on the Rehearse button after a click (instead of the Speed
     /// field), so Space/Enter re-toggles it and other keys forward to the viewport.
     @FocusState private var rehearseFocused: Bool
-
-    /// Seconds → MM:SS:FF (frames at timeline.frameRate), matching the viewport playhead.
-    private func timecode(_ t: Double) -> String {
-        let fr          = max(1, Int(timeline.frameRate))
-        let totalFrames = Int(max(0, t) * timeline.frameRate)
-        let frames      = totalFrames % fr
-        let totalSecs   = totalFrames / fr
-        let secs        = totalSecs % 60
-        let mins        = totalSecs / 60
-        return String(format: "%02d:%02d:%02d", mins, secs, frames)
-    }
 
     /// Marks not yet in the path, in scene order (for the "Add" menu).
     private var unusedMarks: [ProbeMark] {
@@ -181,24 +164,21 @@ struct GaitAnimatorPanel: View {
             // ── Parameters ────────────────────────────────────────────────────
             GroupBox(label: Text("Parameters").font(.headline)) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Toggle("Use mark times (pause for slack)", isOn: $state.useMarkTimes)
-                    Text(state.useMarkTimes
-                         ? "Hits each mark at its timestamp; Speed is the walk pace, extra time is a pause."
-                         : "Constant-speed walk through the marks in order, starting at the playhead.")
+                    Text("Walks at Speed and holds each mark's Pause (set per mark in the Probe "
+                        + "Inspector).  Mark times are derived from the first mark + speed + pauses.")
                         .font(.caption).foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    // Probe pace preview — confirm mark timing/speed before baking the gait.
-                    // Grab focus on click so the Speed field stops eating keystrokes and
-                    // Space/Enter re-toggles while other keys forward to the viewport.
+                    // Rehearse = ranged playback A→B.  Grab focus on click so the Speed field
+                    // stops eating keystrokes and Return re-toggles.
                     Button(action: { rehearse(); rehearseFocused = true }) {
                         Text(state.isRehearsing ? "Stop Rehearsal" : "Rehearse Pace")
                             .frame(maxWidth: .infinity)
                     }
-                    .disabled(!state.useMarkTimes)
                     .keyboardShortcut(.defaultAction)   // Return toggles, regardless of focus
                     .focusable()
                     .focused($rehearseFocused)
-                    Text("Flies the probe along the marks at the gait's pace (with pauses) — no keyframes changed.")
+                    Text("Plays from the first to the last mark (objects animate, playhead scrubs) "
+                        + "then stops — no keyframes changed.")
                         .font(.caption).foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     HStack {
@@ -214,13 +194,6 @@ struct GaitAnimatorPanel: View {
                         Text("units/cycle").font(.caption).foregroundColor(.secondary)
                     }
                     .opacity(state.autoStride ? 0.5 : 1)
-                    HStack {
-                        Text("Start at playhead").frame(width: 110, alignment: .leading)
-                        Spacer()
-                        Text(timecode(timeline.currentTime)).font(.system(.caption, design: .monospaced))
-                            .foregroundColor(.secondary)
-                    }
-                    .opacity(state.useMarkTimes ? 0.4 : 1)   // ignored in timed mode
                 }
                 .padding(4)
             }
