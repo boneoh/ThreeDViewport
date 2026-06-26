@@ -774,7 +774,7 @@ final class ProjectFile {
                 pauseDuration: md.pause ?? 0))
             added += 1
         }
-        if added > 0 { vp.probeConfig.marksVisible = true }
+        // Don't force marks visible on import — leave the current scene's visibility as-is.
         print("[DEBUG] ProjectFile: imported \(added) position mark(s)")
     }
 
