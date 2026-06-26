@@ -160,6 +160,11 @@ final class VideoExporter {
 
     // Phase 8+: rendering options matching the live display
     var colorMode:     RenderColorMode = .color
+    // When true, a 4444 colour pass keeps the geometry COVERAGE alpha (1 = solid
+    // foreground, 0 = background) instead of rewriting alpha to Rec.709 luma.  Used
+    // by the Actor Solo pass so an opaque actor composites cleanly (premultiplied)
+    // in DaVinci Resolve without dark regions going semi-transparent.
+    var keepCoverageAlpha: Bool = false
     var isWireframe:   Bool = false
     var showAxesGizmo: Bool = false
 
@@ -412,7 +417,7 @@ final class VideoExporter {
         // Grade and luma-alpha fullscreen passes (both blit colorTex→grade→colorTex).
         let pipelineDepth = (feedbackSettings?.isEnabled == true) ? 1 : 2
         let needGrade     = (colorGradeSettings.map { !$0.isIdentity } ?? false)
-        let needLumaAlpha = (codec == .proRes4444 && colorMode == .color)
+        let needLumaAlpha = (codec == .proRes4444 && colorMode == .color && !keepCoverageAlpha)
         let needFXAA      = (fxaaEnabled && colorMode == .color)   // matte passes stay crisp
         let needIntermediate = needGrade || needLumaAlpha || needFXAA
         var slots: [(color: MTLTexture, staging: MTLTexture,
@@ -1095,8 +1100,9 @@ final class VideoExporter {
 
         // ── Luma alpha (ProRes 4444 color passes) ─────────────────────────────
         // Rewrites the alpha channel to Rec.709 luma of the RGB (RGB unchanged).
-        // Matte (.blackWhite) and 422 passes skip this and keep the coverage alpha.
-        if activeCodec == .proRes4444, colorMode == .color,
+        // Matte (.blackWhite) and 422 passes skip this and keep the coverage alpha;
+        // so does an Actor Solo pass (keepCoverageAlpha) — see the property note.
+        if activeCodec == .proRes4444, colorMode == .color, !keepCoverageAlpha,
            let gTex     = gradeTex,
            let pipeline = lumaAlphaPipelineState {
             if let blit = commandBuffer.makeBlitCommandEncoder() {

@@ -3133,6 +3133,7 @@ final class ViewportView: MTKView {
 
     func startExport(to url: URL, codec: ExportCodec, fps: ExportFrameRate,
                      exportState: ExportState, includeFX: Bool = true,
+                     keepCoverageAlpha: Bool = false,
                      rangeStart: Double = 0, rangeEnd: Double? = nil,
                      onCompletion: ((Error?) -> Void)? = nil) {
         guard let dev = device else {
@@ -3172,6 +3173,7 @@ final class ViewportView: MTKView {
         }
 
         exporter.colorMode          = renderSettings.colorMode
+        exporter.keepCoverageAlpha  = keepCoverageAlpha
         exporter.isWireframe        = renderer?.isWireframe      ?? false
         exporter.showAxesGizmo      = renderSettings.showAxesGizmo
         exporter.marks              = probeConfig.marks
@@ -3230,6 +3232,9 @@ final class ViewportView: MTKView {
         let matte:   Bool            // true → Black+White matte colour mode
         let blackBg: Bool            // true → solid-black background override
         let fx:      Bool            // true → render fog + particles + lasers
+        // true → keep geometry coverage alpha on the 4444 colour pass instead of
+        // luma (opaque foreground; clean premultiplied composite in Resolve).
+        var coverageAlpha: Bool = false
     }
 
     /// Runs the full multi-pass export cycle sequentially, writing
@@ -3249,7 +3254,7 @@ final class ViewportView: MTKView {
                        matte: false, blackBg: false, fx: true)
         ]
         if present.contains(.actor) {
-            passes.append(ExportPass(name: "Actor Solo",  visible: [.actor], matte: false, blackBg: true, fx: false))
+            passes.append(ExportPass(name: "Actor Solo",  visible: [.actor], matte: false, blackBg: true, fx: false, coverageAlpha: true))
             passes.append(ExportPass(name: "Actor Matte", visible: [.actor], matte: true,  blackBg: true, fx: false))
         }
         // Background glass always renders; the holdout silhouettes are re-stamped pure
@@ -3294,7 +3299,7 @@ final class ViewportView: MTKView {
             exportState.lastMessage = "Exporting pass \(i + 1)/\(total): \(pass.name)"
             let url = folder.appendingPathComponent("\(projectName).\(nn).\(pass.name).mov")
             startExport(to: url, codec: codec, fps: fps, exportState: exportState,
-                        includeFX: pass.fx) { error in
+                        includeFX: pass.fx, keepCoverageAlpha: pass.coverageAlpha) { error in
                 if let error = error { onAllComplete(error); return }
                 runPass(i + 1)   // startExport's completion is delivered on the main thread
             }
