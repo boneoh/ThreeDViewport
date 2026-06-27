@@ -80,7 +80,12 @@ fragment float4 fxaa_fragment(
     constexpr sampler s(filter::linear, address::clamp_to_edge);
     float2 uv = in.uv;
 
-    float3 rgbM  = src.sample(s, uv).rgb;
+    // Preserve the centre pixel's alpha (coverage matte for the Actor Solo pass);
+    // FXAA only resolves RGB.  Other passes overwrite alpha downstream (luma) or
+    // ignore it (viewport drawable), so carrying it through is safe everywhere.
+    float4 srcM  = src.sample(s, uv);
+    float  aM    = srcM.a;
+    float3 rgbM  = srcM.rgb;
     float3 rgbNW = src.sample(s, uv + float2(-1.0, -1.0) * invRes).rgb;
     float3 rgbNE = src.sample(s, uv + float2( 1.0, -1.0) * invRes).rgb;
     float3 rgbSW = src.sample(s, uv + float2(-1.0,  1.0) * invRes).rgb;
@@ -97,7 +102,7 @@ fragment float4 fxaa_fragment(
 
     // Flat region → no edge → leave the pixel untouched (keeps interiors sharp).
     if (lumaMax - lumaMin < lumaMax * 0.125 + 0.02) {
-        return float4(rgbM, 1.0);
+        return float4(rgbM, aM);
     }
 
     // Edge direction (perpendicular to the luma gradient).
@@ -118,9 +123,9 @@ fragment float4 fxaa_fragment(
     float lumaB = fxaaLuma(rgbB);
     // If the wider tap overshoots the local range, fall back to the narrow blend.
     if (lumaB < lumaMin || lumaB > lumaMax) {
-        return float4(rgbA, 1.0);
+        return float4(rgbA, aM);
     }
-    return float4(rgbB, 1.0);
+    return float4(rgbB, aM);
 }
 
 // ── Luma-alpha pass ────────────────────────────────────────────────────────────
