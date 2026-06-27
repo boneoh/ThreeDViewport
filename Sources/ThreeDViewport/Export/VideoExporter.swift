@@ -1067,6 +1067,30 @@ final class VideoExporter {
             }
         }
 
+        // ── Holdout re-stamp over the final composite (excludeBg only) ────────
+        // In the environment-excluded feedback path the holdout silhouettes were cut
+        // into the foreground feedback texture (alpha 0), but the source-over composite
+        // re-laid the fresh HDR skybox under them, so the background leaks through the
+        // holes.  Re-punch pure black onto colorTex using the preserved scene depth
+        // (.lessEqual, no write) so the holes key cleanly while nearer visible geometry
+        // — e.g. a background wall in front of a hidden actor — stays untouched.
+        // Holdouts only exist in solo/matte/background passes (fx = false), so no fog /
+        // particles / lasers are present here to be blacked out.
+        if excludeBg, let rDS = holdoutRestampDepthState, !holdoutObjects.isEmpty,
+           let depthTex = feedbackProc?.depthTexture {
+            let desc = MTLRenderPassDescriptor()
+            desc.colorAttachments[0].texture     = colorTex
+            desc.colorAttachments[0].loadAction  = .load
+            desc.colorAttachments[0].storeAction = .store
+            desc.depthAttachment.texture         = depthTex
+            desc.depthAttachment.loadAction      = .load
+            desc.depthAttachment.storeAction     = .store
+            if let enc = commandBuffer.makeRenderCommandEncoder(descriptor: desc) {
+                encodeHoldouts(holdoutObjects, depthState: rDS, into: enc)
+                enc.endEncoding()
+            }
+        }
+
         // ── Axes gizmo overlay (bottom-right corner) ──────────────────────────
         if showAxesGizmo {
             drawGizmoPass(commandBuffer: commandBuffer, dest: colorTex)
