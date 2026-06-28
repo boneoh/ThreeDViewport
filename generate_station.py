@@ -70,6 +70,7 @@ ICOSPHERE_SUBDIV = 2
 INNER_INSET     = 0.005   # 0.5% scale toward each part's local centre
 INNER_METALNESS = 0.00    # matches the "Matte Plastic" preset in generate_models.py
 INNER_ROUGHNESS = 0.85
+INNER_BOND_COLOR = (255, 255, 255)   # bond interior: self-illuminated flat white
 
 # Glass panes filling the window cutouts (NOT the doorway cutouts — those
 # stay open). The glass material is the same across every batch combination
@@ -173,9 +174,14 @@ def _inner_bond(p0, p1, outer_radius, inset=INNER_INSET, sections=10):
     return inner
 
 
-def _apply_solid_color_doublesided(mesh, rgb, metalness, roughness):
+def _apply_solid_color_doublesided(mesh, rgb, metalness, roughness, emissive_rgb=None):
     """Like _apply_solid_color but with doubleSided = True so the interior
     surface is visible through the cutout windows (and vice versa).
+
+    `emissive_rgb` (optional 0–255 tuple) sets a glTF emissiveFactor so the
+    surface self-illuminates: the app's shader does `color += emissive`, so it
+    reads at that colour even in an unlit interior (used for the flat-white bond
+    interior).
     """
     r, g, b = [c / 255.0 for c in rgb]
     mat = trimesh.visual.material.PBRMaterial(
@@ -184,6 +190,8 @@ def _apply_solid_color_doublesided(mesh, rgb, metalness, roughness):
         roughnessFactor=roughness,
         doubleSided=True,
     )
+    if emissive_rgb is not None:
+        mat.emissiveFactor = [c / 255.0 for c in emissive_rgb]
     _  = mesh.vertex_normals
     uv = np.zeros((len(mesh.vertices), 2), dtype=np.float32)
     mesh.visual = trimesh.visual.TextureVisuals(uv=uv, material=mat)
@@ -330,7 +338,9 @@ def build_station_scene(heavy_rgb, h_rgb, bond_rgb, metalness, roughness):
     # the station was generated with.
     _apply_solid_color_doublesided(c_inner_mesh, heavy_rgb, INNER_METALNESS, INNER_ROUGHNESS)
     _apply_solid_color_doublesided(h_inner_mesh, h_rgb,     INNER_METALNESS, INNER_ROUGHNESS)
-    _apply_solid_color_doublesided(b_inner_mesh, bond_rgb,  INNER_METALNESS, INNER_ROUGHNESS)
+    # Bond interior: self-illuminated flat white (emissive), regardless of preset/colour.
+    _apply_solid_color_doublesided(b_inner_mesh, INNER_BOND_COLOR, INNER_METALNESS,
+                                   INNER_ROUGHNESS, emissive_rgb=INNER_BOND_COLOR)
 
     scene = trimesh.Scene()
     scene.add_geometry(c_mesh,       node_name="heavy",          geom_name="heavy")

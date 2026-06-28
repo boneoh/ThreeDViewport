@@ -16,18 +16,22 @@ enum NormalMode: Int, CaseIterable {
 }
 
 // Production role of an object, used by the one-click "Export All" cycle to decide
-// which passes show vs hold out each object.  Default `.background` so unclassified
-// geometry behaves as set dressing (visible in Full/Scene, held out in solos).
+// which passes show vs hold out each object.  Default `.set` so unclassified
+// geometry behaves as set dressing (visible in Scene, soloed in its own pass, held
+// out elsewhere).  The HDR environment is the "real" background (its own pass), so
+// it's not an object class.  Old project files store the legacy raw value
+// "background"; it no longer matches and decodes to the `.set` default — the correct
+// mapping, since Background was the old set-dressing role.
 enum ObjectClass: String, CaseIterable {
-    case background
+    case set
     case actor
     case macguffin
 
     var displayName: String {
         switch self {
-        case .background: return "Background"
-        case .actor:      return "Actor"
-        case .macguffin:  return "MacGuffin"
+        case .set:       return "Set"
+        case .actor:     return "Actor"
+        case .macguffin: return "MacGuffin"
         }
     }
 }
@@ -127,7 +131,7 @@ final class SceneObject {
     var isLocked: Bool = false
 
     // Production role for the "Export All" multi-pass cycle (Model Inspector).
-    var objectClass: ObjectClass = .background
+    var objectClass: ObjectClass = .set
 
     // Effects grid ▸ "Import" column.  When OFF, this object is dropped when its project
     // is IMPORTED into another (like a hidden object), so you can keep it visible/editable

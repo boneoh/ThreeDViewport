@@ -3250,18 +3250,27 @@ final class ViewportView: MTKView {
         let fxPresent = particleManager.emitters.contains { $0.isEnabled }
                      || fogSettings.isEnabled
         var passes: [ExportPass] = [
-            ExportPass(name: "Scene", visible: [.background, .actor, .macguffin],
+            ExportPass(name: "Scene", visible: [.set, .actor, .macguffin],
                        matte: false, blackBg: false, fx: true)
         ]
         if present.contains(.actor) {
             passes.append(ExportPass(name: "Actor Solo",  visible: [.actor], matte: false, blackBg: true, fx: false, coverageAlpha: true))
             passes.append(ExportPass(name: "Actor Matte", visible: [.actor], matte: true,  blackBg: true, fx: false))
         }
-        // Background glass always renders; the holdout silhouettes are re-stamped pure
-        // black over it in the exporter (so held-out holes stay keyable) — see
-        // VideoExporter.renderFrame's holdout re-stamp.
-        passes.append(ExportPass(name: "Background", visible: [.background], matte: false, blackBg: false, fx: false))
-        passes.append(ExportPass(name: "Background Matte", visible: [.background], matte: true, blackBg: true, fx: false))
+        // Set: the geometry layer (was "Background").  A clean cutout on black — its
+        // holdouts are black-on-black, so no HDR can leak through.  Composited over the
+        // Background plate downstream.  Coverage alpha (like Actor) for premultiplied use.
+        if present.contains(.set) {
+            passes.append(ExportPass(name: "Set Solo",  visible: [.set], matte: false, blackBg: true, fx: false, coverageAlpha: true))
+            passes.append(ExportPass(name: "Set Matte", visible: [.set], matte: true,  blackBg: true, fx: false))
+        }
+        // Background: the "real" backdrop = the HDR environment, with ALL foreground
+        // (Set/Actor/MacGuffin) held out as black holes for clean additive compositing.
+        // visible:[] makes every object a holdout; blackBg:false keeps the HDR.  Glass
+        // (transparent) parts are intentionally NOT held out, so the HDR shows through
+        // the station windows.  The feedback/excludeBg leak is handled by the committed
+        // post-composite re-stamp in VideoExporter.
+        passes.append(ExportPass(name: "Background", visible: [], matte: false, blackBg: false, fx: false))
         if present.contains(.macguffin) {
             passes.append(ExportPass(name: "MacGuffin Solo",  visible: [.macguffin], matte: false, blackBg: true, fx: false))
             passes.append(ExportPass(name: "MacGuffin Matte", visible: [.macguffin], matte: true,  blackBg: true, fx: false))

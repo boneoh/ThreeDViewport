@@ -1796,7 +1796,7 @@ final class ProjectFile {
         obj.isLocked = saved.isLocked                     // timeline edit lock
         obj.customName = saved.customName                 // v40 Timeline ▸ Rename
         obj.includeInImport = saved.includeInImport       // Effects grid "Import" flag
-        obj.objectClass = ObjectClass(rawValue: saved.objectClass) ?? .background
+        obj.objectClass = ObjectClass(rawValue: saved.objectClass) ?? .set     // legacy "background" → .set
         obj.feedbackEnabled = saved.feedbackEnabled
         obj.importBundleID  = saved.importBundleID   // Part B (import overrides this later)
         if let mode = NormalMode(rawValue: saved.normalMode), mode != .auto {

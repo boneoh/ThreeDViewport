@@ -5339,7 +5339,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let (accessory, codecPopup, resPopup, fpsPopup, _) = makeExportAccessoryView()
         let alert = NSAlert()
         alert.messageText     = "Export All Passes"
-        alert.informativeText = "Renders the full pass set (Scene; Actor / MacGuffin Solo + Matte; Background + Background Matte; FX Solo + Matte) into Movies/\(projectName)/ using one codec. The project is saved first and reloaded when the cycle finishes."
+        alert.informativeText = "Renders the full pass set (Scene; Actor / Set / MacGuffin Solo + Matte; Background [HDR]; FX Solo + Matte) into Movies/\(projectName)/ using one codec. The project is saved first and reloaded when the cycle finishes."
         alert.accessoryView   = accessory
         alert.addButton(withTitle: "Export All")
         alert.addButton(withTitle: "Cancel")

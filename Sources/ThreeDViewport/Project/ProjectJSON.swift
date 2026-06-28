@@ -839,8 +839,8 @@ struct ObjectData: Codable {
     var occludeWhenHidden: Bool  = false
     // Timeline edit lock.  Default false → older files load unlocked.
     var isLocked:        Bool    = false
-    // Production class for "Export All" (rawValue: background/actor/macguffin).
-    var objectClass:     String  = ObjectClass.background.rawValue
+    // Production class for "Export All" (rawValue: set/actor/macguffin; legacy "background" → set).
+    var objectClass:     String  = ObjectClass.set.rawValue
     // Per-object feedback opt-in (Effects grid).  Default true → older files keep
     // the previous "everything trails" behaviour.
     var feedbackEnabled: Bool    = true
@@ -871,7 +871,7 @@ struct ObjectData: Codable {
         isVisible            = (try? c.decode(Bool.self,          forKey: .isVisible))           ?? true
         occludeWhenHidden    = (try? c.decode(Bool.self,          forKey: .occludeWhenHidden))   ?? false
         isLocked             = (try? c.decode(Bool.self,          forKey: .isLocked))            ?? false
-        objectClass          = (try? c.decode(String.self,        forKey: .objectClass))         ?? ObjectClass.background.rawValue
+        objectClass          = (try? c.decode(String.self,        forKey: .objectClass))         ?? ObjectClass.set.rawValue
         feedbackEnabled      = (try? c.decode(Bool.self,          forKey: .feedbackEnabled))     ?? true
         normalMode           = (try? c.decode(Int.self,           forKey: .normalMode))          ?? 0
         metallicFactor       = (try? c.decode(Float.self,         forKey: .metallicFactor))      ?? -1
@@ -889,7 +889,7 @@ struct ObjectData: Codable {
          baseTransformMatrix: [Float] = [], easingMode: Int = 0,
          isVisible: Bool = true, occludeWhenHidden: Bool = false,
          isLocked: Bool = false,
-         objectClass: String = ObjectClass.background.rawValue,
+         objectClass: String = ObjectClass.set.rawValue,
          feedbackEnabled: Bool = true, normalMode: Int = 0,
          metallicFactor: Float = -1, roughnessFactor: Float = -1,
          baseColorFactor: [Float] = [], opacity: Float = 1,
