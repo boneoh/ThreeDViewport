@@ -31,6 +31,9 @@ import sys
 import numpy as np
 import trimesh
 import trimesh.visual.material
+from PIL import Image
+from shapely.geometry import Point, LineString
+from shapely.ops import unary_union
 
 from generate_models import (
     prompt_color, prompt_material,
@@ -70,7 +73,23 @@ ICOSPHERE_SUBDIV = 2
 INNER_INSET     = 0.005   # 0.5% scale toward each part's local centre
 INNER_METALNESS = 0.00    # matches the "Matte Plastic" preset in generate_models.py
 INNER_ROUGHNESS = 0.85
-INNER_BOND_COLOR = (255, 255, 255)   # bond interior: self-illuminated flat white
+
+# Interior floor + bond interior: self-illuminated (emissive) grey GRADIENTS baked into a
+# texture, so the greys read as a consistent value regardless of scene lighting — good for
+# controlled synth post-processing.  Gradients MUST be textures: the app collapses vertex
+# colours to a single colour, so a per-vertex gradient wouldn't render.
+# The floor is the horizontal cross-section of the WHOLE station (every atom + bond) at one
+# level — a "molecular floor plan" the robot can walk throughout.  Its height is set from the
+# bonds: ~33% of a bond's height below the floor, ~67% above (headroom).  Bonds are centred at
+# y=0 with radius r, so below-fraction = (y+r)/2r = frac → y = (2·frac − 1)·r.  Using the larger
+# C–C bond as the reference guarantees ≥67% headroom in every bond.
+FLOOR_BOND_FRACTION_BELOW = 0.33
+FLOOR_Y          = (2.0 * FLOOR_BOND_FRACTION_BELOW - 1.0) * CC_BOND_R   # ≈ -0.0184
+FLOOR_ATOM_GAP   = 0.012             # inset the floor disks from each atom's interior wall
+FLOOR_GREY_INNER = (105, 105, 105)   # radial gradient: lighter at the centre …
+FLOOR_GREY_OUTER = (50, 50, 50)      # … darkening to the rim (mid → mid-dark)
+BOND_GREY_A      = (175, 175, 175)   # bond interior axial gradient: mid-light …
+BOND_GREY_B      = (110, 110, 110)   # … to mid grey along each tube
 
 # Glass panes filling the window cutouts (NOT the doorway cutouts — those
 # stay open). The glass material is the same across every batch combination
@@ -166,22 +185,79 @@ def _build_inner_shell(outer_mesh, inset=INNER_INSET):
 
 
 def _inner_bond(p0, p1, outer_radius, inset=INNER_INSET, sections=10):
-    """Open tube along (p0, p1) at radius `outer_radius * (1 - inset)`, with
-    face winding reversed so the normals face the interior of the tube.
+    """Open tube along (p0, p1) at radius `outer_radius * (1 - inset)`, winding reversed
+    so the normals face the tube interior.  Returns `(mesh, uv)` where U runs 0→1 along
+    p0→p1 (axial), so the interior can carry a lengthwise grey gradient when textured.
     """
     inner = _open_bond(p0, p1, outer_radius * (1.0 - inset), sections=sections)
     inner.invert()
-    return inner
+    p0v  = np.asarray(p0, dtype=float)
+    axis = np.asarray(p1, dtype=float) - p0v
+    axis = axis / (np.linalg.norm(axis) + 1e-12)
+    t    = (inner.vertices - p0v) @ axis                      # projection along the tube
+    u    = (t - t.min()) / (t.max() - t.min() + 1e-9)
+    uv   = np.column_stack([u, np.full(len(u), 0.5)])
+    return inner, uv
 
 
-def _apply_solid_color_doublesided(mesh, rgb, metalness, roughness, emissive_rgb=None):
+def _gradient_image(color_a, color_b, width=256):
+    """A 1-D gradient as a 2×`width` PIL image: U=0 → color_a, U=1 → color_b (0–255 RGB)."""
+    t   = np.linspace(0.0, 1.0, width)[:, None]
+    row = ((1.0 - t) * np.array(color_a) + t * np.array(color_b)).astype(np.uint8)  # (width, 3)
+    return Image.fromarray(row[None, :, :].repeat(2, axis=0), "RGB")                # 2 × width
+
+
+def _apply_emissive_gradient(mesh, uv, image):
+    """Self-illuminated (emissive) gradient.  baseColor is black so there's no lit
+    contribution — the surface reads EXACTLY the emissive texture regardless of scene
+    lighting (baked, consistent for synth post).  `uv[:, 0]` selects along the gradient.
+    """
+    mat = trimesh.visual.material.PBRMaterial(
+        baseColorFactor=[0.0, 0.0, 0.0, 1.0],
+        metallicFactor=0.0,
+        roughnessFactor=1.0,
+        emissiveFactor=[1.0, 1.0, 1.0],
+        emissiveTexture=image,
+        doubleSided=True,
+    )
+    _ = mesh.vertex_normals
+    mesh.visual = trimesh.visual.TextureVisuals(uv=uv.astype(np.float32), material=mat)
+
+
+def _build_floor(C_pos, H_pos, y):
+    """Molecular floor plan: the horizontal cross-section of the WHOLE station (every atom
+    and bond) at height `y`, as one flat mesh.  Each atom contributes a disk (inset by
+    FLOOR_ATOM_GAP from its wall), each bond a connecting strip; unioned so the robot can
+    walk the whole interior — ring, spokes, and pod rooms — without spilling to the exterior
+    (a sphere/tube of radius r has half-width sqrt(r² − y²) at height y).  The benzene-ring
+    centre carries no geometry, so the plan has an open hole there.  Returns `(mesh, uv)`
+    with radial UVs (centre light → outer rim dark).
+    """
+    def xz(p):        return (float(p[0]), float(p[2]))
+    def disk_r(r):    return float(np.sqrt(max(r * r - y * y, 0.0))) - FLOOR_ATOM_GAP
+    def strip_hw(r):  return float(np.sqrt(max(r * r - y * y, 0.0)))
+
+    c_r, h_r      = disk_r(C_ATOM_R), disk_r(H_ATOM_R)
+    cc_hw, ch_hw  = strip_hw(CC_BOND_R), strip_hw(CH_BOND_R)
+    n     = len(C_pos)
+    polys = []
+    for i in range(n):
+        polys.append(Point(xz(C_pos[i])).buffer(c_r))
+        polys.append(Point(xz(H_pos[i])).buffer(h_r))
+        polys.append(LineString([xz(C_pos[i]), xz(H_pos[i])]).buffer(ch_hw))              # C–H spoke
+        polys.append(LineString([xz(C_pos[i]), xz(C_pos[(i + 1) % n])]).buffer(cc_hw))    # C–C ring
+    poly = unary_union(polys)
+
+    verts2d, faces = trimesh.creation.triangulate_polygon(poly, engine="earcut")
+    verts = np.column_stack([verts2d[:, 0], np.full(len(verts2d), y), verts2d[:, 1]])     # (x, y, z)
+    r     = np.sqrt(verts[:, 0] ** 2 + verts[:, 2] ** 2)
+    uv    = np.column_stack([r / max(r.max(), 1e-6), np.full(len(r), 0.5)])               # radial gradient
+    return trimesh.Trimesh(vertices=verts, faces=faces, process=False), uv
+
+
+def _apply_solid_color_doublesided(mesh, rgb, metalness, roughness):
     """Like _apply_solid_color but with doubleSided = True so the interior
     surface is visible through the cutout windows (and vice versa).
-
-    `emissive_rgb` (optional 0–255 tuple) sets a glTF emissiveFactor so the
-    surface self-illuminates: the app's shader does `color += emissive`, so it
-    reads at that colour even in an unlit interior (used for the flat-white bond
-    interior).
     """
     r, g, b = [c / 255.0 for c in rgb]
     mat = trimesh.visual.material.PBRMaterial(
@@ -190,8 +266,6 @@ def _apply_solid_color_doublesided(mesh, rgb, metalness, roughness, emissive_rgb
         roughnessFactor=roughness,
         doubleSided=True,
     )
-    if emissive_rgb is not None:
-        mat.emissiveFactor = [c / 255.0 for c in emissive_rgb]
     _  = mesh.vertex_normals
     uv = np.zeros((len(mesh.vertices), 2), dtype=np.float32)
     mesh.visual = trimesh.visual.TextureVisuals(uv=uv, material=mat)
@@ -246,6 +320,7 @@ def build_station_scene(heavy_rgb, h_rgb, bond_rgb, metalness, roughness):
 
     c_parts,       h_parts,       b_parts,       glass_parts = [], [], [], []
     c_inner_parts, h_inner_parts, b_inner_parts              = [], [], []
+    b_inner_uvs                                              = []   # axial UVs per inner bond
 
     # Helper to spell out an XZ-plane unit vector at a given angle.
     def xz(angle):
@@ -309,14 +384,16 @@ def build_station_scene(heavy_rgb, h_rgb, bond_rgb, metalness, roughness):
         # C–H: from C surface (along radial_i) to H surface (along -radial_i)
         ch_start = C_pos[i]      + radial_i * C_ATOM_R
         ch_end   = H_pos[i]      - radial_i * H_ATOM_R
-        b_parts      .append(_open_bond (ch_start, ch_end, CH_BOND_R))
-        b_inner_parts.append(_inner_bond(ch_start, ch_end, CH_BOND_R))
+        b_parts.append(_open_bond(ch_start, ch_end, CH_BOND_R))
+        ch_inner, ch_uv = _inner_bond(ch_start, ch_end, CH_BOND_R)
+        b_inner_parts.append(ch_inner); b_inner_uvs.append(ch_uv)
 
         # C–C: from C[i] surface (along chord_to_next) to C[j_next] surface
         cc_start = C_pos[i]      + chord_to_next * C_ATOM_R
         cc_end   = C_pos[j_next] - chord_to_next * C_ATOM_R
-        b_parts      .append(_open_bond (cc_start, cc_end, CC_BOND_R))
-        b_inner_parts.append(_inner_bond(cc_start, cc_end, CC_BOND_R))
+        b_parts.append(_open_bond(cc_start, cc_end, CC_BOND_R))
+        cc_inner, cc_uv = _inner_bond(cc_start, cc_end, CC_BOND_R)
+        b_inner_parts.append(cc_inner); b_inner_uvs.append(cc_uv)
 
     c_mesh       = trimesh.util.concatenate(c_parts)
     h_mesh       = trimesh.util.concatenate(h_parts)
@@ -325,6 +402,8 @@ def build_station_scene(heavy_rgb, h_rgb, bond_rgb, metalness, roughness):
     c_inner_mesh = trimesh.util.concatenate(c_inner_parts)
     h_inner_mesh = trimesh.util.concatenate(h_inner_parts)
     b_inner_mesh = trimesh.util.concatenate(b_inner_parts)
+    b_inner_uv   = np.vstack(b_inner_uvs)   # aligns with concatenate's vertex order
+    assert len(b_inner_uv) == len(b_inner_mesh.vertices), "bond inner UV / vertex mismatch"
 
     # Outer hulls use the user's chosen material preset.
     _apply_solid_color_doublesided(c_mesh, heavy_rgb, metalness, roughness)
@@ -338,9 +417,17 @@ def build_station_scene(heavy_rgb, h_rgb, bond_rgb, metalness, roughness):
     # the station was generated with.
     _apply_solid_color_doublesided(c_inner_mesh, heavy_rgb, INNER_METALNESS, INNER_ROUGHNESS)
     _apply_solid_color_doublesided(h_inner_mesh, h_rgb,     INNER_METALNESS, INNER_ROUGHNESS)
-    # Bond interior: self-illuminated flat white (emissive), regardless of preset/colour.
-    _apply_solid_color_doublesided(b_inner_mesh, INNER_BOND_COLOR, INNER_METALNESS,
-                                   INNER_ROUGHNESS, emissive_rgb=INNER_BOND_COLOR)
+    # Bond interior: self-illuminated mid-light→mid grey gradient along each tube (emissive,
+    # baked) — reads consistently for synth post (was flat white, which post-processed poorly).
+    _apply_emissive_gradient(b_inner_mesh, b_inner_uv,
+                             _gradient_image(BOND_GREY_A, BOND_GREY_B))
+
+    # Interior floor at the gait height: a disk with a self-illuminated radial grey gradient
+    # (lighter centre → darker rim) so the walking robot has ground and the synth has a
+    # subtle luminance field to key off.
+    floor_mesh, floor_uv = _build_floor(C_pos, H_pos, FLOOR_Y)
+    _apply_emissive_gradient(floor_mesh, floor_uv,
+                             _gradient_image(FLOOR_GREY_INNER, FLOOR_GREY_OUTER))
 
     scene = trimesh.Scene()
     scene.add_geometry(c_mesh,       node_name="heavy",          geom_name="heavy")
@@ -355,6 +442,8 @@ def build_station_scene(heavy_rgb, h_rgb, bond_rgb, metalness, roughness):
     scene.add_geometry(h_inner_mesh, node_name="hydrogen_inner", geom_name="hydrogen_inner",
                        parent_node_name="heavy")
     scene.add_geometry(b_inner_mesh, node_name="bonds_inner",    geom_name="bonds_inner",
+                       parent_node_name="heavy")
+    scene.add_geometry(floor_mesh,   node_name="floor",          geom_name="floor",
                        parent_node_name="heavy")
     return scene
 
