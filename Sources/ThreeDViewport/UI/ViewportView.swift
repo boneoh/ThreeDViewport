@@ -45,6 +45,11 @@ final class ViewportView: MTKView {
     /// scene from a fly-cam position above and behind the recording camera).
     /// Independent state — never animated, never saved with the project.
     let director:         CameraController
+    /// Program camera (the cut schedule's result) that the viewport displays while it
+    /// follows the camera cuts.  Shared with the Renderer (which drives its pose each
+    /// frame) so picking / drag use the same view as the display.  Independent of the
+    /// live/active camera, which stays the edit camera — never overwritten by the program.
+    let programCamera:    CameraController
     let lightManager:     LightManager
     let backgroundConfig: BackgroundConfig
     let timeline:         Timeline
@@ -74,7 +79,13 @@ final class ViewportView: MTKView {
     /// and model manipulation, so movement matches what the user sees: the
     /// Director in Scene mode, the scene camera otherwise.  Outside Scene mode
     /// this is `camera`, so behaviour is unchanged.
-    private var viewCamera: CameraController { sceneModeActive ? director : camera }
+    // The camera the viewport is displaying: Director in Scene mode; the program camera
+    // while cuts follow the playhead (so picking / drag align with what's on screen — the
+    // Renderer keeps programCamera's pose current each frame); else the live/active camera.
+    private var viewCamera: CameraController {
+        if sceneModeActive { return director }
+        return cameraCuts.isEmpty ? camera : programCamera
+    }
 
     // Phase 8: observable rendering settings (color / greyscale / gizmo)
     let renderSettings = RenderSettings()
@@ -282,6 +293,9 @@ final class ViewportView: MTKView {
         director         = CameraController()
         director.debugName = "Director POV"   // names it in the [LIMIT] diagnostics
         director.clampsTargetToBounds = false // editor free-view roams past ±positionBound
+        programCamera    = CameraController()
+        programCamera.debugName = "Program (cuts)"
+        programCamera.clampsTargetToBounds = false // pose is set from the program each frame
         lightManager     = LightManager()
         backgroundConfig = BackgroundConfig()
         timeline         = Timeline()
@@ -315,6 +329,7 @@ final class ViewportView: MTKView {
             sceneManager:     sceneManager,
             camera:           camera,
             director:         director,
+            programCamera:    programCamera,
             lightManager:     lightManager,
             backgroundConfig: backgroundConfig,
             timeline:         timeline
@@ -326,9 +341,12 @@ final class ViewportView: MTKView {
 
         delegate = renderer
 
-        // Phase 1c: during playback, render the program camera the cut schedule selects.
+        // Render the program camera the cut schedule selects — while SCRUBBING/paused AND
+        // during playback, so the viewport always shows the "current" (program) camera and
+        // switches at each cut.  Drives the shared `programCamera` in the Renderer; the live
+        // `camera` is never touched (that corrupts saves).  Empty cuts → nil → live camera.
         renderer?.programCameraProvider = { [weak self] t in
-            guard let self, self.timeline.isPlaying, !self.cameraCuts.isEmpty else { return nil }
+            guard let self, !self.cameraCuts.isEmpty else { return nil }
             return self.cameras[self.programCameraIndex(at: t)]
         }
 

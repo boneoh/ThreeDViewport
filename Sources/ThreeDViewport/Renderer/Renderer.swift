@@ -61,6 +61,14 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// Separate from `camera` so the scene camera (the one being recorded /
     /// animated) is untouched while the user looks at the scene from above.
     let director:         CameraController
+    /// Program camera (the cut schedule's result) used for rendering while the viewport
+    /// follows the camera cuts (scrub + playback).  Separate from `camera` so the live /
+    /// active (edit) camera is NEVER overwritten by the program — overwriting it is what
+    /// corrupted saves (the legacy cameraKeyframes field picked up the program's track).
+    let programCamera:    CameraController
+    /// Set each frame by applyAnimation(): true when the cut schedule selected a program
+    /// camera this frame, so `viewCamera` and `applyCameraFollow()` use `programCamera`.
+    private var renderingProgram = false
     /// When true, the renderer draws from the director's POV instead of the
     /// scene camera.  Scene-camera animation / follow logic continues to run
     /// (so the scene camera moves on its track), but the *view* is the director's.
@@ -84,7 +92,8 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// the renderer should sample this frame.  Centralises the "scene mode swap"
     /// so individual draw paths don't have to branch.
     private var viewCamera: CameraController {
-        return sceneModeActive ? director : camera
+        if sceneModeActive { return director }
+        return renderingProgram ? programCamera : camera
     }
     /// Phase 1c: during playback the renderer asks for the "program" camera (cut schedule)
     /// at the current time; nil → use the live (edit-active) camera.  Set by ViewportView.
@@ -195,6 +204,7 @@ final class Renderer: NSObject, MTKViewDelegate {
           sceneManager: SceneManager,
           camera: CameraController,
           director: CameraController,
+          programCamera: CameraController,
           lightManager: LightManager,
           backgroundConfig: BackgroundConfig,
           timeline: Timeline) {
@@ -203,6 +213,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         self.sceneManager     = sceneManager
         self.camera           = camera
         self.director         = director
+        self.programCamera    = programCamera
         self.lightManager     = lightManager
         self.backgroundConfig = backgroundConfig
         self.timeline         = timeline
@@ -1597,20 +1608,28 @@ final class Renderer: NSObject, MTKViewDelegate {
         // The follow override is applied separately in applyCameraFollow(), called
         // after applyHierarchy() so sub-part world transforms are fully up-to-date.
         if let pc = programCameraProvider?(timeline.renderTime) {
-            // Cut schedule (during playback): the live camera adopts the program camera's
-            // track + pose so animation AND follow (applyCameraFollow reads keyframeTrack)
-            // come from it.  ViewportView restores the edit camera when playback stops.
-            camera.keyframeTrack = pc.keyframeTrack
+            // Cut schedule (scrub + playback): drive the SEPARATE `programCamera` from the
+            // program camera's track+pose — the live `camera` is left untouched so it always
+            // holds the active/edit camera (keeping save + captureActiveCamera correct).
+            // viewCamera + applyCameraFollow() switch to programCamera via renderingProgram.
+            renderingProgram = true
+            programCamera.keyframeTrack = pc.keyframeTrack
             if let track = pc.keyframeTrack, !track.keyframes.isEmpty,
                let state = track.evaluate(at: timeline.renderTime, cutoff: timeline.duration) {
-                camera.yaw = state.yaw; camera.pitch = state.pitch; camera.distance = state.distance
-                camera.target = state.target; camera.fovYRadians = state.fov
+                programCamera.yaw = state.yaw; programCamera.pitch = state.pitch
+                programCamera.distance = state.distance; programCamera.target = state.target
+                programCamera.fovYRadians = state.fov
             } else {
-                camera.yaw = pc.yaw; camera.pitch = pc.pitch; camera.distance = pc.distance
-                camera.target = pc.target; camera.fovYRadians = pc.fovYRadians
+                programCamera.yaw = pc.yaw; programCamera.pitch = pc.pitch
+                programCamera.distance = pc.distance; programCamera.target = pc.target
+                programCamera.fovYRadians = pc.fovYRadians
             }
-        } else if let camTrack = camera.keyframeTrack, !camTrack.keyframes.isEmpty {
-            if let state = camTrack.evaluate(at: timeline.renderTime, cutoff: timeline.duration) {
+        } else {
+            // No cuts / not following: evaluate the live (active) camera's own track, exactly
+            // as before.  The program path never runs here, so nothing touches programCamera.
+            renderingProgram = false
+            if let camTrack = camera.keyframeTrack, !camTrack.keyframes.isEmpty,
+               let state = camTrack.evaluate(at: timeline.renderTime, cutoff: timeline.duration) {
                 camera.yaw         = state.yaw
                 camera.pitch       = state.pitch
                 camera.distance    = state.distance
@@ -1721,8 +1740,12 @@ final class Renderer: NSObject, MTKViewDelegate {
         // SCRUBBING accurately previews where the follow camera will be at each
         // frame, matching playback.  (A broad camera-mode-and-paused guard used to
         // live here too, but it also blocked plain scrubbing in camera mode.)
-        guard !camera.followSuspended else { return }
-        guard let camTrack = camera.keyframeTrack,
+        // Apply follow to the camera actually being displayed: the program camera while the
+        // cut schedule drives the view (so scrubbing previews the program's follow), else the
+        // live/active camera.  Never touches the live camera while following the program.
+        let cam = renderingProgram ? programCamera : camera
+        guard !cam.followSuspended else { return }
+        guard let camTrack = cam.keyframeTrack,
               !camTrack.keyframes.isEmpty else { return }
         if let follow = camTrack.resolveFollowCamera(
             at:             timeline.renderTime,
@@ -1730,12 +1753,12 @@ final class Renderer: NSObject, MTKViewDelegate {
                 self?.sceneManager.worldOrbitAnchor(ofObjectID: id, named: name)
             }
         ) {
-            camera.target = follow.target
-            if let yaw   = follow.yaw   { camera.yaw   = yaw }
+            cam.target = follow.target
+            if let yaw   = follow.yaw   { cam.yaw   = yaw }
             if let pitch = follow.pitch {
                 // Clamp to avoid gimbal lock at the poles — same window the
                 // existing camera operations use when writing pitch directly.
-                camera.pitch = max(-Float.pi / 2 + 0.01,
+                cam.pitch = max(-Float.pi / 2 + 0.01,
                                 min( Float.pi / 2 - 0.01, pitch))
             }
             // worldUp non-nil = POV keyframe asked the camera to roll with the
@@ -1743,9 +1766,9 @@ final class Renderer: NSObject, MTKViewDelegate {
             // lerp produced a near-axis vector.
             if let up = follow.worldUp {
                 let len = simd_length(up)
-                camera.followUpOverride = len > 1e-4 ? up / len : nil
+                cam.followUpOverride = len > 1e-4 ? up / len : nil
             } else {
-                camera.followUpOverride = nil
+                cam.followUpOverride = nil
             }
         }
     }
