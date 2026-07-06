@@ -980,7 +980,13 @@ final class VideoExporter {
             // pure black for the keyer (.lessEqual matches the silhouette depth the
             // depth-write-off glass left intact; fails where opaque foreground is
             // nearer).  Background glass NOT over a holdout is untouched.
-            if let rDS = holdoutRestampDepthState {
+            // Gated on visible transparent geometry: this only exists to re-cover GLASS
+            // that drew over a hole.  In an FX pass there's no visible glass, and the
+            // re-stamp would otherwise black out laser beams / hits / particles that
+            // overlap a holdout silhouette (they're read-only, so the silhouette depth
+            // is intact and .lessEqual would repaint them).  The depth cut above still
+            // hides FX genuinely behind the holdout.
+            if let rDS = holdoutRestampDepthState, !onTransparent.isEmpty {
                 encodeHoldouts(holdoutObjects, depthState: rDS, into: encoder)
             }
 
