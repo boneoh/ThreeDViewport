@@ -5911,13 +5911,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         var candidates: [GlueOptions.Candidate] = []
         var candidateGroup: [Int: Int] = [:]
         var seenGroups = Set<Int>()
+        // Import flow ("Glue imported items", preselectBundles set): only offer candidates
+        // from the just-imported bundle(s) — so items from an EARLIER import (e.g. a
+        // previously-glued gizmo's 2-buckys-cylinder) don't appear and can't be swept into
+        // this import's glue.  Menu-flow glue (no preselectBundles) offers all roots.
+        func inImportScope(_ bundle: Int?) -> Bool {
+            preselectBundles.isEmpty || (bundle.map { preselectBundles.contains($0) } ?? false)
+        }
         for r in roots {
             let o = scene.objects[r]
             if let gid = o.groupID {
                 guard seenGroups.insert(gid).inserted else { continue }
+                // A group already glued into an envelope stays unparented (it's driven via
+                // groupEnvelopeParent, not parentIndex), so without this it would reappear
+                // here and re-gluing it would SILENTLY STEAL it from its current envelope
+                // (makeEnvelope overwrites the link).  Exclude it — matching how already-
+                // glued single members (parentIndex set → not a root) are excluded.  It
+                // becomes available again once its envelope is unglued.
+                if scene.groupEnvelopeParent[gid] != nil { continue }
+                guard inImportScope(scene.objects.first(where: { $0.groupID == gid })?.importBundleID)
+                else { continue }
                 candidates.append(GlueOptions.Candidate(id: r, name: scene.groupName(for: gid)))
                 candidateGroup[r] = gid
             } else {
+                guard inImportScope(o.importBundleID) else { continue }
                 candidates.append(GlueOptions.Candidate(id: r, name: scene.glueListName(for: o)))
             }
         }
