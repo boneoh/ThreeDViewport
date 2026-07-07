@@ -57,7 +57,16 @@ final class ViewportView: MTKView {
     /// True while Scene mode is active.  The Renderer mirrors this flag so its
     /// `viewCamera` swap kicks in.  When false, behaviour is unchanged.
     var sceneModeActive: Bool = false {
-        didSet { renderer?.sceneModeActive = sceneModeActive }
+        didSet {
+            guard oldValue != sceneModeActive else { return }
+            renderer?.sceneModeActive = sceneModeActive
+            // Scene mode changes which camera applyAnimation drives (program vs the live
+            // camera whose frustum is drawn), so force a re-evaluation even though the
+            // playhead hasn't moved — otherwise the frustum shows a stale pose until the
+            // next scrub.
+            renderer?.invalidateAnimationCache()
+            needsDisplay = true
+        }
     }
     /// Scene-mode "solo" view aids (keys 7 / 8).  Non-destructive — they only
     /// affect what the live Renderer draws; real isVisible / occludeWhenHidden are

@@ -1607,11 +1607,14 @@ final class Renderer: NSObject, MTKViewDelegate {
         // ── Camera (base evaluation) ──────────────────────────────────────────
         // The follow override is applied separately in applyCameraFollow(), called
         // after applyHierarchy() so sub-part world transforms are fully up-to-date.
-        if let pc = programCameraProvider?(timeline.renderTime) {
+        if !sceneModeActive, let pc = programCameraProvider?(timeline.renderTime) {
             // Cut schedule (scrub + playback): drive the SEPARATE `programCamera` from the
             // program camera's track+pose — the live `camera` is left untouched so it always
             // holds the active/edit camera (keeping save + captureActiveCamera correct).
             // viewCamera + applyCameraFollow() switch to programCamera via renderingProgram.
+            // SKIPPED in Scene mode: there the view is the Director and the drawn frustum is
+            // the live `camera`, so we must animate the ACTIVE camera (else branch) — otherwise
+            // its frustum freezes at a stale base pose while scrubbing (Scene-mode authoring).
             renderingProgram = true
             programCamera.keyframeTrack = pc.keyframeTrack
             if let track = pc.keyframeTrack, !track.keyframes.isEmpty,

@@ -80,10 +80,10 @@ INNER_ROUGHNESS = 0.85
 # colours to a single colour, so a per-vertex gradient wouldn't render.
 # The floor is the horizontal cross-section of the WHOLE station (every atom + bond) at one
 # level — a "molecular floor plan" the robot can walk throughout.  Its height is set from the
-# bonds: ~33% of a bond's height below the floor, ~67% above (headroom).  Bonds are centred at
+# bonds: ~23% of a bond's height below the floor, ~77% above (headroom).  Bonds are centred at
 # y=0 with radius r, so below-fraction = (y+r)/2r = frac → y = (2·frac − 1)·r.  Using the larger
 # C–C bond as the reference guarantees ≥67% headroom in every bond.
-FLOOR_BOND_FRACTION_BELOW = 0.33
+FLOOR_BOND_FRACTION_BELOW = 0.23
 FLOOR_Y          = (2.0 * FLOOR_BOND_FRACTION_BELOW - 1.0) * CC_BOND_R   # ≈ -0.0184
 FLOOR_ATOM_GAP   = 0.012             # inset the floor disks from each atom's interior wall
 FLOOR_GREY_INNER = (105, 105, 105)   # radial gradient: lighter at the centre …
