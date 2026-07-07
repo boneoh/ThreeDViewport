@@ -165,10 +165,13 @@ final class ProjectFile {
         // from the source's own bundles), envelope node, and opt-in light.
         let bundleID = sm.makeImportBundle(name: url.deletingPathExtension().lastPathComponent)
 
-        // 2. Restore per-object data positionally, shifting keyframe times by T.
-        let n = min(imported.count, data.objects.count)
-        for i in 0..<n {
-            restoreObject(data.objects[i], into: imported[i], vp: vp, timeOffset: T, assignSavedID: false)
+        // 2. Restore per-object data (shifting keyframe times by T).  saved index → imported
+        //    LOCAL index via model/part-name matching (robust if a model's part count changed
+        //    since the import's source was saved); falls back to positional.
+        let importMap: [Int: Int] = modelBlockMap(saved: data.objects, live: imported)
+            ?? Dictionary(uniqueKeysWithValues: (0..<min(imported.count, data.objects.count)).map { ($0, $0) })
+        for (s, l) in importMap {
+            restoreObject(data.objects[s], into: imported[l], vp: vp, timeOffset: T, assignSavedID: false)
         }
         for o in imported { o.importBundleID = bundleID }
 
@@ -205,7 +208,9 @@ final class ProjectFile {
             sm.objects.append(node)
             let envIndex = sm.objects.count - 1
             for mi in env.memberIndices {
-                let live = modelStart + mi
+                // Saved member index → imported LOCAL index (importMap) → live array index.
+                guard let l = importMap[mi] else { continue }
+                let live = modelStart + l
                 guard live >= 0, live < sm.objects.count, !sm.objects[live].isEnvelope else { continue }
                 sm.objects[live].parentIndex    = envIndex
                 sm.objects[live].localTransform = sm.objects[live].baseTransform
@@ -221,9 +226,9 @@ final class ProjectFile {
 
         // Map each SOURCE entity id → the HOST entity id it became (identity refactor P6:
         // imported entities get fresh ids).  Used to re-home imported Position Marks onto
-        // the right host items.  Objects map positionally (data.objects[i] ↔ imported[i]).
+        // the right host items.  Objects map via importMap (saved index → imported index).
         var srcToHostID: [UUID: UUID] = [:]
-        for i in 0..<n { if let sid = data.objects[i].id { srcToHostID[sid] = imported[i].entityID } }
+        for (s, l) in importMap { if let sid = data.objects[s].id { srcToHostID[sid] = imported[l].entityID } }
 
         // 6. Lights (opt-in).
         if options.includeLights { appendImportedLights(data, by: M, timeOffset: T, bundleID: bundleID, vp: vp, idMap: &srcToHostID) }
@@ -1485,7 +1490,7 @@ final class ProjectFile {
         // applyKeyframes so each member's saved local matrix is already restored
         // into its baseTransform, and so the object array still contains only
         // model objects (matching the saved non-envelope member indices).
-        applyEnvelopes(data.envelopes, to: vp)
+        applyEnvelopes(data.envelopes, savedObjects: data.objects, to: vp)
 
         // ── Camera static state — applied LAST so it overrides any fitToScene ─
         let c = data.camera
@@ -1695,7 +1700,11 @@ final class ProjectFile {
     // root, a model is missing, etc. — so those paths behave exactly as before.
     private static func applyKeyframes(_ objectsData: [ObjectData], to vp: ViewportView) {
         let objects = vp.sceneManager.objects
-        if applyKeyframesByModel(objectsData, objects: objects, vp: vp) { return }
+        if let map = modelBlockMap(saved: objectsData, live: objects) {
+            for (s, l) in map { restoreObject(objectsData[s], into: objects[l], vp: vp) }
+            print("[DEBUG] ProjectFile: per-model restore — \(map.count) part(s)")
+            return
+        }
 
         // ── Legacy fallback: position (index) matching ───────────────────────────
         let n = min(objects.count, objectsData.count)
@@ -1708,75 +1717,67 @@ final class ProjectFile {
         for i in 0..<n { restoreObject(objectsData[i], into: objects[i], vp: vp) }
     }
 
-    /// Per-model, name-aware restore.  Returns false (caller falls back to index
-    /// matching) if the saved/live blocks can't be confidently partitioned.
-    private static func applyKeyframesByModel(_ savedObjs: [ObjectData],
-                                              objects: [SceneObject],
-                                              vp: ViewportView) -> Bool {
-        guard !objects.isEmpty, !savedObjs.isEmpty else { return false }
+    /// Maps each SAVED object index → the LIVE object index it corresponds to, so saved
+    /// per-object data (and envelope members / import placement) survive a model gaining or
+    /// losing parts since the project was saved.  Live objects are partitioned into
+    /// contiguous `sourceURL` model blocks; the SAVED list is split at each live block's
+    /// FIRST-PART NAME (single-mesh models: the file basename the loader renames the root
+    /// to; multi-part models: the glb's first node name, e.g. "heavy"/"hips").  Within a
+    /// block, parts map by unique name (immune to index drift), else by within-block
+    /// position (duplicate names / a substituted model).  Returns nil when the blocks can't
+    /// be confidently partitioned — the caller falls back to global positional matching.
+    private static func modelBlockMap(saved: [ObjectData], live: [SceneObject]) -> [Int: Int]? {
+        guard !live.isEmpty, !saved.isEmpty else { return nil }
 
         // 1. Live blocks: contiguous runs of objects that share a sourceURL.
         var liveBlocks: [[Int]] = []
         var lastKey: String? = nil
-        for (i, o) in objects.enumerated() {
-            guard let key = o.sourceURL?.path else { return false }   // unexpected → fallback
+        for (i, o) in live.enumerated() {
+            guard let key = o.sourceURL?.path else { return nil }   // unexpected → fallback
             if key != lastKey { liveBlocks.append([]); lastKey = key }
             liveBlocks[liveBlocks.count - 1].append(i)
         }
 
-        // 2. Each live block's model basename (the loader renamed its root to this,
-        //    so the matching saved block starts with an object of the same name).
-        let baseNames: [String] = liveBlocks.map {
-            objects[$0[0]].sourceURL?.deletingPathExtension().lastPathComponent ?? ""
-        }
+        // 2. Split marker for each live block = its first part's NAME.  For multi-part
+        //    models the root keeps the glb node name ("heavy"/"hips"), which matches the
+        //    saved block's first object — the old code compared the file basename here,
+        //    which never matched multi-part roots (so it always fell back to positional).
+        let markers: [String] = liveBlocks.map { live[$0[0]].name }
 
-        // 3. Saved blocks: split at each expected basename, in order.
+        // 3. Saved blocks: split at each expected marker, in order.
         var savedBlocks: [[Int]] = []
         var m = 0
-        for (i, sd) in savedObjs.enumerated() {
-            if m < baseNames.count, sd.name == baseNames[m] {
+        for (i, sd) in saved.enumerated() {
+            if m < markers.count, sd.name == markers[m] {
                 savedBlocks.append([i]); m += 1
             } else if savedBlocks.isEmpty {
-                return false                       // content before the first root → fallback
+                return nil                         // content before the first root → fallback
             } else {
                 savedBlocks[savedBlocks.count - 1].append(i)
             }
         }
-        guard savedBlocks.count == liveBlocks.count else { return false }
+        guard savedBlocks.count == liveBlocks.count else { return nil }
 
-        // 4. Restore each model block independently.
+        // 4. Map parts within each block.
+        var map: [Int: Int] = [:]
         for (lb, sb) in zip(liveBlocks, savedBlocks) {
-            restoreBlock(live: lb, saved: sb, objects: objects, savedObjs: savedObjs, vp: vp)
-        }
-        print("[DEBUG] ProjectFile: per-model restore — \(liveBlocks.count) model block(s)")
-        return true
-    }
-
-    /// Restores one model's parts: by unique part name when the saved and live
-    /// names correspond (same model), otherwise by within-block position (a
-    /// substituted / renamed model, where names don't line up).
-    private static func restoreBlock(live: [Int], saved: [Int],
-                                     objects: [SceneObject], savedObjs: [ObjectData],
-                                     vp: ViewportView) {
-        var savedByName: [String: Int] = [:]
-        var uniqueNames = true
-        for s in saved {
-            if savedByName.updateValue(s, forKey: savedObjs[s].name) != nil { uniqueNames = false }
-        }
-        let overlap = live.filter { savedByName[objects[$0].name] != nil }.count
-        if uniqueNames, overlap * 2 >= live.count {
-            // Same model → name match (immune to index drift within the block).
-            for l in live {
-                if let s = savedByName[objects[l].name] {
-                    restoreObject(savedObjs[s], into: objects[l], vp: vp)
-                }
-                // No saved counterpart → keep the freshly-loaded GLB base transform.
+            var savedByName: [String: Int] = [:]
+            var uniqueNames = true
+            for s in sb {
+                if savedByName.updateValue(s, forKey: saved[s].name) != nil { uniqueNames = false }
             }
-        } else {
-            // Substituted / renamed model → position match within the block.
-            let k = min(live.count, saved.count)
-            for j in 0..<k { restoreObject(savedObjs[saved[j]], into: objects[live[j]], vp: vp) }
+            let overlap = lb.filter { savedByName[live[$0].name] != nil }.count
+            if uniqueNames, overlap * 2 >= lb.count {
+                // Same model → name match (immune to index drift within the block; a live
+                // part with no saved counterpart, e.g. a new floor, keeps its GLB transform).
+                for l in lb { if let s = savedByName[live[l].name] { map[s] = l } }
+            } else {
+                // Substituted / renamed model → position match within the block.
+                let k = min(lb.count, sb.count)
+                for j in 0..<k { map[sb[j]] = lb[j] }
+            }
         }
+        return map
     }
 
     /// Restores Inspector state, baseTransform, and the keyframe track for one part.
@@ -1848,11 +1849,14 @@ final class ProjectFile {
     /// applyKeyframes (members' local matrices are restored into baseTransform) and
     /// before applyHierarchy runs in the renderer (which recomputes member world
     /// transforms from envelope × local on the next draw).
-    private static func applyEnvelopes(_ data: [EnvelopeData], to vp: ViewportView) {
+    private static func applyEnvelopes(_ data: [EnvelopeData], savedObjects: [ObjectData],
+                                       to vp: ViewportView) {
         guard !data.isEmpty else { return }
         let sm = vp.sceneManager
-        // sm.objects currently holds only model objects, in the same order as the
-        // saved non-envelope list — so memberIndices index directly into it.
+        // memberIndices are positions in the saved non-envelope list.  We resolve each to a
+        // stable entityID (savedObjects[mi].id) and then to the LIVE object with that id, so
+        // a model gaining/losing parts since the save can't shift members onto the wrong
+        // object.  Pre-id files fall back to the positional index.
         let modelCount = sm.objects.count
 
         // (filename, occurrence) → gid, for resolving glued GROUP members.  Same key
@@ -1898,13 +1902,23 @@ final class ProjectFile {
             // Re-link members: their saved baseTransform already holds the local
             // pose relative to the envelope (a hierarchical part saves localTransform).
             for mi in env.memberIndices {
-                guard mi >= 0, mi < modelCount else {
+                guard mi >= 0, mi < savedObjects.count else {
                     print("[DEBUG] ProjectFile: envelope '\(env.name)' member index \(mi) out of range")
                     continue
                 }
-                let member            = sm.objects[mi]
-                member.parentIndex    = envIndex
-                member.localTransform = member.baseTransform
+                // Prefer the stable entityID; fall back to the positional index (pre-id files).
+                let idx: Int?
+                if let sid = savedObjects[mi].id {
+                    idx = sm.objects.firstIndex { $0.entityID == sid && !$0.isEnvelope }
+                } else {
+                    idx = (mi < modelCount && !sm.objects[mi].isEnvelope) ? mi : nil
+                }
+                guard let li = idx else {
+                    print("[DEBUG] ProjectFile: envelope '\(env.name)' member \(mi) unresolved")
+                    continue
+                }
+                sm.objects[li].parentIndex    = envIndex
+                sm.objects[li].localTransform = sm.objects[li].baseTransform
             }
             // Re-link glued GROUP members (kept intact as groups): resolve by
             // (filename, occurrence) → gid and record the envelope link + local pose.
