@@ -317,7 +317,7 @@ emissive-{shape}-{colour}-x{intensity}.glb
 
 ```bash
 /tmp/glb_env/bin/python3 generate_all.py                # shapes + robots + stations + emissives
-/tmp/glb_env/bin/python3 generate_all.py --two-tone     # also generates 900 two-tone robots
+/tmp/glb_env/bin/python3 generate_all.py --two-tone     # also generates 961 two-tone robots
 /tmp/glb_env/bin/python3 generate_all.py --shapes-only
 /tmp/glb_env/bin/python3 generate_all.py --robot-only
 /tmp/glb_env/bin/python3 generate_all.py --station-only
@@ -326,17 +326,20 @@ emissive-{shape}-{colour}-x{intensity}.glb
 
 Non-interactive. Iterates every (shape × colour × material), every (robot × colour), every (station × colour × material), and every (emissive shape × colour) combination, writing into the app's Model Library folder (`modelsPathSecondary`). Progress is printed on a single rewriting line per group so the output stays terse.
 
+The 31 colours are the 30 named palette/greyscale options plus solid white (same
+count as `generate_models.py` above), applied across all 25 shapes and 5 materials.
+
 | Mode | File count |
 |------|------------|
-| Default (shapes + uniform robots + stations + emissives) | 3,150 + 30 + 150 + 270 = **3,600** |
-| `--shapes-only` | 21 × 30 × 5 = **3,150** |
-| `--robot-only` | **30** |
-| `--robot-only --two-tone` | 30 + 900 = **930** |
-| `--station-only` | 30 × 5 = **150** |
-| `--emissive-only` | 9 × 30 = **270** |
-| Default + `--two-tone` | 3,150 + 930 + 150 + 270 = **4,500** |
+| Default (shapes + uniform robots + stations + emissives) | 3,875 + 31 + 155 + 279 = **4,340** |
+| `--shapes-only` | 25 × 31 × 5 = **3,875** |
+| `--robot-only` | **31** |
+| `--robot-only --two-tone` | 31 + 961 = **992** |
+| `--station-only` | 31 × 5 = **155** |
+| `--emissive-only` | 9 × 31 = **279** |
+| Default + `--two-tone` | 3,875 + 992 + 155 + 279 = **5,301** |
 
-Two-tone robots use body+legs as colour A and head+arms as colour B, named `robot-{A}-{B}.glb`. The station has its own 3-colour split via `palette_molecule_colors()` (same mechanism as benzene's c1/c2 variants), so there is no separate two-tone flag for it — `c1` and `c2` variants of the eight palette colours give the distinct heavy/hydrogen/bond colour combinations automatically. Emissives use a fixed default intensity (6.0) for the batch and sample the variant-specific stop for `-c1` (comp1) and `-c2` (comp2b) so all three palette variants are visually distinct — run `generate_emissive.py` interactively to dial in a different intensity for a single colour family.
+Two-tone robots use body+legs as colour A and head+arms as colour B, named `robot-{A}-{B}.glb` (every ordered colour pair, 31 × 31 = 961). The station has its own 3-colour split via `palette_molecule_colors()` (same mechanism as benzene's c1/c2 variants), so there is no separate two-tone flag for it — `c1` and `c2` variants of the eight palette colours give the distinct heavy/hydrogen/bond colour combinations automatically. Emissives use a fixed default intensity (6.0) for the batch and sample the variant-specific stop for `-c1` (comp1) and `-c2` (comp2b) so all three palette variants are visually distinct — run `generate_emissive.py` interactively to dial in a different intensity for a single colour family.
 
 The shapes pass uses `palette_molecule_colors()` for molecule shapes when the palette is `c1` or `c2`, producing the multi-part atom/bond colour split described above. The station pass uses the same function for the same reason.
 

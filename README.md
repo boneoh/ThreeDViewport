@@ -153,7 +153,7 @@ Saved state covers everything needed to reproduce a session:
 - All loaded model paths, per-object base transforms, per-object keyframe tracks (with easing mode), and per-group keyframe tracks
 - Light configurations + per-light keyframe tracks
 - Background (solid / gradient / HDRI), color-grade, feedback, fog + weather emitters, rendering-mode (color / greyscale / B+W), wireframe, and axes-gizmo settings
-- Probe position and named position **marks** (names, positions, colours)
+- Probe position and named position **marks** (names, positions, colours, times, categories, owners, and optional eye/aim points for camera / light marks)
 - Per-track and per-panel **lock** state (timeline tracks; Camera / Lights / Probe / Feedback / Color Grade)
 - Window and panel positions for the main window, Timeline Editor, and every inspector panel — restored on load
 

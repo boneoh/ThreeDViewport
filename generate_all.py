@@ -1,22 +1,26 @@
 """
 generate_all.py  —  Batch-generate every colour × material combination.
 
-Shape output     : ~/Documents/ThreeDViewport/Models/<shape>/
-Robot output     : ~/Documents/ThreeDViewport/Models/robot/
-Station output   : ~/Documents/ThreeDViewport/Models/station/
-Emissive output  : ~/Documents/ThreeDViewport/Models/emissive/
+Output goes into the app's Model Library folder (modelsPathSecondary in the
+ThreeDViewport settings, via models_root()), falling back to a  Models/  folder
+next to this script.  Each group lands in its own subfolder under that root:
+
+Shape output     : <Model Library>/<shape>/    (buckyballs share a buckyball/ dir)
+Robot output     : <Model Library>/robot/
+Station output   : <Model Library>/station/
+Emissive output  : <Model Library>/emissive/
 
 Filenames
-  shapes   : {shape}-{colour}-{material}.glb        (150 per shape)
-  robot    : robot-{colour}.glb                     (30 uniform-colour)
-             robot-{body-colour}-{head-colour}.glb  (900 two-tone, opt-in)
-  station  : station-{colour}-{material}.glb        (150 — palette c1/c2 get
+  shapes   : {shape}-{colour}-{material}.glb        (155 per shape)
+  robot    : robot-{colour}.glb                     (31 uniform-colour)
+             robot-{body-colour}-{head-colour}.glb  (961 two-tone, opt-in)
+  station  : station-{colour}-{material}.glb        (155 — palette c1/c2 get
              distinct heavy/hydrogen/bond colours via palette_molecule_colors)
-  emissive : emissive-{shape}-{colour}.glb          (9 shapes × 30 colours)
+  emissive : emissive-{shape}-{colour}.glb          (9 shapes × 31 colours)
 
 Usage:
     python3 generate_all.py              # shapes + robots + stations + emissives
-    python3 generate_all.py --two-tone   # adds 900 two-tone robots
+    python3 generate_all.py --two-tone   # adds 961 two-tone robots
     python3 generate_all.py --shapes-only
     python3 generate_all.py --robot-only
     python3 generate_all.py --station-only
@@ -43,7 +47,7 @@ MODELS_ROOT = models_root()
 
 
 def all_colors():
-    """Yield (label, colorizer_fn, palette_key, variant) for all 30 named colour options.
+    """Yield (label, colorizer_fn, palette_key, variant) for all 31 colour options.
 
     palette_key and variant are None for greyscale and normal palette entries.
     For C1/C2 palette entries, palette_key is the PALETTES dict key ("7"–"14")
@@ -211,7 +215,8 @@ if __name__ == "__main__":
         generate_shapes()
 
     if do_robot:
-        robot_total = 30 + (900 if two_tone else 0)
+        n_colors = len(list(all_colors()))
+        robot_total = n_colors + (n_colors * n_colors if two_tone else 0)
         print(f"\nGenerating robots ({robot_total} files)...")
         generate_robot(two_tone=two_tone)
 

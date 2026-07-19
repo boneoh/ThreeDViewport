@@ -904,11 +904,12 @@ final class VideoExporter {
         }
 
         // Holdout objects (hidden but occluding); hoisted so the opaque-only FX depth
-        // pre-pass below can reuse them.  Transparent parts are excluded — they don't
-        // block weather/fog/lasers.
+        // pre-pass below can reuse them.  True glass (baked-in mesh alpha) is excluded
+        // — it doesn't block weather/fog/lasers.  The Material Overrides Opacity slider
+        // is a stylistic per-object dial, not glass, so it must NOT exclude an object
+        // from holdout (an actor toned down via Opacity should still occlude FX).
         let holdoutObjects = sceneManager.objects.filter {
-            !$0.isVisible && $0.occludeWhenHidden
-                && !($0.material.opacity < 1.0 || $0.material.baseColorFactor.w < 1.0)
+            !$0.isVisible && $0.occludeWhenHidden && !($0.material.baseColorFactor.w < 1.0)
         }
 
         // Opaque-only depth for fog + excluded lasers, so transparent glass doesn't

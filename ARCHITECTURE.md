@@ -115,9 +115,12 @@ equirect capture from the [Probe](#probe--position-marks) position and writes an
 
 A movable world-space point used both as the capture origin for environment baking
 and as the source for **position marks** — saved, named, colour-coded world
-positions drawn as small line gizmos. Marks persist with the project, can be cycled
-(which recalls the probe to the mark), and optionally render into exports. The
-probe gizmo itself is editor-only and never exported.
+positions drawn as small line gizmos. Each mark also carries a time, a category and
+an owning-entity reference, and (for camera / light marks) an optional secondary
+eye/aim point so a single mark records both a position and what it looks at. Marks
+persist with the project, can be cycled (which recalls the probe to the mark), and
+optionally render into exports. The probe gizmo itself is editor-only and never
+exported.
 
 ---
 
@@ -206,7 +209,7 @@ stored, but compatibility relies on per-key defaulting rather than a hard versio
 | Color grade       | Exposure, brightness, contrast, gamma                                          |
 | Fog volume        | Position/size, colour, density, variance, raymarch steps + keyframes (+ easing) |
 | Weather emitters  | Per-emitter type/position/size/colour/density config + keyframes (+ easing)    |
-| Probe + marks     | Probe position; named position marks (name, position, colour) + visibility     |
+| Probe + marks     | Probe position; named position marks (name, position, colour, time, category, owner, optional secondary eye/aim point) + visibility |
 | Render settings   | Render mode (colour / greyscale / B+W), wireframe, axes gizmo                   |
 | Window layout     | Main + all panel positions + section collapse state                            |
 
@@ -238,7 +241,7 @@ All panels are `NSPanel` (floating, non-modal):
 | Atmosphere             | ⌘⇧A           | Fog + weather emitter config                  |
 | Model Inspector        | ⌘I            | Per-object transform, material, class, normal mode |
 | Probe Inspector        | —             | Probe position + named position marks         |
-| Path Animator          | —             | Rotation / Linear keyframe generators (submenu) |
+| Path Animator          | —             | Orbit / Linear / Curve / Spin / Gait keyframe generators (submenu) |
 | Timeline Editor        | ⌘J            | Per-track keyframe editor (retime, copy/paste, easing) |
 | Settings               | ⌘,            | Folders, export resolution + default codec    |
 

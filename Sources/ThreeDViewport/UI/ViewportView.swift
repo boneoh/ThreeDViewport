@@ -4364,11 +4364,11 @@ final class ViewportView: MTKView {
 
         // ── F / B — nudge selected keyframe one frame forward / backward ──────
         if kc == KC.f, !event.isARepeat {
-            timelineKeyTarget?.nudgeSelectedKeyframe(by: 1.0 / 30.0)
+            timelineKeyTarget?.nudgeSelectedKeyframe(by: 1.0 / timeline.frameRate)
             return
         }
         if kc == KC.b, !event.isARepeat {
-            timelineKeyTarget?.nudgeSelectedKeyframe(by: -1.0 / 30.0)
+            timelineKeyTarget?.nudgeSelectedKeyframe(by: -1.0 / timeline.frameRate)
             return
         }
 

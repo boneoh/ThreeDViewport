@@ -2577,11 +2577,11 @@ final class TimelineEditorView: NSView {
 
         case 3:         // F → nudge selected keyframe(s) one frame forward.
             guard !isEditingKeyframe else { super.keyDown(with: event); return }
-            nudgeSelectedKeyframe(by: 1.0 / 30.0)
+            nudgeSelectedKeyframe(by: 1.0 / (timeline?.frameRate ?? 30.0))
 
         case 11:        // B → nudge selected keyframe(s) one frame backward.
             guard !isEditingKeyframe else { super.keyDown(with: event); return }
-            nudgeSelectedKeyframe(by: -1.0 / 30.0)
+            nudgeSelectedKeyframe(by: -1.0 / (timeline?.frameRate ?? 30.0))
 
         case 0:         // A → align multi-selected keyframes to the earliest selected.
             guard !isEditingKeyframe else { super.keyDown(with: event); return }
