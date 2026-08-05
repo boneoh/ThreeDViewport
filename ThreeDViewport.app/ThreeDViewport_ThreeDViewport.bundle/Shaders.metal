@@ -1,5 +1,12 @@
 #include <metal_stdlib>
+#include <metal_raytracing>
 using namespace metal;
+using namespace metal::raytracing;
+
+// SPIKE (2026-08): when true, fragment_main traces one reflection ray against the
+// scene BVH bound at fragment buffer(8).  Compiled out entirely when false, so the
+// default pipeline is byte-identical to before and needs no acceleration structure.
+constant bool USE_RT [[function_constant(0)]];
 
 // ── Shared structs (must match ShaderTypes.swift exactly) ────────────────────
 
@@ -175,6 +182,118 @@ static bool sampleLight(ShaderLight light,
 
 // ── Scene fragment shader ─────────────────────────────────────────────────────
 
+// Per-instance shading data for reflection hits (must match RTReflectionSpike.swift).
+// Scalar fields only (NO uint3 — its 16-byte alignment would inflate the stride to
+// 144 and desync from the 128-byte Swift RTInstanceData).
+struct RTInstanceData {
+    float4x4 normalMatrix;
+    float4   baseColor;
+    float4   emissive;      // xyz = effective emissive
+    float    metallic;
+    float    roughness;
+    uint     indexOffset;
+    uint     vertexOffset;
+    uint     hasNormals;
+    uint     hasBaseColorTex;
+    uint     hasUV;
+    uint     _pad0;
+};
+
+// Bindless per-instance base-color texture table (argument buffer at buffer(13)).
+struct RTMaterialTex {
+    texture2d<float> baseColor [[id(0)]];
+};
+
+// Shared PBR shading core — ambient/IBL diffuse + direct lights + IBL specular +
+// emissive, returned as LINEAR HDR (exposure/tone-map/gamma applied by the caller).
+// Called for the primary camera fragment AND (with the same math) for a reflection
+// ray's hit surface, so preview/export/reflection stay consistent.
+//   reflOverride / hasReflOverride: when set, substitutes this radiance for the
+//   environment reflection (used by ray-traced reflections — no second bounce, the
+//   reflected surface itself falls back to the env map).
+static float3 shadePBR(float3 worldPos,
+                       float3 N,
+                       float3 V,
+                       float3 albedo,
+                       float  metallic,
+                       float  roughness,
+                       float3 emissive,
+                       constant LightUniforms &lightData,
+                       texturecube<float> iblIrradiance,
+                       texturecube<float> iblSpecular,
+                       texture2d<float>   iblBRDF,
+                       sampler            envSampler,
+                       float3 reflOverride,
+                       bool   hasReflOverride)
+{
+    float3 F0 = mix(float3(0.04), albedo, metallic);
+
+    // ── Ambient / IBL diffuse ──────────────────────────────────────────────
+    float iblIntensity = lightData.ambientColor.w;
+    uint  count        = lightData.countAndPad.x;
+    float3 color;
+    if (iblIntensity > 0.0) {
+        float3 irradiance = iblIrradiance.sample(envSampler, N).rgb;
+        color = irradiance * iblIntensity * albedo * (1.0 - metallic);
+        for (uint i = 0; i < count; i++) {
+            if (int(lightData.lights[i].position.w) == LIGHT_AMBIENT) {
+                color += lightData.lights[i].color.rgb * albedo * (1.0 - metallic * 0.9);
+            }
+        }
+    } else {
+        float3 ambientLight = lightData.ambientColor.rgb;
+        for (uint i = 0; i < count; i++) {
+            if (int(lightData.lights[i].position.w) == LIGHT_AMBIENT) {
+                ambientLight += lightData.lights[i].color.rgb;
+            }
+        }
+        color = ambientLight * albedo * (1.0 - metallic * 0.9);
+    }
+
+    // ── Per-light BRDF accumulation ────────────────────────────────────────
+    float NdotV = max(dot(N, V), 0.0001);
+    for (uint i = 0; i < count; i++) {
+        ShaderLight light = lightData.lights[i];
+        if (int(light.position.w) == LIGHT_AMBIENT) { continue; }
+
+        float3 L;
+        float  atten;
+        if (!sampleLight(light, worldPos, L, atten)) { continue; }
+
+        float3 H     = normalize(V + L);
+        float  NdotL = max(dot(N, L), 0.0);
+        float  NdotH = max(dot(N, H), 0.0);
+        float  VdotH = max(dot(V, H), 0.0);
+        if (NdotL <= 0.0) { continue; }
+
+        float  D = D_GGX(NdotH, roughness);
+        float  G = G_Smith(NdotV, NdotL, roughness);
+        float3 F = F_Schlick(VdotH, F0);
+        float3 specular = (D * G * F) / max(4.0 * NdotV * NdotL, 0.001);
+
+        float3 kD      = (float3(1.0) - F) * (1.0 - metallic);
+        float3 diffuse = kD * albedo / M_PI_F;
+
+        color += (diffuse + specular) * NdotL * light.color.rgb * atten;
+    }
+
+    // ── IBL specular (split-sum), or the ray-traced reflection override ─────
+    if (iblIntensity > 0.0) {
+        float3 R       = reflect(-V, N);
+        float  mipMax  = float(iblSpecular.get_num_mip_levels() - 1);
+        float  lod     = roughness * mipMax;
+        float3 prefilt = hasReflOverride
+                       ? reflOverride
+                       : iblSpecular.sample(envSampler, R, level(lod)).rgb;
+        float2 brdf    = iblBRDF.sample(envSampler, float2(NdotV, roughness)).rg;
+        float3 specIBL = prefilt * (F0 * brdf.x + brdf.y);
+        color += specIBL * iblIntensity;
+    }
+
+    color += emissive;
+    return color;
+}
+
 fragment float4 fragment_main(
     VertexOut               in            [[stage_in]],
     constant Uniforms      &uniforms      [[buffer(2)]],
@@ -187,7 +306,14 @@ fragment float4 fragment_main(
     // Phase C: image-based lighting.  Intensity travels in lightData.ambientColor.w.
     texturecube<float>      iblIrradiance [[texture(4)]],
     texturecube<float>      iblSpecular   [[texture(5)]],
-    texture2d<float>        iblBRDF       [[texture(6)]]
+    texture2d<float>        iblBRDF       [[texture(6)]],
+    // Scene BVH + per-hit shading buffers — only present in the USE_RT specialization.
+    instance_acceleration_structure sceneAccel   [[buffer(8),  function_constant(USE_RT)]],
+    device const packed_float3     *rtNormals    [[buffer(10), function_constant(USE_RT)]],
+    device const uint              *rtIndices    [[buffer(11), function_constant(USE_RT)]],
+    device const RTInstanceData    *rtInstances  [[buffer(12), function_constant(USE_RT)]],
+    device const RTMaterialTex     *rtTextures   [[buffer(13), function_constant(USE_RT)]],
+    device const packed_float2     *rtUVs        [[buffer(14), function_constant(USE_RT)]]
 ) {
     constexpr sampler texSampler(filter::linear,
                                   mip_filter::linear,
@@ -236,85 +362,82 @@ fragment float4 fragment_main(
     }
     roughness = max(roughness, 0.04);   // clamp to avoid singularities
 
-    // ── PBR dielectric/metallic F0 ─────────────────────────────────────────
-    float3 F0 = mix(float3(0.04), albedo, metallic);
-
-    // ── Ambient / IBL diffuse ──────────────────────────────────────────────
-    // When IBL is active (intensity > 0), the diffuse irradiance cubemap
-    // replaces the flat ambientColor.rgb term.  Ambient-type lights placed by
-    // the user are treated as additional fill and still contribute either way.
-    float iblIntensity = lightData.ambientColor.w;
-    uint count = lightData.countAndPad.x;
-    float3 color;
-    if (iblIntensity > 0.0) {
-        float3 irradiance = iblIrradiance.sample(envSampler, N).rgb;
-        color = irradiance * iblIntensity * albedo * (1.0 - metallic);
-        for (uint i = 0; i < count; i++) {
-            if (int(lightData.lights[i].position.w) == LIGHT_AMBIENT) {
-                color += lightData.lights[i].color.rgb * albedo * (1.0 - metallic * 0.9);
-            }
-        }
-    } else {
-        float3 ambientLight = lightData.ambientColor.rgb;
-        for (uint i = 0; i < count; i++) {
-            if (int(lightData.lights[i].position.w) == LIGHT_AMBIENT) {
-                ambientLight += lightData.lights[i].color.rgb;
-            }
-        }
-        color = ambientLight * albedo * (1.0 - metallic * 0.9);
-    }
-
-    // ── Per-light BRDF accumulation ────────────────────────────────────────
-    float NdotV = max(dot(N, V), 0.0001);
-
-    for (uint i = 0; i < count; i++) {
-        ShaderLight light = lightData.lights[i];
-        if (int(light.position.w) == LIGHT_AMBIENT) { continue; }
-
-        float3 L;
-        float  atten;
-        if (!sampleLight(light, in.worldPosition, L, atten)) { continue; }
-
-        float3 H     = normalize(V + L);
-        float  NdotL = max(dot(N, L), 0.0);
-        float  NdotH = max(dot(N, H), 0.0);
-        float  VdotH = max(dot(V, H), 0.0);
-
-        if (NdotL <= 0.0) { continue; }
-
-        // Cook-Torrance specular BRDF
-        float  D = D_GGX(NdotH, roughness);
-        float  G = G_Smith(NdotV, NdotL, roughness);
-        float3 F = F_Schlick(VdotH, F0);
-
-        float3 specular = (D * G * F) / max(4.0 * NdotV * NdotL, 0.001);
-
-        // Lambertian diffuse (energy-conserving: metals have no diffuse)
-        float3 kD      = (float3(1.0) - F) * (1.0 - metallic);
-        float3 diffuse = kD * albedo / M_PI_F;
-
-        color += (diffuse + specular) * NdotL * light.color.rgb * atten;
-    }
-
-    // ── IBL specular (split-sum approximation) ─────────────────────────────
-    // Mip level is roughness × (numMips - 1).  BRDF LUT folds in the F0
-    // scale + bias so we don't re-importance-sample at runtime.
-    if (iblIntensity > 0.0) {
-        float3 R       = reflect(-V, N);
-        float  mipMax  = float(iblSpecular.get_num_mip_levels() - 1);
-        float  lod     = roughness * mipMax;
-        float3 prefilt = iblSpecular.sample(envSampler, R, level(lod)).rgb;
-        float2 brdf    = iblBRDF.sample(envSampler, float2(NdotV, roughness)).rg;
-        float3 specIBL = prefilt * (F0 * brdf.x + brdf.y);
-        color += specIBL * iblIntensity;
-    }
-
     // ── Emissive ───────────────────────────────────────────────────────────
     float3 emissive = matData.emissiveFactor.rgb;
     if (matData.hasEmissiveTex) {
         emissive *= emissiveTex.sample(texSampler, in.uv).rgb;
     }
-    color += emissive;
+
+    // ── Ray-traced reflection override (SPIKE tint — P3 replaces with real
+    //    hit shading).  Only when tracing is compiled in AND IBL is active
+    //    (reflections live in the IBL-specular path).
+    float3 reflOverride = float3(0.0);
+    bool   hasRefl      = false;
+    if (USE_RT && lightData.ambientColor.w > 0.0) {
+        float3 R = reflect(-V, N);
+        ray rr;
+        rr.origin       = in.worldPosition + N * 0.002;   // bias off the surface
+        rr.direction    = R;
+        rr.min_distance  = 0.002;
+        rr.max_distance  = INFINITY;
+
+        intersection_query<instancing, triangle_data> q;
+        q.reset(rr, sceneAccel);
+        while (q.next()) { }   // all-opaque: commits the closest hit
+
+        if (q.get_committed_intersection_type() == intersection_type::triangle) {
+            uint   id   = q.get_committed_instance_id();
+            uint   pid  = q.get_committed_primitive_id();
+            float2 bc   = q.get_committed_triangle_barycentric_coord();
+            float  dist = q.get_committed_distance();
+
+            RTInstanceData inst = rtInstances[id];
+
+            uint  ib = inst.indexOffset + pid * 3;
+            uint  i0 = rtIndices[ib + 0];
+            uint  i1 = rtIndices[ib + 1];
+            uint  i2 = rtIndices[ib + 2];
+            float w0 = 1.0 - bc.x - bc.y;
+
+            // Hit normal: interpolate the triangle's object-space normals → world.
+            float3 Nhit;
+            if (inst.hasNormals != 0) {
+                float3 n0 = float3(rtNormals[inst.vertexOffset + i0]);
+                float3 n1 = float3(rtNormals[inst.vertexOffset + i1]);
+                float3 n2 = float3(rtNormals[inst.vertexOffset + i2]);
+                float3 nObj = n0 * w0 + n1 * bc.x + n2 * bc.y;
+                Nhit = normalize((inst.normalMatrix * float4(nObj, 0.0)).xyz);
+            } else {
+                Nhit = -R;
+            }
+            if (dot(Nhit, R) > 0.0) { Nhit = -Nhit; }   // orient toward the ray origin
+
+            // Hit albedo: base-colour factor × sampled texture (matches the raster path).
+            float3 hitAlbedo = inst.baseColor.rgb;
+            if (inst.hasBaseColorTex != 0 && inst.hasUV != 0) {
+                float2 uv0 = float2(rtUVs[inst.vertexOffset + i0]);
+                float2 uv1 = float2(rtUVs[inst.vertexOffset + i1]);
+                float2 uv2 = float2(rtUVs[inst.vertexOffset + i2]);
+                float2 uvHit = uv0 * w0 + uv1 * bc.x + uv2 * bc.y;
+                hitAlbedo *= rtTextures[id].baseColor.sample(texSampler, uvHit).rgb;
+            }
+
+            float3 hitPos = rr.origin + R * dist;
+
+            // Shade the reflected surface with the SAME PBR core.  No second bounce:
+            // the reflected surface's own reflection falls back to the env map.
+            reflOverride = shadePBR(hitPos, Nhit, -R,
+                                    hitAlbedo, inst.metallic, inst.roughness,
+                                    inst.emissive.rgb, lightData,
+                                    iblIrradiance, iblSpecular, iblBRDF, envSampler,
+                                    float3(0.0), false);
+            hasRefl = true;
+        }
+    }
+
+    float3 color = shadePBR(in.worldPosition, N, V, albedo, metallic, roughness,
+                            emissive, lightData, iblIrradiance, iblSpecular,
+                            iblBRDF, envSampler, reflOverride, hasRefl);
 
     // ── Exposure (pre-tone-map) ────────────────────────────────────────────
     // Lives in the Color Grade panel/data but is applied HERE, before tone

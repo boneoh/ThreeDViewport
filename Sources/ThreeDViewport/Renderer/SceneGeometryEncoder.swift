@@ -26,6 +26,14 @@ enum SceneGeometryEncoder {
         // baseColor/normal/MR/emissive texture, so the skybox cube (or a
         // previous object's texture) can't linger and trip Metal validation.
         let dummy2D:           MTLTexture?
+        // Scene BVH + per-hit shading buffers for ray-traced reflections.  Only set
+        // (with a USE_RT pipeline) on the opaque pass; nil everywhere else → no trace.
+        var accelStructure:    MTLAccelerationStructure? = nil
+        var rtNormals:         MTLBuffer? = nil
+        var rtIndices:         MTLBuffer? = nil
+        var rtInstances:       MTLBuffer? = nil
+        var rtTextures:        MTLBuffer? = nil
+        var rtUVs:             MTLBuffer? = nil
     }
 
     // Encodes the given objects into `encoder` (the caller decides the set — e.g.
@@ -63,6 +71,16 @@ enum SceneGeometryEncoder {
             encoder.setFragmentTexture(i.irradianceCube, index: 4)
             encoder.setFragmentTexture(i.specularCube,   index: 5)
             encoder.setFragmentTexture(i.brdfLUT,        index: 6)
+        }
+
+        // Bind the scene BVH + per-hit shading buffers for the USE_RT reflection trace.
+        if let accel = context.accelStructure {
+            encoder.setFragmentAccelerationStructure(accel, bufferIndex: 8)
+            encoder.setFragmentBuffer(context.rtNormals,   offset: 0, index: 10)
+            encoder.setFragmentBuffer(context.rtIndices,   offset: 0, index: 11)
+            encoder.setFragmentBuffer(context.rtInstances, offset: 0, index: 12)
+            encoder.setFragmentBuffer(context.rtTextures,  offset: 0, index: 13)
+            encoder.setFragmentBuffer(context.rtUVs,       offset: 0, index: 14)
         }
 
         // ── Per-object ─────────────────────────────────────────────────────────

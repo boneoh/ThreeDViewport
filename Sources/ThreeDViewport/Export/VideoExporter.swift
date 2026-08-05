@@ -231,6 +231,13 @@ final class VideoExporter {
     // Gizmo pipeline — built lazily from the same Metal library as the scene pipeline
     private var gizmoPipelineState: MTLRenderPipelineState?
 
+    // Ray-traced reflections — export ALWAYS traces when the GPU supports it (the
+    // viewport toggle only affects the live preview).  Self-contained: own pipeline
+    // + own BVH builder so it never races the live Renderer's rtSpike.
+    private var rtPipelineState: MTLRenderPipelineState?
+    private var rtSpike:         RTReflectionSpike?
+    private var frameAccel:      MTLAccelerationStructure?
+
     // Laser beam/hit/spark + color grade pipelines now live in ScenePipeline.  The
     // read-only laser depth state stays here as a handle because the export's
     // probe-marks overlay reuses it (matching the live renderer).
@@ -312,6 +319,31 @@ final class VideoExporter {
             pixelFormat: .rgba16Float, width: 1, height: 1, mipmapped: false)
         dDesc.usage = [.shaderRead]
         dummyEquirect = device.makeTexture(descriptor: dDesc)
+
+        // Ray-traced reflection pipeline — export always traces when supported.  Same
+        // fragment_main USE_RT=true specialization + formats as the live opaque pass.
+        if device.supportsRaytracing,
+           let library = try? device.makeDefaultLibrary(bundle: Bundle.module),
+           let vfn     = library.makeFunction(name: "vertex_main") {
+            let fcTrue = MTLFunctionConstantValues()
+            var rtOn = true
+            fcTrue.setConstantValue(&rtOn, type: .bool, index: 0)
+            if let ffnRT = try? library.makeFunction(name: "fragment_main", constantValues: fcTrue) {
+                let d = MTLRenderPipelineDescriptor()
+                d.label                           = "SceneRTExport"
+                d.vertexFunction                  = vfn
+                d.fragmentFunction                = ffnRT
+                d.colorAttachments[0].pixelFormat = .bgra8Unorm
+                d.depthAttachmentPixelFormat      = .depth32Float
+                rtPipelineState = try? device.makeRenderPipelineState(descriptor: d)
+                if rtPipelineState != nil {
+                    rtSpike = RTReflectionSpike(device: device, rtFragmentFunction: ffnRT)
+                    print("[DEBUG] VideoExporter: RT reflection pipeline created")
+                } else {
+                    print("[DEBUG] VideoExporter: RT reflection pipeline FAILED")
+                }
+            }
+        }
 
         // Gizmo pipeline — same shaders as the live renderer
         if let library  = try? device.makeDefaultLibrary(bundle: Bundle.module),
@@ -769,6 +801,9 @@ final class VideoExporter {
 
     private func encodeOpaqueGeometry(_ objects: [SceneObject], into encoder: MTLRenderCommandEncoder) {
         guard !objects.isEmpty else { return }
+        // Export always traces reflections when the BVH + RT pipeline are available.
+        let useRT = rtPipelineState != nil && frameAccel != nil
+        if useRT { rtSpike?.useResources(on: encoder) }
         SceneGeometryEncoder.encode(
             into:            encoder,
             objects:         objects,
@@ -777,7 +812,7 @@ final class VideoExporter {
             context: SceneGeometryEncoder.Context(
                 viewProjection:    camera.viewProjectionMatrix,
                 eyePosition:       camera.eyePosition,
-                pipelineState:     pipelineState,
+                pipelineState:     useRT ? rtPipelineState! : pipelineState,
                 depthStencilState: depthStencilState,
                 colorMode:         colorMode,
                 isWireframe:       isWireframe,
@@ -785,7 +820,13 @@ final class VideoExporter {
                 ibl:               ibl,
                 dummyUV:           dummyUVBuffer,
                 dummyTangent:      dummyTangentBuffer,
-                dummy2D:           dummyEquirect))
+                dummy2D:           dummyEquirect,
+                accelStructure:    useRT ? frameAccel : nil,
+                rtNormals:         useRT ? rtSpike?.allNormals   : nil,
+                rtIndices:         useRT ? rtSpike?.allIndices   : nil,
+                rtInstances:       useRT ? rtSpike?.instanceData : nil,
+                rtTextures:        useRT ? rtSpike?.textureArg   : nil,
+                rtUVs:             useRT ? rtSpike?.allUVs        : nil))
     }
 
     private func encodeTransparentGeometry(_ objects: [SceneObject], into encoder: MTLRenderCommandEncoder) {
@@ -834,6 +875,15 @@ final class VideoExporter {
         guard let commandBuffer = commandQueue.makeCommandBuffer() else {
             print("[DEBUG] VideoExporter: renderFrame — makeCommandBuffer nil")
             return nil
+        }
+
+        // Ray-traced reflections: build the scene BVH before any render encoder.
+        frameAccel = nil
+        if let spike = rtSpike, rtPipelineState != nil {
+            let rtObjs = sceneManager.objects.filter { $0.isVisible && !$0.isEnvelope && $0.indexCount > 0 }
+            frameAccel = spike.build(objects:         rtObjs,
+                                     groupTransforms: sceneManager.groupTransforms,
+                                     commandBuffer:   commandBuffer)
         }
 
         // When feedback is active, render the scene into the processor's intermediate

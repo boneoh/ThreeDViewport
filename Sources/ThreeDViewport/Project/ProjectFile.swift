@@ -1164,6 +1164,7 @@ final class ProjectFile {
             background:          backgroundData,
             isWireframe:         vp.renderer?.isWireframe ?? false,
             showAxesGizmo:       vp.renderSettings.showAxesGizmo,
+            rtReflectionsEnabled: vp.renderer?.rtReflectionsEnabled ?? false,
             lightConfigs:        lightConfigsData,
             windowLayout:        windowLayout,
             colorGrade:          colorGradeData,
@@ -1449,6 +1450,7 @@ final class ProjectFile {
         // ── Wireframe + axes gizmo (v8) ───────────────────────────────────────
         vp.renderer?.isWireframe          = data.isWireframe
         vp.renderSettings.showAxesGizmo   = data.showAxesGizmo
+        vp.renderer?.rtReflectionsEnabled = data.rtReflectionsEnabled
         print("[DEBUG] ProjectFile: isWireframe=\(data.isWireframe)"
             + " showAxesGizmo=\(data.showAxesGizmo)")
 

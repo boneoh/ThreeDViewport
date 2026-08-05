@@ -48,6 +48,7 @@ struct ProjectData: Codable {
     var background:          BackgroundData = BackgroundData()  // v8; background colour/gradient.
     var isWireframe:         Bool = false               // v8; wireframe rendering toggle.
     var showAxesGizmo:       Bool = false               // v8; XYZ orientation gizmo.
+    var rtReflectionsEnabled: Bool = false              // ray-traced reflections (viewport).
     var lightConfigs:        [LightConfigData] = []    // v10; per-light static config.
     var windowLayout:        WindowLayoutData  = WindowLayoutData()  // v11; panel positions.
     var colorGrade:          ColorGradeData   = ColorGradeData()    // v12; B/C post-process.
@@ -117,6 +118,7 @@ struct ProjectData: Codable {
          background:          BackgroundData         = BackgroundData(),
          isWireframe:         Bool                   = false,
          showAxesGizmo:       Bool                   = false,
+         rtReflectionsEnabled: Bool                  = false,
          lightConfigs:        [LightConfigData]      = [],
          windowLayout:        WindowLayoutData       = WindowLayoutData(),
          colorGrade:          ColorGradeData         = ColorGradeData(),
@@ -161,6 +163,7 @@ struct ProjectData: Codable {
         self.background          = background
         self.isWireframe         = isWireframe
         self.showAxesGizmo       = showAxesGizmo
+        self.rtReflectionsEnabled = rtReflectionsEnabled
         self.lightConfigs        = lightConfigs
         self.windowLayout        = windowLayout
         self.colorGrade          = colorGrade
@@ -219,6 +222,7 @@ struct ProjectData: Codable {
         background          = (try? c.decode(BackgroundData.self,        forKey: .background))          ?? BackgroundData()
         isWireframe         = (try? c.decode(Bool.self,                  forKey: .isWireframe))         ?? false
         showAxesGizmo       = (try? c.decode(Bool.self,                  forKey: .showAxesGizmo))       ?? false
+        rtReflectionsEnabled = (try? c.decode(Bool.self,                 forKey: .rtReflectionsEnabled)) ?? false
         lightConfigs        = (try? c.decode([LightConfigData].self,     forKey: .lightConfigs))        ?? []
         windowLayout        = (try? c.decode(WindowLayoutData.self,      forKey: .windowLayout))        ?? WindowLayoutData()
         colorGrade          = (try? c.decode(ColorGradeData.self,        forKey: .colorGrade))          ?? ColorGradeData()

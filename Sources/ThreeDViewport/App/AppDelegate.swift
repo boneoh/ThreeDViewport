@@ -991,6 +991,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         wireItem.target = self
         viewMenu.addItem(wireItem)
 
+        // Ray-Traced Reflections — object-on-object reflections (viewport only; export
+        // always traces).  Checkmark via validateMenuItem; disabled if the GPU can't
+        // ray trace.  Also toggleable with the Y key.  Persisted per project.
+        let rtItem = NSMenuItem(
+            title: "Ray-Traced Reflections",
+            action: #selector(toggleRTReflections(_:)),
+            keyEquivalent: ""
+        )
+        rtItem.target = self
+        viewMenu.addItem(rtItem)
+
         // Axes Gizmo — shows XYZ orientation widget in the bottom-right corner
         let gizmoItem = NSMenuItem(
             title: "Axes Gizmo",
@@ -2354,6 +2365,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             + String(viewportView?.renderer?.isWireframe ?? false))
     }
 
+    @objc private func toggleRTReflections(_ sender: Any) {
+        guard let r = viewportView?.renderer, r.rtSupported else { NSSound.beep(); return }
+        r.rtReflectionsEnabled.toggle()
+        markDirty()
+        viewportView?.needsDisplay = true
+        print("[DEBUG] AppDelegate: RT reflections toggled to \(r.rtReflectionsEnabled)")
+    }
+
     @objc private func toggleAxesGizmo(_ sender: Any) {
         viewportView?.renderSettings.showAxesGizmo.toggle()
         print("[DEBUG] AppDelegate: axesGizmo toggled to "
@@ -2437,6 +2456,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if menuItem.action == #selector(toggleWireframe(_:)) {
             let isWireframe = viewportView?.renderer?.isWireframe ?? false
             menuItem.state = isWireframe ? .on : .off
+        }
+        if menuItem.action == #selector(toggleRTReflections(_:)) {
+            let r = viewportView?.renderer
+            menuItem.state = (r?.rtReflectionsEnabled ?? false) ? .on : .off
+            return r?.rtSupported ?? false   // disable-don't-hide when unsupported
         }
         if menuItem.action == #selector(toggleAxesGizmo(_:)) {
             let isOn = viewportView?.renderSettings.showAxesGizmo ?? false
@@ -6308,8 +6332,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let before       = sm.objects.count
 
         // Duplicate drives its own placement below (source pose, centered on the Probe),
-        // so skip addModelToScene's probe placement.
-        guard viewport.addModelToScene(url: url, placeAtProbe: false) == .added else { return }
+        // so skip addModelToScene's auto-centering.
+        guard viewport.addModelToScene(url: url, centerAtOrigin: false) == .added else { return }
 
         let newObjects = Array(sm.objects[before...])
         guard !newObjects.isEmpty else { return }

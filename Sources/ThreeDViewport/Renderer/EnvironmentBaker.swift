@@ -46,8 +46,12 @@ enum EnvironmentBaker {
         let faceSize = max(256, width / 4)   // ≈ equator pixels per 90° face
 
         // ── Pipelines + states (HDR rgba16Float targets) ──────────────────────
+        // SPIKE: fragment_main carries a USE_RT function constant — specialize false.
+        let fcFalse = MTLFunctionConstantValues()
+        var rtOff = false
+        fcFalse.setConstantValue(&rtOff, type: .bool, index: 0)
         guard let vfn = library.makeFunction(name: "vertex_main"),
-              let ffn = library.makeFunction(name: "fragment_main") else { return false }
+              let ffn = try? library.makeFunction(name: "fragment_main", constantValues: fcFalse) else { return false }
         let scenePD = MTLRenderPipelineDescriptor()
         scenePD.vertexFunction   = vfn
         scenePD.fragmentFunction = ffn

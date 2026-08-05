@@ -601,7 +601,7 @@ final class ViewportView: MTKView {
     // instances stay distinct on save/load.  Returns `.failed` if the device is nil
     // or the file won't load.
     @discardableResult
-    func addModelToScene(url: URL, placeAtProbe: Bool = true) -> AddModelResult {
+    func addModelToScene(url: URL, centerAtOrigin: Bool = true) -> AddModelResult {
         guard let dev = device else {
             print("[DEBUG] ViewportView: addModelToScene — device is nil")
             return .failed
@@ -614,11 +614,11 @@ final class ViewportView: MTKView {
         if let objects = loader.load(url: url) {
             let (loadedCenter, _) = autoNormalize(objects)
 
-            // Place the new model at the bake Probe: shift so its visual (bounding-box)
-            // center lands on the probe.  Children follow via the hierarchy; baseTransform
+            // Place the new model at the world origin: shift so its visual (bounding-box)
+            // center lands on (0,0,0).  Children follow via the hierarchy; baseTransform
             // is captured just below, so it picks up the shift too.
-            let delta = probeConfig.position - loadedCenter
-            if placeAtProbe, simd_length(delta) > 1e-6 {
+            let delta = -loadedCenter
+            if centerAtOrigin, simd_length(delta) > 1e-6 {
                 let d4 = SIMD4<Float>(delta.x, delta.y, delta.z, 0)
                 for obj in objects where obj.parentIndex == nil {
                     obj.transform.columns.3      += d4
@@ -4225,6 +4225,7 @@ final class ViewportView: MTKView {
         static let t:        UInt16 = 17   // T — Probe mode (move the bake Probe)
         static let p:        UInt16 = 35   // play / pause
         static let r:        UInt16 = 15   // reset object orientation to base
+        static let y:        UInt16 = 16   // SPIKE: toggle ray-traced reflections
         static let s:        UInt16 = 1    // toggle Scene mode (Director view)
         static let d:        UInt16 = 2    // Director mode (Scene mode only)
         static let k:        UInt16 = 40   // toggle probe marks visibility
@@ -4339,6 +4340,20 @@ final class ViewportView: MTKView {
         // ── Home / H — jump playhead to start ─────────────────────────────────
         if (kc == KC.home || kc == KC.h), !event.isARepeat {
             timeline.seek(to: 0)
+            return
+        }
+
+        // ── Y — toggle ray-traced reflections (viewport only; export always traces).
+        //     Mirrors the View ▸ Ray-Traced Reflections menu item. ─────────────
+        if kc == KC.y, !event.isARepeat {
+            if let r = renderer, r.rtSupported {
+                r.rtReflectionsEnabled.toggle()
+                print("[RT] reflections \(r.rtReflectionsEnabled ? "ON" : "OFF")")
+            } else {
+                NSSound.beep()
+                print("[RT] ray tracing not supported on this device")
+            }
+            needsDisplay = true
             return
         }
 

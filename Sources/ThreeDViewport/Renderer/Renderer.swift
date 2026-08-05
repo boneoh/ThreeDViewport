@@ -15,6 +15,15 @@ final class Renderer: NSObject, MTKViewDelegate {
     // Scene geometry pipeline
     var pipelineState: MTLRenderPipelineState?
     var depthStencilState: MTLDepthStencilState?
+    // SPIKE (2026-08): ray-traced-reflection probe.  opaqueRTPipelineState is the
+    // fragment_main USE_RT=true specialization; rtSpike builds the scene BVH each
+    // frame; rtReflectionsEnabled is the viewport-only toggle (Y key).  Export path
+    // is untouched by the spike.  Delete all three + RTReflectionSpike.swift after.
+    var opaqueRTPipelineState: MTLRenderPipelineState?
+    var rtReflectionsEnabled  = false
+    private(set) var rtSupported = false
+    private var rtSpike: RTReflectionSpike?
+    private var frameAccelStructure: MTLAccelerationStructure?
     // Holdout pipeline — identical to the scene pipeline but with color writes
     // masked off, so holdout objects write depth (occluding others) without
     // drawing themselves.  Uses the same depthStencilState.
@@ -277,8 +286,13 @@ final class Renderer: NSObject, MTKViewDelegate {
         laserBeamDepthState = sp.laserBeamDepthState
 
         // ── Scene geometry pipeline ───────────────────────────────────────────
+        // SPIKE: fragment_main carries a USE_RT function constant.  Every existing
+        // pipeline specializes it to FALSE (trace compiled out, no BVH binding).
+        let fcFalse = MTLFunctionConstantValues()
+        var rtOff = false
+        fcFalse.setConstantValue(&rtOff, type: .bool, index: 0)
         guard let vertexFn   = library.makeFunction(name: "vertex_main"),
-              let fragmentFn = library.makeFunction(name: "fragment_main") else {
+              let fragmentFn = try? library.makeFunction(name: "fragment_main", constantValues: fcFalse) else {
             print("[DEBUG] Renderer: vertex_main or fragment_main not found")
             return
         }
@@ -294,6 +308,29 @@ final class Renderer: NSObject, MTKViewDelegate {
             print("[DEBUG] Renderer: scene pipeline created")
         } catch {
             print("[DEBUG] Renderer: scene pipeline failed — " + error.localizedDescription)
+        }
+
+        // SPIKE: opaque RT variant — same descriptor, USE_RT=true fragment.  Only
+        // built when the GPU supports ray tracing (M2 does, in the software path).
+        rtSupported = device.supportsRaytracing
+        if rtSupported {
+            let fcTrue = MTLFunctionConstantValues()
+            var rtOn = true
+            fcTrue.setConstantValue(&rtOn, type: .bool, index: 0)
+            if let fragFnRT = try? library.makeFunction(name: "fragment_main", constantValues: fcTrue) {
+                // The spike builds the bindless texture table from this function.
+                rtSpike = RTReflectionSpike(device: device, rtFragmentFunction: fragFnRT)
+                pipelineDesc.fragmentFunction = fragFnRT
+                do {
+                    opaqueRTPipelineState = try device.makeRenderPipelineState(descriptor: pipelineDesc)
+                    print("[DEBUG] Renderer: RT reflection pipeline created")
+                } catch {
+                    print("[DEBUG] Renderer: RT reflection pipeline failed — " + error.localizedDescription)
+                }
+                pipelineDesc.fragmentFunction = fragmentFn   // restore for later reuse
+            }
+        } else {
+            print("[DEBUG] Renderer: device does not support ray tracing — RT spike disabled")
         }
 
         // Holdout variant: same vertex transform, but a dedicated fragment that
@@ -571,7 +608,11 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     /// Encodes opaque geometry with the scene PBR pipeline into `encoder`.
     private func encodeOpaqueGeometry(_ objects: [SceneObject], into encoder: MTLRenderCommandEncoder) {
-        guard !objects.isEmpty, let pipeline = pipelineState, let ds = depthStencilState else { return }
+        guard !objects.isEmpty, let ds = depthStencilState else { return }
+        // SPIKE: swap in the RT pipeline + bind the BVH when reflections are toggled on.
+        let useRT = rtReflectionsEnabled && frameAccelStructure != nil && opaqueRTPipelineState != nil
+        guard let pipeline = useRT ? opaqueRTPipelineState : pipelineState else { return }
+        if useRT { rtSpike?.useResources(on: encoder) }
         SceneGeometryEncoder.encode(
             into:            encoder,
             objects:         objects,
@@ -588,7 +629,13 @@ final class Renderer: NSObject, MTKViewDelegate {
                 ibl:               ibl,
                 dummyUV:           dummyUVBuffer,
                 dummyTangent:      dummyTangentBuffer,
-                dummy2D:           dummyEquirect))
+                dummy2D:           dummyEquirect,
+                accelStructure:    useRT ? frameAccelStructure : nil,
+                rtNormals:         useRT ? rtSpike?.allNormals   : nil,
+                rtIndices:         useRT ? rtSpike?.allIndices   : nil,
+                rtInstances:       useRT ? rtSpike?.instanceData : nil,
+                rtTextures:        useRT ? rtSpike?.textureArg   : nil,
+                rtUVs:             useRT ? rtSpike?.allUVs        : nil))
     }
 
     /// Encodes transparent (alpha-blended) geometry with the transparent pipeline.
@@ -723,6 +770,30 @@ final class Renderer: NSObject, MTKViewDelegate {
         guard pipelineState != nil else { return }
         guard let drawable      = view.currentDrawable,
               let commandBuffer = commandQueue.makeCommandBuffer() else { return }
+
+        // ── SPIKE: build the scene BVH before any render encoder (can't nest) ────
+        frameAccelStructure = nil
+        if rtReflectionsEnabled, let spike = rtSpike {
+            let t0 = Renderer.perfLoggingEnabled ? CFAbsoluteTimeGetCurrent() : 0
+            let rtObjs = sceneManager.objects.filter { $0.isVisible && !$0.isEnvelope && $0.indexCount > 0 }
+            frameAccelStructure = spike.build(objects:         rtObjs,
+                                              groupTransforms: sceneManager.groupTransforms,
+                                              commandBuffer:   commandBuffer)
+            if Renderer.perfLoggingEnabled {
+                let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+                print(String(format: "[RT] BVH build encode: %.3f ms (%d objs)", ms, rtObjs.count))
+                commandBuffer.addCompletedHandler { [weak self] cb in
+                    let gpu = (cb.gpuEndTime - cb.gpuStartTime) * 1000
+                    let on  = (self?.rtReflectionsEnabled ?? false) ? "on" : "off"
+                    print(String(format: "[RT] GPU frame: %.3f ms (rt=%@)", gpu, on))
+                }
+            }
+        } else if Renderer.perfLoggingEnabled {
+            commandBuffer.addCompletedHandler { cb in
+                let gpu = (cb.gpuEndTime - cb.gpuStartTime) * 1000
+                print(String(format: "[RT] GPU frame: %.3f ms (rt=off)", gpu))
+            }
+        }
 
         // Lazy-init: resize feedback textures on the first draw (or after the
         // feedbackProcessor is wired in) if they haven't been created yet.
