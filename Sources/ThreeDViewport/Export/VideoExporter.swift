@@ -878,9 +878,16 @@ final class VideoExporter {
         }
 
         // Ray-traced reflections: build the scene BVH before any render encoder.
+        // Include HELD-OUT objects (occludeWhenHidden) as well as drawn ones: in an
+        // Export All solo pass every other class is hidden-but-held-out, and those
+        // objects must still appear in the solo class's reflections (e.g. a MacGuffin
+        // Solo pass reflecting the held-out Actors).  Fully hidden objects (not
+        // occluding) are genuinely gone and stay out of reflections.
         frameAccel = nil
         if let spike = rtSpike, rtPipelineState != nil {
-            let rtObjs = sceneManager.objects.filter { $0.isVisible && !$0.isEnvelope && $0.indexCount > 0 }
+            let rtObjs = sceneManager.objects.filter {
+                ($0.isVisible || $0.occludeWhenHidden) && !$0.isEnvelope && $0.indexCount > 0
+            }
             frameAccel = spike.build(objects:         rtObjs,
                                      groupTransforms: sceneManager.groupTransforms,
                                      commandBuffer:   commandBuffer)
